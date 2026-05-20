@@ -50,6 +50,14 @@ function canEdit(){
   // Check if owner granted this employee full access
   const perms=S.permissions[S.user];
   if(perms&&perms.allMonths)return true;
+  // Yahia gets ±1 month window by default
+  if(S.user==="yahia"){
+    const cur=new Date(NOW_Y,NOW_M,1);
+    const sel=new Date(S.year,S.month,1);
+    const diffMs=sel-cur;
+    const diffMonths=Math.round(diffMs/(1000*60*60*24*30));
+    return diffMonths>=-1 && diffMonths<=1;
+  }
   return S.month===NOW_M && S.year===NOW_Y;
 }
 
@@ -2328,7 +2336,17 @@ function renderApp(){
         monthNav(),
         h("button",{class:"btn",style:{background:"transparent",color:"#555",fontSize:"13px",marginBottom:"12px"},
           onClick:()=>set({selUnit:null,editPart:null})},["← رجوع"]),
-        !canEdit()&&h("div",{style:{background:"#422006",border:"1px solid #854d0e",borderRadius:"10px",padding:"10px 14px",marginBottom:"12px",fontSize:"12px",color:"#fbbf24"}},["🔒 شهر سابق – للتعديل يرجى مراجعة سعيد"]),
+        !canEdit()&&(()=>{
+  let lockMsg="🔒 شهر مقفل – للتعديل يرجى مراجعة سعيد";
+  if(S.user==="yahia"){
+    const cur=new Date(NOW_Y,NOW_M,1);
+    const sel=new Date(S.year,S.month,1);
+    const diff=Math.round((sel-cur)/(1000*60*60*24*30));
+    if(diff<-1)lockMsg="🔒 شهر سابق – خارج نطاق الصلاحية";
+    else if(diff>1)lockMsg="🔒 شهر قادم – خارج نطاق الصلاحية";
+  }
+  return h("div",{style:{background:"#422006",border:"1px solid #854d0e",borderRadius:"10px",padding:"10px 14px",marginBottom:"12px",fontSize:"12px",color:"#fbbf24"}},[lockMsg]);
+})(),
         h("div",{class:"card",style:{padding:"14px",marginBottom:"12px"}},[
           h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:"10px"}},[
             h("div",{},[h("div",{style:{fontSize:"18px",fontWeight:"800",color:"#fff"}},[unit.name]),h("div",{style:{fontSize:"12px",color:"#555"}},[unit.type+" · "+unit.partitions.length+" بارتشن"])]),
@@ -2674,7 +2692,8 @@ function renderApp(){
           }},[perm.allMonths?"✓ صلاحية كاملة":"محدود"])]),
         h("div",{style:{fontSize:"12px",color:"#555",marginBottom:"12px"}},
           [perm.allMonths?
-            emp.name+" يقدر يعدّل في جميع الشهور (السابقة والقادمة)":
+            emp.name+" يقدر يعدّل في جميع الشهور":
+            emp.key==="yahia"?"يحيى يقدر يعدّل: شهر قبل + الحالي + شهر بعد":
             emp.name+" يقدر يعدّل في الشهر الحالي فقط"]),
         h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{class:"btn",style:{
