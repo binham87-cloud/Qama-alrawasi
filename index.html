@@ -124,6 +124,9 @@ async function approveRequest(req){
       if(u)Object.assign(u,req.payload.fields);
     } else if(req.type==="add_expense"){
       data.expenses.push(req.payload.expense);
+      // Deduct expense from revenue balance
+      S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(req.payload.expense.amount||0))*100)/100);
+      try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
     } else if(req.type==="add_transaction"){
       data.transactions.push(req.payload.transaction);
       // Add to revenue balance automatically
@@ -157,9 +160,17 @@ async function approveRequest(req){
     } else if(req.type==="add_unit_maintenance"){
       if(!data.unitMaintenance)data.unitMaintenance=[];
       data.unitMaintenance.push({...req.payload.maintenance,id:req.id});
+      if(Number(req.payload.maintenance.amount||0)>0){
+        S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(req.payload.maintenance.amount))*100)/100);
+        try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+      }
     } else if(req.type==="add_facility_maintenance"){
       if(!data.facilityMaintenance)data.facilityMaintenance=[];
       data.facilityMaintenance.push({...req.payload.maintenance,id:req.id});
+      if(Number(req.payload.maintenance.amount||0)>0){
+        S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(req.payload.maintenance.amount))*100)/100);
+        try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+      }
     }
     saveMonthData(req.year,req.month,data);
     await setDoc(doc(db,"months",getMonthKey(req.year,req.month)),{data,updatedAt:serverTimestamp()},{merge:true});
@@ -3644,6 +3655,15 @@ function renderApp(){
                   try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
                 } else if(req.type==="add_expense"){
                   rData.expenses=(rData.expenses||[]).filter(e=>e.id!==req.payload.expense.id);
+                  // Return expense amount to revenue
+                  S.revenueBalance=Math.round((S.revenueBalance+Number(req.payload.expense.amount||0))*100)/100;
+                  try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
+                } else if(req.type==="add_unit_maintenance"||req.type==="add_facility_maintenance"){
+                  const mAmt=Number(req.payload.maintenance?.amount||0);
+                  if(req.type==="add_unit_maintenance") rData.unitMaintenance=(rData.unitMaintenance||[]).filter(m=>m.id!==req.id);
+                  else rData.facilityMaintenance=(rData.facilityMaintenance||[]).filter(m=>m.id!==req.id);
+                  // Return maintenance amount to revenue
+                  if(mAmt>0){S.revenueBalance=Math.round((S.revenueBalance+mAmt)*100)/100;try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}}
                 } else if(req.type==="add_daily"){
                   rData.dailyBookings=(rData.dailyBookings||[]).filter(b=>b.id!==req.id);
                 } else if(req.type==="update_partition"){
@@ -3656,7 +3676,7 @@ function renderApp(){
                 saveMonthData(req.year,req.month,rData);
                 await setDoc(doc(db,"months",getMonthKey(req.year,req.month)),{data:rData,updatedAt:serverTimestamp()},{merge:true});
                 await setDoc(doc(db,"requests",req.id),{...req,status:"revoked",revokedAt:new Date().toISOString()},{merge:true});
-                showMsg("✓ تم إلغاء الاعتماد");
+                showMsg("✓ تم إلغاء الاعتماد – تم تحديث المالية");
                 await loadRequests();await loadMonthOnline(req.year,req.month);
                 if(req.year!==S.year||req.month!==S.month)await loadMonthOnline(S.year,S.month);
                 R();
@@ -3673,13 +3693,20 @@ function renderApp(){
                   try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
                 } else if(req.type==="add_expense"){
                   rData.expenses=(rData.expenses||[]).filter(e=>e.id!==req.payload.expense.id);
+                  S.revenueBalance=Math.round((S.revenueBalance+Number(req.payload.expense.amount||0))*100)/100;
+                  try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
+                } else if(req.type==="add_unit_maintenance"||req.type==="add_facility_maintenance"){
+                  const mAmt2=Number(req.payload.maintenance?.amount||0);
+                  if(req.type==="add_unit_maintenance") rData.unitMaintenance=(rData.unitMaintenance||[]).filter(m=>m.id!==req.id);
+                  else rData.facilityMaintenance=(rData.facilityMaintenance||[]).filter(m=>m.id!==req.id);
+                  if(mAmt2>0){S.revenueBalance=Math.round((S.revenueBalance+mAmt2)*100)/100;try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}}
                 } else if(req.type==="add_daily"){
                   rData.dailyBookings=(rData.dailyBookings||[]).filter(b=>b.id!==req.id);
                 }
                 saveMonthData(req.year,req.month,rData);
                 await setDoc(doc(db,"months",getMonthKey(req.year,req.month)),{data:rData,updatedAt:serverTimestamp()},{merge:true});
                 await setDoc(doc(db,"requests",req.id),{...req,status:"deleted",deletedAt:new Date().toISOString()},{merge:true});
-                showMsg("✓ تم الحذف");
+                showMsg("✓ تم الحذف – تم تحديث المالية");
                 await loadRequests();await loadMonthOnline(req.year,req.month);
                 if(req.year!==S.year||req.month!==S.month)await loadMonthOnline(S.year,S.month);
                 R();
@@ -3696,7 +3723,7 @@ function renderApp(){
         h("div",{},pending.map(r=>reqCard(r,true))),
       done.length>0&&h("div",{},[
         h("div",{style:{fontSize:"12px",color:"#555",margin:"16px 0 8px",fontWeight:"600"}},["السابقة"]),
-        ...done.slice(0,10).map(r=>reqCard(r,false))])]);
+        ...done.slice(0,20).map(r=>reqCard(r,true))])]);
   }
 
   // ======= MY REQUESTS (employee) =======
