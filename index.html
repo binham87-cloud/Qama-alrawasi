@@ -3065,7 +3065,9 @@ function renderApp(){
     const txList=mData.transactions||[];
     const expList=mData.expenses||[];
     const totalIncome=txList.reduce((s,t)=>s+Number(t.amount||0),0);
-    const totalExp=expList.reduce((s,e)=>s+Number(e.amount||0),0);
+    const maintTotal=(mData.unitMaintenance||[]).reduce((s,m)=>s+Number(m.amount||0),0)+
+                     (mData.facilityMaintenance||[]).reduce((s,m)=>s+Number(m.amount||0),0);
+    const totalExp=expList.reduce((s,e)=>s+Number(e.amount||0),0)+maintTotal;
     const netTotal=totalIncome-totalExp;
     const sched=S.installmentSchedule||[];
     const nextInst=sched.find(x=>!x.paid)||sched[sched.length-1]||{date:"2026-06-30",amount:179294,paid:false};
@@ -3163,11 +3165,11 @@ function renderApp(){
               inp.value=S.companyBalance;
               inp.addEventListener("input",e=>newVal=e.target.value);
               const row=h("div",{style:{display:"flex",gap:"6px"}},[
-                h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"6px",fontSize:"14px",fontWeight:"700"},onClick:()=>{
+                h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"6px",fontSize:"14px",fontWeight:"700"},onClick:async()=>{
                   const v=Number(newVal);
                   if(isNaN(v)||newVal==="")return showMsg("أدخل رقم صحيح");
                   S.companyBalance=Math.round(v*100)/100;
-                  try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+                  try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
                   set({showEditCompany:false});
                   showMsg("✓ تم تحديث رصيد الشركة: "+S.companyBalance.toLocaleString()+" د.إ");
                 }},["حفظ"]),
@@ -3188,11 +3190,11 @@ function renderApp(){
               inp.value=S.revenueBalance;
               inp.addEventListener("input",e=>newRevVal=e.target.value);
               const row=h("div",{style:{display:"flex",gap:"6px"}},[
-                h("button",{class:"btn",style:{flex:"1",background:"#a78bfa",color:"#000",borderRadius:"8px",padding:"6px",fontSize:"14px",fontWeight:"700"},onClick:()=>{
+                h("button",{class:"btn",style:{flex:"1",background:"#a78bfa",color:"#000",borderRadius:"8px",padding:"6px",fontSize:"14px",fontWeight:"700"},onClick:async()=>{
                   const v=Number(newRevVal);
                   if(isNaN(v))return showMsg("أدخل رقم صحيح");
                   S.revenueBalance=Math.round(v*100)/100;
-                  try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+                  try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
                   set({showEditRevenue:false});
                   showMsg("✓ تم تحديث حساب الإيرادات: "+S.revenueBalance.toLocaleString()+" د.إ");
                 }},["حفظ"]),
@@ -3350,8 +3352,39 @@ function renderApp(){
 
       h("div",{class:"card",style:{overflow:"hidden",marginBottom:"12px"}},[
         h("div",{style:{padding:"10px 14px",borderBottom:"1px solid #1a1a1a",display:"flex",justifyContent:"space-between"}},[
-          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},["📥 تفاصيل الدخل"]),
+          h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
+            h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},["📥 تفاصيل الدخل"]),
+            h("button",{class:"btn",style:{fontSize:"13px",background:"#052e16",border:"1px solid #16a34a",color:"#4ade80",borderRadius:"6px",padding:"3px 10px"},
+              onClick:()=>set({showAddTx:!S.showAddTx})},["+ إيداع"])]),
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},[totalIncome.toLocaleString()+" د.إ"])]),
+        S.showAddTx?(()=>{
+          const tx2={desc:"",amount:"",date:new Date().toISOString().slice(0,10),notes:"",type:"cash"};
+          const wrap=h("div",{style:{padding:"12px",background:"#0f0f0f",borderRadius:"8px",marginBottom:"10px"}});
+          const descI=h("input",{type:"text",placeholder:"الوصف",style:{marginBottom:"8px"}});
+          descI.addEventListener("input",e=>tx2.desc=e.target.value);
+          const amtI=h("input",{type:"number",placeholder:"المبلغ",style:{marginBottom:"8px"}});
+          amtI.addEventListener("input",e=>tx2.amount=e.target.value);
+          const dateI=h("input",{type:"date",style:{marginBottom:"8px"}});
+          dateI.value=tx2.date;
+          dateI.addEventListener("change",e=>tx2.date=e.target.value);
+          const saveB=h("button",{class:"btn",style:{flex:"1",background:"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},
+            onClick:async()=>{
+              if(!tx2.desc||!tx2.amount)return showMsg("أدخل الوصف والمبلغ");
+              const t={id:Date.now(),desc:tx2.desc,amount:Number(tx2.amount),date:tx2.date,notes:tx2.notes,type:tx2.type,by:S.user};
+              mData.transactions.push(t);
+              addLog&&addLog(mData,nm+" أضاف إيداع: "+tx2.desc);
+              S.revenueBalance=Math.round((S.revenueBalance+Number(tx2.amount))*100)/100;
+              try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+              saveCurData(mData);
+              set({showAddTx:false});
+              showMsg("✓ تم إضافة الإيداع: "+Number(tx2.amount).toLocaleString()+" د.إ");
+            }},["حفظ"]);
+          const cancelB=h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"14px"},
+            onClick:()=>set({showAddTx:false})},["إلغاء"]);
+          wrap.appendChild(descI);wrap.appendChild(amtI);wrap.appendChild(dateI);
+          wrap.appendChild(h("div",{style:{display:"flex",gap:"8px"}},[saveB,cancelB]));
+          return wrap;
+        })():null,
         txList.length===0?h("div",{style:{padding:"16px",textAlign:"center",color:"#555",fontSize:"14px"}},["لا توجد إيداعات"]):
           h("div",{},txList.map((t,i)=>h("div",{style:{padding:"10px 14px",borderBottom:i<txList.length-1?"1px solid #161616":"none",display:"flex",justifyContent:"space-between",alignItems:"center"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#fff"}},[t.desc||""]),h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")])]),
