@@ -91,7 +91,7 @@ async function submitRequest(type, desc, payload){
   // Save to Firebase
   try{
     await setDoc(doc(db,"requests",req.id),req);
-    showMsg("✓ تم إرسال الطلب لاعتماد سعيد");
+    showMsg("✓ تم إرسال الطلب لاعتماد المدير");
   }catch(e){
     showMsg("⚠ تعذر إرسال الطلب");
   }
@@ -1958,7 +1958,7 @@ function applyAprilImportedRevenue(data, preserveExisting=false){
   data.monthInitMode="april-import-v1";
   data.logs=data.logs||[];
   if(!data.logs.some(l=>String(l.id)==="april-import-log")){
-    data.logs.unshift({id:"april-import-log",user:"saeed",name:"سعيد",text:"تم تحميل إيرادات شهر أبريل من ملف Numbers: 167,857 د.إ",at:new Date().toISOString()});
+    data.logs.unshift({id:"april-import-log",user:"saeed",name:"مدير",text:"تم تحميل إيرادات شهر أبريل من ملف Numbers: 167,857 د.إ",at:new Date().toISOString()});
   }
   return data;
 }
@@ -2025,7 +2025,7 @@ function displayStatus(x){
 }
 
 const USERS={
-  saeed:{pin:"1325",role:"owner",name:"سعيد"},
+  saeed:{pin:"1325",role:"owner",name:"مدير"},
   yahia:{pin:"6477",role:"emp",name:"يحيى"},
   nader:{pin:"2026",role:"emp",name:"نادر"}
 };
@@ -2391,7 +2391,7 @@ function renderHome(){
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
-      h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  سعيد"]),
+      h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
       h("button",{class:"btn",style:{background:"#111",color:"#ddd",border:"1px solid #222",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"yahia",pin:"",pinErr:false})},["🔧  يحيى"]),
       h("button",{class:"btn",style:{background:"#111",color:"#ddd",border:"1px solid #222",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"nader",pin:"",pinErr:false})},["🔧  نادر"])])]);
 }
@@ -2560,7 +2560,7 @@ function renderApp(){
           h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
             if(!amount)return showMsg("أدخل المبلغ");
             const item={id:Date.now(),amount:Number(amount),date,note,by:S.user,account:selectedAccount};
-            if(isProfit){data.profits.push(item);addLog&&addLog(data,"سعيد حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");set({showAddProfit:false});}
+            if(isProfit){data.profits.push(item);addLog&&addLog(data,"مدير حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");set({showAddProfit:false});}
             else{
               data.installments.push(item);
               // Deduct from selected account
@@ -2572,7 +2572,7 @@ function renderApp(){
               }
               // Save balances to Firebase
               try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
-              addLog&&addLog(data,"سعيد سجّل دفع قسط: "+Number(amount).toLocaleString()+" د.إ من "+(selectedAccount==="company"?"حساب الشركة":"حساب الإيرادات"));
+              addLog&&addLog(data,"مدير سجّل دفع قسط: "+Number(amount).toLocaleString()+" د.إ من "+(selectedAccount==="company"?"حساب الشركة":"حساب الإيرادات"));
               set({showAddInstallment:false});
             }
             saveCurData(data);showMsg("✓ تم الحفظ");
@@ -2731,7 +2731,7 @@ function renderApp(){
         const deleteP=()=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
           if(!isOwner){
-            if(!confirm("إرسال طلب حذف هذا البارتشن لاعتماد سعيد؟"))return;
+            if(!confirm("إرسال طلب حذف هذا البارتشن لاعتماد المدير؟"))return;
             submitRequest("delete_partition",
               `حذف ${unit.name} / بارتشن ${p.id}`,
               {unitId:unit.id, partId:p.id});
@@ -2823,7 +2823,7 @@ function renderApp(){
         h("button",{class:"btn",style:{background:"transparent",color:"#555",fontSize:"15px",marginBottom:"12px"},
           onClick:()=>set({selUnit:null,editPart:null})},["← رجوع"]),
         !canEdit()&&(()=>{
-  let lockMsg="🔒 شهر مقفل – للتعديل يرجى مراجعة سعيد";
+  let lockMsg="🔒 شهر مقفل – للتعديل يرجى مراجعة المدير";
   if(S.user==="yahia"){
     const cur=new Date(NOW_Y,NOW_M,1);
     const sel=new Date(S.year,S.month,1);
@@ -2853,7 +2853,7 @@ function renderApp(){
                 data.units.splice(idx,1);
                 removeCustomUnit(unit.id,false,S.year,S.month);
                 propagateRemoveUnit(unit.id,false,S.year,S.month);
-                addLog&&addLog(data,"سعيد حذف "+unit.name);
+                addLog&&addLog(data,"مدير حذف "+unit.name);
                 saveCurData(data);set({selUnit:null,editPart:null});showMsg("✓ تم حذف الشقة");}
             }},["حذف الشقة"]):null
           ]):null
@@ -2896,7 +2896,7 @@ function renderApp(){
         const deleteFull=()=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
           if(!isOwner){
-            if(!confirm("إرسال طلب حذف هذه الشقة لاعتماد سعيد؟"))return;
+            if(!confirm("إرسال طلب حذف هذه الشقة لاعتماد المدير؟"))return;
             submitRequest("delete_full",`حذف شقة كاملة ${u.id}`,{unitId:u.id});
             set({editPart:null});
             return;
@@ -3747,6 +3747,104 @@ function renderApp(){
           onClick:()=>loadRequests()},["🔄 تحديث"])]),
       myReqs.length===0?h("div",{style:{textAlign:"center",padding:"32px",color:"#555",fontSize:"13px"}},["لا توجد طلبات"]):
         h("div",{},myReqs.map(r=>reqCard(r)))]);
+  }
+
+  // ======= DAILY RENTAL TAB =======
+  if(S.tab==="daily"){
+    const dailyList=data.dailyBookings||[];
+    const today=new Date(); today.setHours(0,0,0,0);
+    const totalDaily=dailyList.reduce((s,b)=>s+Number(b.total||0),0);
+    const allParts=[];
+    units.forEach(u=>u.partitions.forEach(p=>allParts.push({id:u.id+"-"+p.id,label:u.name+" / بارتشن "+p.id})));
+    full.forEach(u=>allParts.push({id:"full-"+u.id,label:"شقة "+u.id}));
+
+    const addForm=S.showAddDaily?(()=>{
+      let b={partId:"",guest:"",startDate:new Date().toISOString().slice(0,10),endDate:"",nightRate:"",total:"",nights:0,mode:"nights"};
+      const wrap=h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #3b82f6"}});
+      const title=h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff",marginBottom:"12px"}},["➕ حجز يومي جديد"]);
+      const partSel=h("select",{style:{marginBottom:"10px"}},[h("option",{value:""},["اختر البارتشن..."]),...allParts.map(p=>{const o=h("option",{value:p.id},[p.label]);return o;})]);
+      partSel.addEventListener("change",e=>b.partId=e.target.value);
+      const guestInp=h("input",{type:"text",placeholder:"اسم النزيل",style:{marginBottom:"10px"}});
+      guestInp.addEventListener("input",e=>b.guest=e.target.value);
+      const startLbl=h("div",{style:{fontSize:"13px",color:"#888",marginBottom:"4px"}},["من تاريخ"]);
+      const startInp=h("input",{type:"date",style:{marginBottom:"10px"}}); startInp.value=b.startDate;
+      const endLbl=h("div",{style:{fontSize:"13px",color:"#888",marginBottom:"4px"}},["إلى تاريخ"]);
+      const endInp=h("input",{type:"date",style:{marginBottom:"10px"}});
+      const nightsLabel=h("div",{style:{fontSize:"13px",color:"#888",marginBottom:"8px"}},["0 ليلة"]);
+      function recalc(){
+        if(b.startDate&&b.endDate){
+          const n=Math.max(0,Math.round((new Date(b.endDate)-new Date(b.startDate))/(1000*60*60*24)));
+          b.nights=n; nightsLabel.textContent=n+" ليلة";
+          if(b.mode==="nights"&&b.nightRate){b.total=n*Number(b.nightRate);totalInp.value=b.total;}
+        }
+      }
+      startInp.addEventListener("change",e=>{b.startDate=e.target.value;recalc();});
+      endInp.addEventListener("change",e=>{b.endDate=e.target.value;recalc();});
+      const d1=h("button",{class:"btn",id:"dm1",style:{flex:"1",padding:"9px",borderRadius:"8px",fontSize:"14px",fontWeight:"600",background:"#fff",color:"#000"},onClick:()=>{b.mode="nights";d1.style.background="#fff";d1.style.color="#000";d2.style.background="#222";d2.style.color="#888";rateInp.style.display="";totalInp.readOnly=true;recalc();}},["سعر الليلة × ليالي"]);
+      const d2=h("button",{class:"btn",id:"dm2",style:{flex:"1",padding:"9px",borderRadius:"8px",fontSize:"14px",fontWeight:"600",background:"#222",color:"#888"},onClick:()=>{b.mode="total";d2.style.background="#fff";d2.style.color="#000";d1.style.background="#222";d1.style.color="#888";rateInp.style.display="none";totalInp.readOnly=false;}},["مبلغ إجمالي"]);
+      const modeRow=h("div",{style:{display:"flex",gap:"8px",marginBottom:"10px"}},[d1,d2]);
+      const rateInp=h("input",{type:"number",placeholder:"سعر الليلة",style:{marginBottom:"10px"}});
+      rateInp.addEventListener("input",e=>{b.nightRate=e.target.value;recalc();});
+      const totalInp=h("input",{type:"number",placeholder:"المبلغ الإجمالي",style:{marginBottom:"10px"}});
+      totalInp.readOnly=true;
+      totalInp.addEventListener("input",e=>b.total=e.target.value);
+      const saveBtn=h("button",{class:"btn",style:{flex:"2",background:needsApproval?"#fff":"#4ade80",color:"#000",borderRadius:"8px",padding:"11px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
+        if(!b.partId)return showMsg("اختر البارتشن");
+        if(!b.startDate||!b.endDate)return showMsg("أدخل التواريخ");
+        if(!b.total||Number(b.total)<=0)return showMsg("أدخل المبلغ");
+        const partLabel=allParts.find(p=>p.id===b.partId)?.label||b.partId;
+        const booking={id:Date.now(),partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user};
+        if(needsApproval){
+          submitRequest("add_daily","حجز يومي: "+partLabel+" — "+(b.guest||"—")+" ("+b.startDate+" إلى "+b.endDate+") "+Number(b.total).toLocaleString()+" د.إ",{booking});
+        } else {
+          if(!data.dailyBookings)data.dailyBookings=[];
+          data.dailyBookings.push(booking);
+          addLog&&addLog(data,nm+" أضاف حجز يومي: "+partLabel);
+          saveCurData(data);
+          showMsg("✓ تم إضافة الحجز");
+        }
+        set({showAddDaily:false});
+      }},[needsApproval?"📤 إرسال للاعتماد":"✓ حفظ"]);
+      const cancelBtn=h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#888",borderRadius:"8px",padding:"11px",fontSize:"15px"},onClick:()=>set({showAddDaily:false})},["إلغاء"]);
+      wrap.appendChild(title);wrap.appendChild(partSel);wrap.appendChild(guestInp);
+      wrap.appendChild(startLbl);wrap.appendChild(startInp);
+      wrap.appendChild(endLbl);wrap.appendChild(endInp);
+      wrap.appendChild(nightsLabel);wrap.appendChild(modeRow);wrap.appendChild(rateInp);wrap.appendChild(totalInp);
+      wrap.appendChild(h("div",{style:{display:"flex",gap:"8px",marginTop:"6px"}},[saveBtn,cancelBtn]));
+      return wrap;
+    })():null;
+
+    content=h("div",{},[
+      monthNav(),
+      h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #1e3a5f"}},[
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
+          h("div",{},[
+            h("div",{style:{fontSize:"14px",color:"#60a5fa",fontWeight:"600"}},["📅 دخل الإيجار اليومي"]),
+            h("div",{style:{fontSize:"24px",fontWeight:"900",color:"#60a5fa",marginTop:"4px"}},[totalDaily.toLocaleString()+" د.إ"]),
+            h("div",{style:{fontSize:"13px",color:"#555",marginTop:"2px"}},[dailyList.length+" حجز هذا الشهر"])]),
+          canEdit()?h("button",{class:"btn",style:{background:"#3b82f6",color:"#fff",borderRadius:"8px",padding:"10px 16px",fontSize:"15px",fontWeight:"700"},onClick:()=>set({showAddDaily:!S.showAddDaily})},["+ حجز"]):null])]),
+      addForm,
+      dailyList.length===0?h("div",{style:{padding:"30px",textAlign:"center",color:"#555",fontSize:"15px"}},["لا توجد حجوزات يومية هذا الشهر"]):
+        h("div",{},dailyList.map(b=>{
+          const isActive=new Date(b.endDate)>=today&&new Date(b.startDate)<=today;
+          const isFuture=new Date(b.startDate)>today;
+          return h("div",{class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(isActive?"#16a34a":isFuture?"#3b82f6":"#2a2a2a")}},[
+            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
+              h("div",{},[
+                h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[b.partLabel]),
+                h("div",{style:{fontSize:"13px",color:"#888",marginTop:"2px"}},["النزيل: "+b.guest])]),
+              h("span",{style:{background:isActive?"#052e16":isFuture?"#1e3a5f":"#1a1a1a",color:isActive?"#4ade80":isFuture?"#60a5fa":"#888",borderRadius:"6px",padding:"3px 9px",fontSize:"12px",fontWeight:"600"}},[isActive?"🟢 حالياً":isFuture?"🔵 قادم":"انتهى"])]),
+            h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#aaa",marginBottom:"8px"}},[
+              h("span",{},["📅 "+b.startDate+" ← "+b.endDate]),
+              h("span",{},[b.nights>0?b.nights+" ليلة":""])]),
+            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:"8px",borderTop:"1px solid #1a1a1a"}},[
+              h("div",{style:{fontSize:"17px",fontWeight:"800",color:"#4ade80"}},[Number(b.total).toLocaleString()+" د.إ"]),
+              isOwner?h("button",{class:"btn",style:{fontSize:"13px",color:"#f87171",background:"#450a0a",border:"1px solid #7f1d1d",borderRadius:"6px",padding:"5px 10px"},
+                onClick:()=>{
+                  data.dailyBookings=data.dailyBookings.filter(x=>x.id!==b.id);
+                  saveCurData(data);showMsg("✓ تم الحذف");R();
+                }},["حذف"]):null])]);
+        }))]);
   }
 
   // ======= OCCUPANCY TAB =======
