@@ -2844,13 +2844,11 @@ function renderApp(){
     const yhRemaining=Math.max(0,yhTarget-yhDeposited);
     let yhReceived=(data.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     units.forEach(u=>u.partitions.forEach(p=>{
-      if(p.collectionMethod==="bank")return;
       const ds=displayStatus(p);const paid=Number(p.paid_amount)||0,rent=Number(p.rent)||0;
       if(ds==="collected")yhReceived+=paid>0?paid:rent;
       else if(ds==="partial")yhReceived+=paid>0?paid:0;
     }));
     full.forEach(u=>{
-      if(u.collectionMethod==="bank")return;
       const ds=displayStatus(u);const paid=Number(u.paid_amount)||0,rent=Number(u.rent)||0;
       if(ds==="collected")yhReceived+=paid>0?paid:rent;
       else if(ds==="partial")yhReceived+=paid>0?paid:0;
@@ -3737,9 +3735,7 @@ function renderApp(){
       (()=>{
         let receivedTotal=0;
         const _received=(x)=>{
-          // نفس معادلة بطاقة يحيى بالضبط — توحيد الحساب
-          // التحويل البنكي لا يمر بيد الموظف → مستثنى من المحصّل غير المودع
-          if(x.collectionMethod==="bank") return 0;
+          // المقبوض = كل ما حُصّل (نقداً أو بنكياً) — يُقفل فقط بتسجيل إيداع مطابق
           const ds=displayStatus(x);
           const paid=Number(x.paid_amount)||0;
           const rent=Number(x.rent)||0;
@@ -3788,18 +3784,13 @@ function renderApp(){
             ["هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"]),
           bankReceived>0?h("div",{style:{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #1e3a5f"}},[
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}},[
-              h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#7dd3fc"}},["🏦 محصّل بتحويل بنكي — بانتظار تسجيل الإيداع"]),
+              h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#7dd3fc"}},["🏦 منها تحويل بنكي — بانتظار تسجيل الإيداع"]),
               h("div",{style:{fontSize:"15px",fontWeight:"900",color:"#7dd3fc"}},[bankReceived.toLocaleString()+" د.إ"])]),
             h("div",{},bankItems.map(b=>h("div",{style:{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:"12px",color:"#93c5fd"}},[
-              h("span",{},[b.label]),h("span",{},[b.v.toLocaleString()+" د.إ"])]))),
-            h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["هذه المبالغ وصلت البنك مباشرة — سجّل لها إيداعاً مطابقاً لإقفالها من المتبقي"])]):null,
-          collShortfall>0?h("div",{style:{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #422006"}},[
-            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}},[
-              h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#fbbf24"}},["⚠ فرق تحصيل — معلّم محصّل والمدفوع أقل من الإيجار"]),
-              h("div",{style:{fontSize:"15px",fontWeight:"900",color:"#fbbf24"}},[collShortfall.toLocaleString()+" د.إ"])]),
-            h("div",{},shortItems.map(b=>h("div",{style:{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:"12px",color:"#fde68a"}},[
-              h("span",{},[b.label]),h("span",{},["ناقص "+b.v.toLocaleString()+" د.إ"])]))),
-            h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["راجع هذه الوحدات: إمّا تعليمها جزئي أو تصحيح المبلغ المدفوع"])]):null]);
+              h("span",{},[b.label]),h("span",{},[b.v.toLocaleString()+" د.إ"])])))]):null,
+          collShortfall>0?h("div",{style:{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #422006",display:"flex",justifyContent:"space-between",alignItems:"center"}},[
+            h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#fbbf24"}},["⚠ فرق تحصيل — مدفوع أقل من الإيجار"]),
+            h("div",{style:{fontSize:"15px",fontWeight:"900",color:"#fbbf24"}},[collShortfall.toLocaleString()+" د.إ"])]):null]);
       })(),
       // ======= عهدة الموظفين =======
       (()=>{
