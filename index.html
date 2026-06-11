@@ -2845,12 +2845,12 @@ function renderApp(){
     let yhReceived=(data.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     units.forEach(u=>u.partitions.forEach(p=>{
       const ds=displayStatus(p);const paid=Number(p.paid_amount)||0,rent=Number(p.rent)||0;
-      if(ds==="collected")yhReceived+=paid>0?paid:rent;
+      if(ds==="collected")yhReceived+=rent;
       else if(ds==="partial")yhReceived+=paid>0?paid:0;
     }));
     full.forEach(u=>{
       const ds=displayStatus(u);const paid=Number(u.paid_amount)||0,rent=Number(u.rent)||0;
-      if(ds==="collected")yhReceived+=paid>0?paid:rent;
+      if(ds==="collected")yhReceived+=rent;
       else if(ds==="partial")yhReceived+=paid>0?paid:0;
     });
     const yhUndeposited=Math.max(0,yhReceived-yhDeposited);
@@ -3735,11 +3735,11 @@ function renderApp(){
       (()=>{
         let receivedTotal=0;
         const _received=(x)=>{
-          // المقبوض = كل ما حُصّل (نقداً أو بنكياً) — يُقفل فقط بتسجيل إيداع مطابق
+          // نفس معادلة محرك التوازن بالضبط: محصّل = الإيجار كاملاً، جزئي = المدفوع
           const ds=displayStatus(x);
           const paid=Number(x.paid_amount)||0;
           const rent=Number(x.rent)||0;
-          if(ds==="collected") return paid>0?paid:rent;
+          if(ds==="collected") return rent;
           if(ds==="partial") return paid>0?paid:0;
           return 0;
         };
@@ -3750,30 +3750,8 @@ function renderApp(){
         // Actual deposits
         const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
         const undeposited=Math.max(0,receivedTotal-deposited);
-        // ===== مطابقة (عرض فقط — لا يغيّر أي بيانات) =====
-        // 1) محصّل بتحويل بنكي: مستثنى من عهدة الموظفين لكنه جزء من "المتبقي" حتى يُسجَّل إيداعه
-        let bankReceived=0; const bankItems=[];
-        const _receivedBank=(x,label)=>{
-          if(x.collectionMethod!=="bank") return;
-          const ds=displayStatus(x);
-          const paid=Number(x.paid_amount)||0, rent=Number(x.rent)||0;
-          let v=0;
-          if(ds==="collected") v=paid>0?paid:rent;
-          else if(ds==="partial") v=paid>0?paid:0;
-          if(v>0){bankReceived+=v; bankItems.push({label,v});}
-        };
-        units.forEach(u=>u.partitions.forEach(p=>{ _receivedBank(p,u.name+" #"+p.id); }));
-        full.forEach(u=>{ _receivedBank(u,"شقة "+u.id); });
-        // 2) فرق تحصيل: معلّم "محصّل" لكن المدفوع أقل من الإيجار (بدون علامة جزئي)
-        let collShortfall=0; const shortItems=[];
-        const _short=(x,label)=>{
-          const ds=displayStatus(x);
-          const paid=Number(x.paid_amount)||0, rent=Number(x.rent)||0;
-          if(ds==="collected"&&paid>0&&paid<rent){const d=rent-paid;collShortfall+=d;shortItems.push({label,v:d});}
-        };
-        units.forEach(u=>u.partitions.forEach(p=>{ _short(p,u.name+" #"+p.id); }));
-        full.forEach(u=>{ _short(u,"شقة "+u.id); });
-        if(undeposited<=0 && bankReceived<=0 && collShortfall<=0) return null;
+        if(undeposited<=0) return null;
+
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #1e3a5f",background:"linear-gradient(135deg,#0c1a2e,#111)"}},[
           h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
             h("div",{},[
@@ -3781,16 +3759,7 @@ function renderApp(){
               h("div",{style:{fontSize:"12px",color:"#555"}},["إيجارات المحصّلة − الإيداعات الفعلية"])]),
             h("div",{style:{fontSize:"26px",fontWeight:"900",color:"#60a5fa"}},[undeposited.toLocaleString()+" د.إ"])]),
           h("div",{style:{fontSize:"12px",color:"#3b82f6",background:"#1e3a5f",borderRadius:"6px",padding:"6px 10px",marginTop:"4px"}},
-            ["هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"]),
-          bankReceived>0?h("div",{style:{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #1e3a5f"}},[
-            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}},[
-              h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#7dd3fc"}},["🏦 منها تحويل بنكي — بانتظار تسجيل الإيداع"]),
-              h("div",{style:{fontSize:"15px",fontWeight:"900",color:"#7dd3fc"}},[bankReceived.toLocaleString()+" د.إ"])]),
-            h("div",{},bankItems.map(b=>h("div",{style:{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:"12px",color:"#93c5fd"}},[
-              h("span",{},[b.label]),h("span",{},[b.v.toLocaleString()+" د.إ"])])))]):null,
-          collShortfall>0?h("div",{style:{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #422006",display:"flex",justifyContent:"space-between",alignItems:"center"}},[
-            h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#fbbf24"}},["⚠ فرق تحصيل — مدفوع أقل من الإيجار"]),
-            h("div",{style:{fontSize:"15px",fontWeight:"900",color:"#fbbf24"}},[collShortfall.toLocaleString()+" د.إ"])]):null]);
+            ["هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"])]);
       })(),
       // ======= عهدة الموظفين =======
       (()=>{
