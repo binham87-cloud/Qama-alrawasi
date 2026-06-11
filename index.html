@@ -27,7 +27,6 @@ select option{background:#1f1f1f}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCjykBzrjxlghBLZBLlLGlj_dQoHemRsBs",
@@ -41,38 +40,6 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
 
-// ========== SECURE AUTH (v2.2) ==========
-// التحقق من الرقم السري يتم عبر Firebase Authentication على الخادم
-// لا توجد أي أرقام سرية داخل هذا الملف
-const auth = getAuth(fbApp);
-const AUTH_EMAILS={
-  saeed:"saeed@qama-alrawasi.app",
-  yahia:"yahia@qama-alrawasi.app",
-  nader:"nader@qama-alrawasi.app"
-};
-const AUTH_PASS_SUFFIX="-Qama#2026!Sec";
-const PIN_LEN=4;
-
-async function secureLogin(userKey,pin){
-  const email=AUTH_EMAILS[userKey];
-  if(!email)return{ok:false,err:"NO_EMAIL"};
-  try{
-    if(auth.currentUser&&auth.currentUser.email===email)return{ok:true};
-    if(auth.currentUser&&auth.currentUser.email!==email){try{await signOut(auth);}catch(e){}}
-    await signInWithEmailAndPassword(auth,email,pin+AUTH_PASS_SUFFIX);
-    return{ok:true};
-  }catch(e){
-    return{ok:false,err:(e&&e.code)||String(e)};
-  }
-}
-
-// بصمة محلية مشفّرة (SHA-256) تسمح بالدخول بدون إنترنت بعد أول دخول ناجح
-async function pinHash(userKey,pin){
-  const enc=new TextEncoder().encode("qama|"+userKey+"|"+pin+"|v1");
-  const buf=await crypto.subtle.digest("SHA-256",enc);
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-
 // ========== DATA ==========
 const MONTHS=["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
 const CY=2026;
@@ -85,7 +52,10 @@ function canEdit(){
   const perms=S.permissions[S.user];
   if(perms&&perms.allMonths)return true;
   if(S.user==="yahia"){
-    const diffMonths=(S.year*12+S.month)-(NOW_Y*12+NOW_M);
+    const cur=new Date(NOW_Y,NOW_M,1);
+    const sel=new Date(S.year,S.month,1);
+    const diffMs=sel-cur;
+    const diffMonths=Math.round(diffMs/(1000*60*60*24*30));
     return diffMonths>=-1 && diffMonths<=1;
   }
   return S.month===NOW_M && S.year===NOW_Y;
@@ -2166,16 +2136,16 @@ function displayStatus(x){
 }
 
 const USERS={
-  saeed:{role:"owner",name:"مدير"},
-  yahia:{role:"emp",name:"يحيى"},
-  nader:{role:"emp",name:"نادر"}
+  saeed:{pin:"1325",role:"owner",name:"مدير"},
+  yahia:{pin:"6477",role:"emp",name:"يحيى"},
+  nader:{pin:"2026",role:"emp",name:"نادر"}
 };
 
 // ========== STATE ==========
 const S={
   screen:"home", // home | pin | app
   pendingUser:null, user:null,
-  pin:"", pinErr:false, pinBusy:false, pinMsg:"",
+  pin:"", pinErr:false,
   tab:"overview",
   month:new Date().getMonth(), year:new Date().getFullYear(), // 0-based month index (أبريل)
   selUnit:null, editPart:null,
@@ -2202,6 +2172,7 @@ const S={
   editRevenueVal:"",
   editCompanyVal:"",
   editingReq:null,
+  showEditRevenue:false,
   installmentSchedule:[
     {date:"2025-12-31",amount:179294,paid:true},
     {date:"2026-03-31",amount:179294,paid:true},
@@ -2500,51 +2471,25 @@ function saveCurData(data,quiet=false){saveMonthData(S.year,S.month,data,quiet);
 function set(o){Object.assign(S,o);R();}
 function showMsg(t){S.msg=t;R();setTimeout(()=>{S.msg="";R();},2000);}
 
-async function verifyAndEnter(userKey,pin){
-  let ok=false, offline=false;
-  const res=await secureLogin(userKey,pin);
-  if(res.ok){
-    ok=true;
-    try{localStorage.setItem("qama_ph_"+userKey,await pinHash(userKey,pin));}catch(e){}
-  }else if(res.err==="auth/network-request-failed"){
-    // لا إنترنت: تحقق من البصمة المشفّرة المحفوظة من آخر دخول ناجح
-    try{
-      const saved=localStorage.getItem("qama_ph_"+userKey);
-      if(saved&&saved===await pinHash(userKey,pin)){ok=true;offline=true;}
-      else if(!saved){S.pinMsg="لا اتصال — الدخول الأول يتطلب إنترنت";}
-    }catch(e){}
-  }else if(res.err==="auth/too-many-requests"){
-    S.pinMsg="محاولات كثيرة — انتظر دقيقة ثم حاول";
-  }
-  S.pinBusy=false;
-  // إذا رجع المستخدم للخلف أثناء التحقق لا تكمل الدخول
-  if(S.screen!=="pin"||S.pendingUser!==userKey){S.pinMsg="";S.pin="";R();return;}
-  if(!ok){
-    S.pin="";S.pinErr=true;R();
-    setTimeout(()=>{S.pinErr=false;S.pinMsg="";R();},1400);
-    return;
-  }
-  S.pinMsg="";
-  S.screen="app";S.user=userKey;S.pin="";S.pinErr=false;
-  S.tab=USERS[userKey].role==="owner"?"overview":"units";
-  S.selUnit=null;S.editPart=null;
-  if(offline)S.syncMsg="وضع محلي — لا اتصال";
-  loadPermissions();
-  loadLocksFromServer().then(()=>R()); // عند الدخول من Firebase + إعادة رسم
-  loadRequests();
-  loadCustomUnits();
-  R();
-  loadMonthOnline(S.year,S.month);
-  loadBalances().then(()=>R());
-}
-
 function pinPress(d){
-  if(S.pinBusy)return;
-  if(S.pinErr){S.pin="";S.pinErr=false;S.pinMsg="";}
+  if(S.pinErr){S.pin="";S.pinErr=false;}
   const n=S.pin+d;
-  if(n.length===PIN_LEN){
-    S.pin=n;S.pinBusy=true;R();
-    verifyAndEnter(S.pendingUser,n);
+  if(n.length===4){
+    if(n===USERS[S.pendingUser].pin){
+      S.screen="app";S.user=S.pendingUser;S.pin="";S.pinErr=false;
+      S.tab=USERS[S.pendingUser].role==="owner"?"overview":"units";
+      S.selUnit=null;S.editPart=null;
+      loadPermissions();
+      loadLocksFromServer().then(()=>R()); // عند الدخول من Firebase + إعادة رسم
+      loadRequests();
+      loadCustomUnits();
+      R();
+      loadMonthOnline(S.year,S.month);
+      loadBalances().then(()=>R());
+    } else {
+      set({pin:"",pinErr:true});
+      setTimeout(()=>set({pinErr:false}),900);
+    }
   } else set({pin:n});
 }
 
@@ -2586,7 +2531,7 @@ function renderPin(){
     return h("button",{class:"btn pkb",style:{background:"#161616",border:"1px solid #1e1e1e",
       borderRadius:"14px",padding:"17px 0",fontSize:k==="⌫"?"20px":"24px",fontWeight:"500",
       color:"#fff",width:"100%"},
-      onClick:()=>{if(S.pinBusy)return;k==="⌫"?set({pin:S.pin.slice(0,-1),pinErr:false}):pinPress(k);}
+      onClick:()=>k==="⌫"?set({pin:S.pin.slice(0,-1),pinErr:false}):pinPress(k)
     },[k]);
   });
   return h("div",{style:{minHeight:"100vh",background:"#0a0a0a",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px"}},[
@@ -2594,7 +2539,7 @@ function renderPin(){
     h("div",{style:{fontSize:"22px",fontWeight:"700",color:"#fff",marginBottom:"6px"}},[nm]),
     h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"28px"}},["أدخل الرقم السري"]),
     h("div",{style:{display:"flex",gap:"18px",marginBottom:S.pinErr?"10px":"28px"}},dots),
-    S.pinErr?h("div",{style:{fontSize:"14px",color:"#f87171",marginBottom:"18px"}},[S.pinMsg||"رقم سري خاطئ"]):S.pinBusy?h("div",{style:{fontSize:"14px",color:"#60a5fa",marginBottom:"18px"}},["جاري التحقق الآمن..."]):h("div",{style:{height:"28px"}}),
+    S.pinErr?h("div",{style:{fontSize:"14px",color:"#f87171",marginBottom:"18px"}},["رقم سري خاطئ"]):h("div",{style:{height:"28px"}}),
     h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"10px",width:"100%",maxWidth:"280px"}},keys)]);
 }
 
@@ -3737,14 +3682,14 @@ function renderApp(){
       (()=>{
         let receivedTotal=0;
         const _received=(x)=>{
-          // المبلغ الفعلي المقبوض: لو فيه دفع جزئي مسجّل نأخذه، وإلا الإيجار الكامل للمحصّل
+          // نفس معادلة بطاقة يحيى بالضبط — توحيد الحساب
+          // التحويل البنكي لا يمر بيد الموظف → مستثنى من المحصّل غير المودع
+          if(x.collectionMethod==="bank") return 0;
           const ds=displayStatus(x);
           const paid=Number(x.paid_amount)||0;
           const rent=Number(x.rent)||0;
-          // لو معلّم جزئي ولديه مبلغ مدفوع أقل من الإيجار → المدفوع فقط
-          if(x.partial && paid>0 && paid<rent) return paid;
-          if(ds==="collected") return rent;
-          if(ds==="partial") return paid;
+          if(ds==="collected") return paid>0?paid:rent;
+          if(ds==="partial") return paid>0?paid:0;
           return 0;
         };
         units.forEach(u=>u.partitions.forEach(p=>{ receivedTotal+=_received(p); }));
