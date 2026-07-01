@@ -2281,6 +2281,33 @@ async function loadCustomUnits(){
   }catch(e){}
 }
 
+async function copyRentsFromPrevMonth(y,m){
+  let py=y, pm=m-1;
+  if(pm<1){pm=12;py=y-1;}
+  const pk=getMonthKey(py,pm);
+  try{
+    const snap=await getDoc(doc(db,'months',pk));
+    if(!snap.exists()){showMsg('❌ الشهر السابق غير موجود');return;}
+    const prev=normalizeData(snap.data().data||snap.data());
+    if(!prev||!prev.units){showMsg('❌ لا بيانات في الشهر السابق');return;}
+    const cur=getCurData();
+    cur.units.forEach(nu=>{
+      const pu=prev.units.find(x=>x.id===nu.id);
+      if(!pu)return;
+      nu.partitions.forEach(np=>{
+        const pp=pu.partitions.find(x=>x.id===np.id);
+        if(pp&&pp.rent!==undefined)np.rent=pp.rent;
+      });
+    });
+    cur.full.forEach(nf=>{
+      const pf=prev.full.find(x=>x.id===nf.id);
+      if(pf&&pf.rent!==undefined)nf.rent=pf.rent;
+    });
+    saveCurData(cur);
+    showMsg('✅ تم نقل الأسعار من الشهر السابق');
+  }catch(e){showMsg('❌ خطأ في القراءة');}
+}
+
 function createZeroMonthData(y,m){
   const data = {
     monthInitMode:"zero-v2",
@@ -3512,6 +3539,7 @@ function renderApp(){
     const _vBalanced=Math.abs(_vDiff)<1;
     content=h("div",{},[
       monthNav(),
+      isOwner&&!isMonthLocked(S.year,S.month)?h("div",{style:{marginBottom:"10px"}},[h("button",{class:"btn",style:{background:"#1e3a5f",border:"1px solid #3b82f6",borderRadius:"8px",padding:"7px 14px",fontSize:"14px",color:"#60a5fa",fontWeight:"600"},onClick:async()=>{if(!confirm("سيتم نقل أسعار الإيجار من الشهر السابق. هل أنت متأكد؟"))return;await copyRentsFromPrevMonth(S.year,S.month);R();}},["📥 استيراد أسعار الإيجار من الشهر السابق"])]):null,
       h("div",{class:"card",style:{padding:"12px",marginBottom:"12px",border:_vBalanced?"1px solid #166534":"2px solid #b91c1c",background:_vBalanced?"#052e16":"#2e0505"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color:_vBalanced?"#4ade80":"#f87171"}},[_vBalanced?"✅ الحسابات متوازنة":"⚠️ خلل في التوازن"]),
