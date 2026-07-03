@@ -317,10 +317,29 @@ async function approveRequest(req){
 
 async function rejectRequest(req){
   try{
-    await setDoc(doc(db,"requests",req.id),{...req,status:"rejected",rejectedAt:new Date().toISOString()});
+    // حماية من السباق: لا نرفض إلا إذا كان الطلب ما زال معلّقاً فعلياً في Firebase
+    // (جهاز آخر قد يكون اعتمده للتو — رفضه حينها يترك المبلغ في السجل والطلب "مرفوض")
+    const {runTransaction:fbRunTx2,doc:fbDoc2}=await import("https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js");
+    const reqRef=fbDoc2(db,"requests",req.id);
+    await fbRunTx2(db,async(tx)=>{
+      const snap=await tx.get(reqRef);
+      if(!snap.exists()) throw new Error("NOT_FOUND");
+      const d=snap.data();
+      if(d.status!=="pending") throw new Error("NOT_PENDING:"+d.status);
+      tx.update(reqRef,{status:"rejected",rejectedAt:new Date().toISOString()});
+    });
     showMsg("✓ تم رفض الطلب");
     await loadRequests();
-  }catch(e){showMsg("⚠ خطأ");}
+  }catch(e){
+    const msg=(e&&e.message)||"";
+    if(msg.startsWith("NOT_PENDING")){
+      const st=msg.split(":")[1]||"";
+      showMsg(st==="approved"?"⚠ الطلب اعتُمد بالفعل من جهاز آخر — لم يُرفض":"⏳ الطلب قيد المعالجة أو تغيّرت حالته");
+      await loadRequests();return;
+    }
+    if(msg==="NOT_FOUND"){showMsg("⚠ الطلب غير موجود");await loadRequests();return;}
+    showMsg("⚠ خطأ");
+  }
 }
 
 function propagateNewUnit(unit, fromYear, fromMonth){
@@ -2986,7 +3005,7 @@ function renderApp(){
           // ضبط الحقول الثانوية حسب نوع التغيير
           p[field]=val;
           if(field==="status"){
-            if(val==="collected"){p.partial=false;p.collectionMethod="";}
+            if(val==="collected"){p.partial=false;p.collectionMethod="";p.paid_amount=Number(p.rent)||0;}
             else if(val==="late"||val==="vacant"||val==="staff"){p.collectionMethod="";p.collectedBy="";}
           }
           if(field==="collectionMethod"){
@@ -3204,7 +3223,7 @@ function renderApp(){
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
           u[field]=val;
           if(field==="status"){
-            if(val==="collected"){u.partial=false;u.collectionMethod="";}
+            if(val==="collected"){u.partial=false;u.collectionMethod="";u.paid_amount=Number(u.rent)||0;}
             else if(val==="late"||val==="vacant"||val==="staff"){u.collectionMethod="";u.collectedBy="";}
           }
           if(field==="collectionMethod"){
@@ -3854,13 +3873,16 @@ function renderApp(){
           dateI.addEventListener("change",e=>tx2.date=e.target.value);
           const saveB=h("button",{class:"btn",style:{flex:"1",background:"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},
             onClick:async()=>{
+              if(S.savingTx){showMsg("⏳ جاري الحفظ...");return;}
               if(!tx2.desc||!tx2.amount)return showMsg("أدخل الوصف والمبلغ");
+              S.savingTx=true;
               const t={id:Date.now(),desc:tx2.desc,amount:Number(tx2.amount),date:tx2.date,notes:tx2.notes,type:tx2.type,by:S.user};
               mData.transactions.push(t);
               addLog&&addLog(mData,nm+" أضاف إيداع: "+tx2.desc);
               S.revenueBalance=Math.round((S.revenueBalance+Number(tx2.amount))*100)/100;
               try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
               saveCurData(mData);
+              S.savingTx=false;
               set({showAddTx:false});
               showMsg("✓ تم إضافة الإيداع: "+Number(tx2.amount).toLocaleString()+" د.إ");
             }},["حفظ"]);
@@ -3900,12 +3922,14 @@ function renderApp(){
         const btnRow=h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},
             onClick:()=>{
+              if(isOwner&&S.savingExp){showMsg("⏳ جاري الحفظ...");return;}
               if(!desc||!amount)return;
               const expense={id:Date.now(),desc,amount:Number(amount),category:cat,date,by:S.user};
               if(isOwner){
+                S.savingExp=true;
                 data.expenses.push(expense);
                 addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف مصروف: "+desc);
-                saveCurData(data);set({showAddExp:false});showMsg("✓ تم الحفظ");
+                saveCurData(data);S.savingExp=false;set({showAddExp:false});showMsg("✓ تم الحفظ");
               } else {
                 submitRequest("add_expense",
                   `مصروف جديد: ${desc} - ${Number(amount).toLocaleString()} د.إ`,
@@ -3986,15 +4010,17 @@ function renderApp(){
         notesInp.addEventListener("input",e=>{tx.notes=e.target.value;});
         const saveBtn=h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},
           onClick:()=>{
+            if(isOwner&&S.savingTx){showMsg("⏳ جاري الحفظ...");return;}
             if(!tx.desc||!tx.amount)return showMsg("أدخل الوصف والمبلغ");
             const transaction={id:Date.now(),type:tx.type,desc:tx.desc,amount:Number(tx.amount),date:tx.date,notes:tx.notes,by:S.user};
             if(isOwner){
+              S.savingTx=true;
               data.transactions.push(transaction);
               addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف إيداع: "+tx.desc);
               // Add to revenue balance
               S.revenueBalance=Math.round((S.revenueBalance+Number(tx.amount||0))*100)/100;
               try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
-              saveCurData(data);set({showAddTx:false});showMsg("✓ تم الحفظ – أضيف للإيرادات: "+S.revenueBalance.toLocaleString()+" د.إ");
+              saveCurData(data);S.savingTx=false;set({showAddTx:false});showMsg("✓ تم الحفظ – أضيف للإيرادات: "+S.revenueBalance.toLocaleString()+" د.إ");
             } else {
               submitRequest("add_transaction",`إيداع: ${tx.desc} - ${Number(tx.amount).toLocaleString()} د.إ`,{transaction});
               set({showAddTx:false});
@@ -4225,6 +4251,8 @@ function renderApp(){
             onClick:()=>set({editingReq:S.editingReq===req.id?null:req.id})},["✏️ تعديل"]),
           h("button",{class:"btn",style:{flex:"1",background:"#1c1917",border:"1px solid #854d0e",color:"#fbbf24",borderRadius:"8px",padding:"8px",fontSize:"14px",fontWeight:"600"},
             onClick:async()=>{
+              if(S.reqActionLock){showMsg("⏳ جاري التنفيذ...");return;}
+              S.reqActionLock=true;R();
               try{
                 const rData=getMonthData(req.year,req.month);
                 if(req.type==="add_transaction"){
@@ -4258,11 +4286,13 @@ function renderApp(){
                 showMsg("✓ تم إلغاء الاعتماد – تم تحديث المالية");
                 await loadRequests();await loadMonthOnline(req.year,req.month);
                 if(req.year!==S.year||req.month!==S.month)await loadMonthOnline(S.year,S.month);
-                R();
-              }catch(e){showMsg("⚠ خطأ: "+e.message);}
+              }catch(e){showMsg("⚠ خطأ: "+e.message);
+              }finally{S.reqActionLock=false;R();}
             }},["↩ إلغاء"]),
           h("button",{class:"btn",style:{flex:"1",background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"8px",fontSize:"14px",fontWeight:"600"},
             onClick:async()=>{
+              if(S.reqActionLock){showMsg("⏳ جاري التنفيذ...");return;}
+              S.reqActionLock=true;R();
               try{
                 // Reverse effect then delete
                 const rData=getMonthData(req.year,req.month);
@@ -4289,8 +4319,8 @@ function renderApp(){
                 showMsg("✓ تم الحذف – تم تحديث المالية");
                 await loadRequests();await loadMonthOnline(req.year,req.month);
                 if(req.year!==S.year||req.month!==S.month)await loadMonthOnline(S.year,S.month);
-                R();
-              }catch(e){showMsg("⚠ خطأ: "+e.message);}
+              }catch(e){showMsg("⚠ خطأ: "+e.message);
+              }finally{S.reqActionLock=false;R();}
             }},["🗑 حذف"])])]):null]);
     };
 
