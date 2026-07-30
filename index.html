@@ -3596,7 +3596,83 @@ function renderApp(){
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color:_vBalanced?"#4ade80":"#f87171"}},[_vBalanced?"✅ الحسابات متوازنة":"⚠️ خلل في التوازن"]),
           _vBalanced?h("div",{style:{fontSize:"13px",color:"#4ade80"}},["مطابق"]):h("div",{style:{fontSize:"16px",fontWeight:"900",color:"#f87171"}},["فرق "+Math.abs(_vDiff).toLocaleString()+" د.إ"])]),
-        !_vBalanced?h("div",{style:{fontSize:"11px",color:"#999",marginTop:"6px"}},["المستهدف "+_vTarget.toLocaleString()+" = مودع "+_vDeposited.toLocaleString()+" + تحويل بنكي "+_vBank.toLocaleString()+" + متأخر "+_vLate.toLocaleString()+" + جزئي "+_vPartialRem.toLocaleString()+" + عند الموظفين "+_vUndeposited.toLocaleString()]):null]),
+        !_vBalanced?h("div",{style:{fontSize:"11px",color:"#999",marginTop:"6px"}},["المستهدف "+_vTarget.toLocaleString()+" = مودع "+_vDeposited.toLocaleString()+" + تحويل بنكي "+_vBank.toLocaleString()+" + متأخر "+_vLate.toLocaleString()+" + جزئي "+_vPartialRem.toLocaleString()+" + عند الموظفين "+_vUndeposited.toLocaleString()]):null,
+        // ======= أداة التصحيح الذكي: كشف الإيداعات اليدوية المكررة مع التحويلات البنكية =======
+        (()=>{
+          if(_vBalanced||_vDiff>=0||_vBank<=0||!isOwner||isMonthLocked(S.year,S.month))return null;
+          const surplus=Math.round(Math.abs(_vDiff)*100)/100; // الفائض = المحسوب مرتين
+          // 1. اجمع مبالغ الوحدات المحصّلة بتحويل بنكي
+          const bankItems=[];
+          const _got=(x)=>{const ds=displayStatus(x);const paid=Number(x.paid_amount)||0,rent=Number(x.rent)||0;
+            if(x.partial&&paid>0&&paid<rent)return paid;
+            if(ds==="collected")return rent;
+            if(ds==="partial")return paid>0?paid:0;
+            return 0;};
+          mData.units.forEach(u=>u.partitions.forEach(p=>{const g=_got(p);if(g>0&&p.collectionMethod==="bank")bankItems.push({label:u.name+"/"+p.id,amount:g});}));
+          (mData.full||[]).forEach(u=>{const g=_got(u);if(g>0&&u.collectionMethod==="bank")bankItems.push({label:"شقة "+u.id,amount:g});});
+          // 2. رشّح الإيداعات اليدوية المطابقة بالمبلغ (مطابقة 1:1، الأولوية لما يذكر تحويل/بنك)
+          const pool=(mData.transactions||[]).slice().sort((a,b)=>{
+            const score=t=>((String(t.desc||"")+String(t.notes||"")).match(/تحويل|بنك/)?0:1);
+            return score(a)-score(b);
+          });
+          const remaining=bankItems.map(b=>({...b,used:false}));
+          const candidates=[];
+          pool.forEach(t=>{
+            const amt=Number(t.amount)||0;if(amt<=0)return;
+            const m=remaining.find(b=>!b.used&&Math.abs(b.amount-amt)<0.01);
+            if(m){m.used=true;candidates.push({tx:t,match:m.label});}
+          });
+          if(candidates.length===0)
+            return h("div",{style:{fontSize:"12px",color:"#fbbf24",marginTop:"8px"}},["⚠ الفائض من ازدواج بنكي لكن لا يوجد إيداع يدوي مطابق بالمبلغ — راجع تبويب الإيداعات يدوياً."]);
+          // 3. تحديد مسبق آمن: فقط إذا مجموع المرشحين = الفائض بالضبط
+          if(!S.reconSel){
+            S.reconSel={};
+            const candSum=Math.round(candidates.reduce((s,c)=>s+Number(c.tx.amount||0),0)*100)/100;
+            if(Math.abs(candSum-surplus)<0.01)candidates.forEach(c=>S.reconSel[c.tx.id]=true);
+          }
+          const selSum=Math.round(candidates.reduce((s,c)=>s+(S.reconSel[c.tx.id]?Number(c.tx.amount||0):0),0)*100)/100;
+          const exact=Math.abs(selSum-surplus)<0.01;
+          if(!S.showReconcile)
+            return h("button",{class:"btn",style:{marginTop:"8px",width:"100%",background:"#1c1917",border:"1px solid #b45309",color:"#fbbf24",borderRadius:"8px",padding:"8px",fontSize:"13px",fontWeight:"700"},
+              onClick:()=>set({showReconcile:true})},["🔍 النظام وجد "+candidates.length+" إيداعاً يُرجَّح أنه مكرر مع تحويل بنكي — اعرض التصحيح المقترح"]);
+          return h("div",{style:{marginTop:"10px",borderTop:"1px solid #7f1d1d",paddingTop:"8px"}},[
+            h("div",{style:{fontSize:"12px",color:"#fbbf24",fontWeight:"700",marginBottom:"6px"}},["إيداعات يدوية مطابقة لوحدات محصّلة بتحويل بنكي (محسوبة مرتين):"]),
+            ...candidates.map(c=>{
+              const checked=!!S.reconSel[c.tx.id];
+              return h("div",{class:"btn",style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 9px",marginBottom:"5px",background:checked?"#2e1a05":"#111",border:"1px solid "+(checked?"#b45309":"#2a2a2a"),borderRadius:"7px",cursor:"pointer"},
+                onClick:()=>{S.reconSel[c.tx.id]=!S.reconSel[c.tx.id];R();}},[
+                h("div",{},[
+                  h("div",{style:{fontSize:"12px",color:"#fff"}},[(checked?"☑ ":"☐ ")+(c.tx.desc||"إيداع")+(c.tx.notes?" — "+c.tx.notes:"")]),
+                  h("div",{style:{fontSize:"11px",color:"#777",marginTop:"2px"}},["يطابق: "+c.match+(c.tx.date?" · "+c.tx.date:"")])]),
+                h("div",{style:{fontSize:"13px",fontWeight:"800",color:"#fbbf24",flexShrink:"0"}},[Number(c.tx.amount).toLocaleString()+" د.إ"])]);
+            }),
+            h("div",{style:{fontSize:"12px",color:exact?"#4ade80":"#f87171",fontWeight:"700",margin:"6px 0"}},
+              ["المحدد: "+selSum.toLocaleString()+" د.إ / المطلوب: "+surplus.toLocaleString()+" د.إ"+(exact?" ✓ مطابق":" — عدّل التحديد حتى يتساوى المجموع")]),
+            h("div",{style:{display:"flex",gap:"8px"}},[
+              h("button",{class:"btn",style:{flex:"2",background:exact?"#052e16":"#1a1a1a",border:"1px solid "+(exact?"#166534":"#2a2a2a"),color:exact?"#4ade80":"#555",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"800"},
+                onClick:async()=>{
+                  if(!exact){showMsg("⚠ يجب أن يساوي المحدد الفرق بالضبط");return;}
+                  if(S.reconBusy){showMsg("⏳ جاري التنفيذ...");return;}
+                  if(!confirm("سيتم حذف "+candidates.filter(c=>S.reconSel[c.tx.id]).length+" إيداعاً بمجموع "+selSum.toLocaleString()+" د.إ وإنقاص رصيد الإيرادات بنفس المبلغ (لأنها أضيفت له عند تسجيلها). هل أنت متأكد؟"))return;
+                  S.reconBusy=true;R();
+                  try{
+                    await _flushMonthSave();
+                    const ids=candidates.filter(c=>S.reconSel[c.tx.id]).map(c=>c.tx.id);
+                    const removed=(mData.transactions||[]).filter(t=>ids.includes(t.id));
+                    mData.transactions=(mData.transactions||[]).filter(t=>!ids.includes(t.id));
+                    removed.forEach(t=>addLog&&addLog(mData,(USERS[S.user]?.name||S.user)+" حذف إيداعاً مكرراً مع تحويل بنكي: "+(t.desc||"")+" ("+Number(t.amount).toLocaleString()+" د.إ)"));
+                    // نفس نمط النظام: حذف إيداع = إنقاص رصيد الإيرادات بمبلغه
+                    S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-selSum)*100)/100);
+                    try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
+                    saveCurData(mData);
+                    S.reconSel=null;S.showReconcile=false;
+                    showMsg("✓ تم التصحيح — حُذف الازدواج وأُنقص رصيد الإيرادات "+selSum.toLocaleString()+" د.إ");
+                  }catch(e){console.error(e);showMsg("⚠ خطأ أثناء التصحيح");}
+                  finally{S.reconBusy=false;R();}
+                }},["🧹 احذف المكرر وصحّح التوازن"]),
+              h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"13px"},
+                onClick:()=>set({showReconcile:false,reconSel:null})},["إغلاق"])])]);
+        })()]),
       h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #166534",background:"linear-gradient(135deg,#052e16,#111)"}},[
         h("div",{style:{fontSize:"13px",color:"#4ade80",fontWeight:"600",marginBottom:"6px"}},["💰 إجمالي السيولة المالية"]),
         h("div",{style:{fontSize:"28px",fontWeight:"900",color:"#4ade80",marginBottom:"10px"}},[totalLiquidity.toLocaleString()+" د.إ"]),
@@ -3841,41 +3917,50 @@ function renderApp(){
           h("div",{style:{fontSize:"12px",color:"#3b82f6",background:"#1e3a5f",borderRadius:"6px",padding:"6px 10px",marginTop:"4px"}},
             ["هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"])]);
       })(),
-      // ======= عهدة الموظفين =======
+      // ======= عهدة الفريق (موحّدة — لأن الإيداع مركزي عبر يحيى) =======
       (()=>{
+        // نفس معادلة بطاقة "محصّل لم يُودع" حرفياً — مصدر واحد للحقيقة
+        const _got2=(x)=>{const ds=displayStatus(x);const paid=Number(x.paid_amount)||0,rent=Number(x.rent)||0;
+          if(x.partial&&paid>0&&paid<rent)return paid;
+          if(ds==="collected")return rent;
+          if(ds==="partial")return paid>0?paid:0;
+          return 0;};
+        let teamReceived=0,teamBank=0;
+        units.forEach(u=>u.partitions.forEach(p=>{const g=_got2(p);teamReceived+=g;if(g>0&&p.collectionMethod==="bank")teamBank+=g;}));
+        full.forEach(u=>{const g=_got2(u);teamReceived+=g;if(g>0&&u.collectionMethod==="bank")teamBank+=g;});
+        const dailyRec=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
+        teamReceived+=dailyRec;
+        const teamDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
+        const teamCash=Math.round((teamReceived-teamBank)*100)/100; // النقد الذي مرّ بيد الفريق
+        const teamRemaining=Math.max(0,Math.round((teamReceived-teamDeposited-teamBank)*100)/100);
+        // تفصيل معلوماتي: من حصّل كم (نقداً) — بدون "أودع/متبقي" فردي لأن الإيداع مركزي
         const emps=Object.keys(USERS).filter(k=>USERS[k].role!=="owner");
-        const custody=emps.map(emp=>{
-          let received=0;
-          units.forEach(u=>u.partitions.forEach(p=>{
-            if(p.collectedBy===emp){
-              const ds=displayStatus(p);
-              if(ds==="collected")received+=Number(p.rent)||0;
-              else if(ds==="partial")received+=Number(p.paid_amount)||0;
-            }
-          }));
-          full.forEach(u=>{
-            if(u.collectedBy===emp){
-              const ds=displayStatus(u);
-              if(ds==="collected")received+=Number(u.rent)||0;
-              else if(ds==="partial")received+=Number(u.paid_amount)||0;
-            }
-          });
-          const deposited=txList.filter(t=>t.by===emp).reduce((s,t)=>s+Number(t.amount||0),0);
-          const remaining=Math.round((received-deposited)*100)/100;
-          return {emp,name:USERS[emp].name,received,deposited,remaining};
-        }).filter(c=>c.received>0||c.deposited>0);
-        if(custody.length===0)return null;
+        const collectedBy=emps.map(emp=>{
+          let r=0;
+          units.forEach(u=>u.partitions.forEach(p=>{if(p.collectedBy===emp&&p.collectionMethod!=="bank")r+=_got2(p);}));
+          full.forEach(u=>{if(u.collectedBy===emp&&u.collectionMethod!=="bank")r+=_got2(u);});
+          return {name:USERS[emp].name,r};
+        }).filter(c=>c.r>0);
+        const attributed=collectedBy.reduce((s,c)=>s+c.r,0);
+        const unattributed=Math.max(0,Math.round((teamCash-attributed)*100)/100);
+        if(teamCash<=0&&teamDeposited<=0)return null;
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #3a2e0c",background:"linear-gradient(135deg,#1a1505,#111)"}},[
-          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24",marginBottom:"10px"}},["👥 عهدة الموظفين"]),
-          h("div",{},custody.map(c=>h("div",{style:{padding:"10px 0",borderBottom:"1px solid #1a1a1a"}},[
-            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
-              h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[c.name]),
-              h("div",{style:{fontSize:"17px",fontWeight:"900",color:c.remaining>0?"#fbbf24":"#4ade80"}},[c.remaining.toLocaleString()+" د.إ"])]),
-            h("div",{style:{display:"flex",gap:"12px",fontSize:"13px"}},[
-              h("span",{style:{color:"#888"}},["استلم: "+c.received.toLocaleString()]),
-              h("span",{style:{color:"#4ade80"}},["أودع: "+c.deposited.toLocaleString()]),
-              h("span",{style:{color:c.remaining>0?"#fbbf24":"#555",fontWeight:"700"}},["المتبقي معه: "+c.remaining.toLocaleString()])])]))),
-          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["استلم = ما حصّله الموظف | أودع = ما سجّله كإيداع | المتبقي = الفرق الذي بحوزته"])]);
+          h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
+            h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24"}},["👥 عهدة الفريق (النقد)"]),
+            h("div",{style:{fontSize:"20px",fontWeight:"900",color:teamRemaining>0?"#fbbf24":"#4ade80"}},[teamRemaining.toLocaleString()+" د.إ"])]),
+          h("div",{style:{display:"flex",gap:"12px",fontSize:"13px",marginBottom:"10px",flexWrap:"wrap"}},[
+            h("span",{style:{color:"#888"}},["حصّل الفريق نقداً: "+teamCash.toLocaleString()]),
+            h("span",{style:{color:"#4ade80"}},["أودع: "+teamDeposited.toLocaleString()]),
+            teamBank>0?h("span",{style:{color:"#60a5fa"}},["🏦 بنكي (خارج العهدة): "+teamBank.toLocaleString()]):null]),
+          collectedBy.length>0?h("div",{style:{borderTop:"1px solid #1a1a1a",paddingTop:"8px"}},[
+            h("div",{style:{fontSize:"12px",color:"#a16207",marginBottom:"5px"}},["تفصيل التحصيل النقدي (من حصّل كم):"]),
+            ...collectedBy.map(c=>h("div",{style:{display:"flex",justifyContent:"space-between",padding:"3px 0"}},[
+              h("span",{style:{fontSize:"13px",color:"#ccc"}},[c.name]),
+              h("span",{style:{fontSize:"13px",fontWeight:"700",color:"#fbbf24"}},[c.r.toLocaleString()+" د.إ"])])),
+            unattributed>0?h("div",{style:{display:"flex",justifyContent:"space-between",padding:"3px 0"}},[
+              h("span",{style:{fontSize:"13px",color:"#777"}},["يومي / غير منسوب لموظف"]),
+              h("span",{style:{fontSize:"13px",fontWeight:"700",color:"#777"}},[unattributed.toLocaleString()+" د.إ"])]):null]):null,
+          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["العهدة موحّدة للفريق لأن الإيداع مركزي (يحيى يودع عن الجميع) — المتبقي = حصّل الفريق نقداً − المودع. التحويلات البنكية مستبعدة لأنها ليست بيد أحد."])]);
       })(),
       // Vacant units card
       vacantList.length>0?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1a1a1a"}},[
