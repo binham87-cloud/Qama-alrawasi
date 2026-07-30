@@ -190,6 +190,7 @@ async function loadRequests(){
 }
 
 async function approveRequest(req){
+  try{await _flushMonthSave();}catch(_e){} // إفراغ أي حفظ معلّق قبل الاعتماد حتى لا يطغى عليه لاحقاً
   // FIX 4: منع الضغط المزدوج من نفس الجهاز
   if(S.approvingReqId){showMsg("⏳ جاري اعتماد طلب آخر...");return;}
   S.approvingReqId=req.id; R();
@@ -2301,6 +2302,7 @@ async function loadCustomUnits(){
 }
 
 async function copyRentsFromPrevMonth(y,m){
+  try{await _flushMonthSave();}catch(_e){}
   let py=y, pm=m-1;
   if(pm<1){pm=12;py=y-1;}
   const pk=getMonthKey(py,pm);
@@ -2485,6 +2487,7 @@ function mergeCustomUnits(data, y, m){
 }
 
 async function loadMonthOnline(y,m){
+  await _flushMonthSave(); // ارفع أي حفظ معلّق أولاً حتى لا تطغى نسخة السيرفر الأقدم على التعديلات
   const k=getMonthKey(y,m);
   const hasLocal=!!localStorage.getItem("qama_month_"+k);
   S.syncMsg="جاري المزامنة...";
@@ -2526,16 +2529,34 @@ async function loadMonthOnline(y,m){
   R();
 }
 
+// ======= حفظ مجمّع لـ Firebase: localStorage فوري، والرفع للسيرفر يتجمع كل 700ms =======
+// يمنع إرسال كامل بيانات الشهر مع كل ضغطة زر (سبب البطء والتعليق على الجوال)
+let _pendingMonthSave=null,_monthSaveTimer=null;
+function _flushMonthSave(){
+  if(_monthSaveTimer){clearTimeout(_monthSaveTimer);_monthSaveTimer=null;}
+  if(!_pendingMonthSave)return Promise.resolve();
+  const {k,data,quiet}=_pendingMonthSave;
+  _pendingMonthSave=null;
+  return setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true})
+    .then(()=>{S.syncMsg="تم الحفظ أونلاين"; if(!quiet)R();})
+    .catch(e=>{console.error(e);S.syncMsg="تعذر الحفظ أونلاين"; if(!quiet)R();});
+}
+window.addEventListener("pagehide",_flushMonthSave);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")_flushMonthSave();});
 function saveMonthData(y,m,data,quiet=false){
   data=normalizeData(data);
   const k=getMonthKey(y,m);
   try{localStorage.setItem("qama_month_"+k,JSON.stringify(data));}catch(e){}
-  setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true})
-    .then(()=>{S.syncMsg="تم الحفظ أونلاين"; if(!quiet)R();})
-    .catch(e=>{console.error(e);S.syncMsg="تعذر الحفظ أونلاين"; if(!quiet)R();});
+  // لو فيه حفظ معلّق لشهر مختلف، ارفعه فوراً قبل استبداله
+  if(_pendingMonthSave&&_pendingMonthSave.k!==k)_flushMonthSave();
+  S.syncMsg="جاري الحفظ...";
+  _pendingMonthSave={k,data,quiet};
+  if(_monthSaveTimer)clearTimeout(_monthSaveTimer);
+  _monthSaveTimer=setTimeout(_flushMonthSave,700);
 }
 
 function changeMonth(m,y){
+  _flushMonthSave(); // ارفع أي حفظ معلّق قبل تغيير الشهر حتى لا يُفقد
   set({month:m,year:y,selUnit:null,editPart:null,showAddExp:false,showAddTx:false,showAddProfit:false,showAddInstallment:false,showAddUnit:false,showAddFullUnit:false});
   loadMonthOnline(y,m);
 }
@@ -2886,19 +2907,27 @@ function renderApp(){
     units.forEach(u=>u.partitions.forEach(p=>{const ds=displayStatus(p);if(ds!=="vacant"&&ds!=="staff")yhTarget+=Number(p.rent)||0;}));
     full.forEach(u=>{const ds=displayStatus(u);if(ds!=="vacant"&&ds!=="staff")yhTarget+=Number(u.rent)||0;});
     yhTarget+=(data.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-    const yhDeposited=txList2.reduce((s,t)=>s+Number(t.amount||0),0);
-    const yhRemaining=Math.max(0,yhTarget-yhDeposited);
+    let yhBank=0;
     let yhReceived=(data.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     units.forEach(u=>u.partitions.forEach(p=>{
       const ds=displayStatus(p);const paid=Number(p.paid_amount)||0,rent=Number(p.rent)||0;
-      if(ds==="collected")yhReceived+=rent;
-      else if(ds==="partial")yhReceived+=paid>0?paid:0;
+      let got=0;
+      if(ds==="collected")got=rent;
+      else if(ds==="partial")got=paid>0?paid:0;
+      yhReceived+=got;
+      if(got>0&&p.collectionMethod==="bank")yhBank+=got;
     }));
     full.forEach(u=>{
       const ds=displayStatus(u);const paid=Number(u.paid_amount)||0,rent=Number(u.rent)||0;
-      if(ds==="collected")yhReceived+=rent;
-      else if(ds==="partial")yhReceived+=paid>0?paid:0;
+      let got=0;
+      if(ds==="collected")got=rent;
+      else if(ds==="partial")got=paid>0?paid:0;
+      yhReceived+=got;
+      if(got>0&&u.collectionMethod==="bank")yhBank+=got;
     });
+    // التحويل البنكي المباشر يُعدّ مودَعاً تلقائياً
+    const yhDeposited=txList2.reduce((s,t)=>s+Number(t.amount||0),0)+yhBank;
+    const yhRemaining=Math.max(0,yhTarget-yhDeposited);
     const yhUndeposited=Math.max(0,yhReceived-yhDeposited);
     const yhPct=yhTarget>0?Math.min(100,Math.round(yhDeposited/yhTarget*100)):0;
     const yhColor=yhPct>=100?"#4ade80":yhPct>=70?"#facc15":"#f87171";
@@ -3083,7 +3112,7 @@ function renderApp(){
               return cm;
             })(),
             p.collectionMethod==="bank"?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",fontSize:"12px",color:"#93c5fd"}},
-              ["🏦 تحويل بنكي — سيُعدّ مودَعاً مباشرةً. تأكد من تسجيل إيداع مطابق في تبويب الإيداعات."]):null,
+              ["🏦 تحويل بنكي — يُحتسب مودَعاً تلقائياً في النظام. لا تسجّل له إيداعاً يدوياً حتى لا يُحسب مرتين."]):null,
             (!p.collectionMethod)?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#2e0505",border:"1px solid #b91c1c",borderRadius:"6px",fontSize:"12px",color:"#f87171",fontWeight:"600"}},
               ["⚠ اختر طريقة التحصيل قبل إرسال الطلب"]):null]):null,
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
@@ -3282,7 +3311,7 @@ function renderApp(){
                   return cm;
                 })(),
                 u.collectionMethod==="bank"?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",fontSize:"12px",color:"#93c5fd"}},
-                  ["🏦 تحويل بنكي — سيُعدّ مودَعاً مباشرةً. تأكد من تسجيل إيداع مطابق."]):null,
+                  ["🏦 تحويل بنكي — يُحتسب مودَعاً تلقائياً في النظام. لا تسجّل له إيداعاً يدوياً حتى لا يُحسب مرتين."]):null,
                 (!u.collectionMethod)?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#2e0505",border:"1px solid #b91c1c",borderRadius:"6px",fontSize:"12px",color:"#f87171",fontWeight:"600"}},
                   ["⚠ اختر طريقة التحصيل قبل إرسال الطلب"]):null]):null,
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار / شهر"]),
@@ -3534,26 +3563,30 @@ function renderApp(){
 
     // ======= Financial Validation Engine =======
     const _vDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
-    let _vLate=0,_vPartialRem=0,_vReceived=0;
+    let _vLate=0,_vPartialRem=0,_vReceived=0,_vBank=0;
     const _vCalc=(x)=>{
       const ds=displayStatus(x);
       const paid=Number(x.paid_amount)||0;
       const rent=Number(x.rent)||0;
-      if(x.partial && paid>0 && paid<rent){ _vPartialRem+=Math.max(0,rent-paid); _vReceived+=paid; }
+      let got=0;
+      if(x.partial && paid>0 && paid<rent){ _vPartialRem+=Math.max(0,rent-paid); got=paid; }
       else if(ds==="late"){ _vLate+=rent; }
-      else if(ds==="partial"){ _vPartialRem+=Math.max(0,rent-paid); _vReceived+=paid; }
-      else if(ds==="collected"){ _vReceived+=rent; }
+      else if(ds==="partial"){ _vPartialRem+=Math.max(0,rent-paid); got=paid; }
+      else if(ds==="collected"){ got=rent; }
+      _vReceived+=got;
+      // تحويل بنكي مباشر = مودَع تلقائياً (ليس بيد الموظفين)
+      if(got>0 && x.collectionMethod==="bank") _vBank+=got;
     };
     mData.units.forEach(u=>u.partitions.forEach(p=>_vCalc(p)));
     (mData.full||[]).forEach(u=>_vCalc(u));
     _vReceived+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-    const _vUndeposited=Math.max(0,_vReceived-_vDeposited);
+    const _vUndeposited=Math.max(0,_vReceived-_vDeposited-_vBank);
     let _vTarget=0;
     mData.units.forEach(u=>u.partitions.forEach(p=>{if(displayStatus(p)!=="vacant"&&displayStatus(p)!=="staff")_vTarget+=Number(p.rent)||0;}));
     (mData.full||[]).forEach(u=>{if(displayStatus(u)!=="vacant"&&displayStatus(u)!=="staff")_vTarget+=Number(u.rent)||0;});
     _vTarget+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-    // المعادلة: المستهدف = المودع + المتأخر + الجزئي المتبقي + (محصّل لم يودع)
-    const _vSum=_vDeposited+_vLate+_vPartialRem+_vUndeposited;
+    // المعادلة: المستهدف = المودع + التحويل البنكي + المتأخر + الجزئي المتبقي + (محصّل لم يودع)
+    const _vSum=_vDeposited+_vBank+_vLate+_vPartialRem+_vUndeposited;
     const _vDiff=Math.round((_vTarget-_vSum)*100)/100;
     const _vBalanced=Math.abs(_vDiff)<1;
     content=h("div",{},[
@@ -3563,7 +3596,7 @@ function renderApp(){
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color:_vBalanced?"#4ade80":"#f87171"}},[_vBalanced?"✅ الحسابات متوازنة":"⚠️ خلل في التوازن"]),
           _vBalanced?h("div",{style:{fontSize:"13px",color:"#4ade80"}},["مطابق"]):h("div",{style:{fontSize:"16px",fontWeight:"900",color:"#f87171"}},["فرق "+Math.abs(_vDiff).toLocaleString()+" د.إ"])]),
-        !_vBalanced?h("div",{style:{fontSize:"11px",color:"#999",marginTop:"6px"}},["المستهدف "+_vTarget.toLocaleString()+" = مودع "+_vDeposited.toLocaleString()+" + متأخر "+_vLate.toLocaleString()+" + جزئي "+_vPartialRem.toLocaleString()+" + عند الموظفين "+_vUndeposited.toLocaleString()]):null]),
+        !_vBalanced?h("div",{style:{fontSize:"11px",color:"#999",marginTop:"6px"}},["المستهدف "+_vTarget.toLocaleString()+" = مودع "+_vDeposited.toLocaleString()+" + تحويل بنكي "+_vBank.toLocaleString()+" + متأخر "+_vLate.toLocaleString()+" + جزئي "+_vPartialRem.toLocaleString()+" + عند الموظفين "+_vUndeposited.toLocaleString()]):null]),
       h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #166534",background:"linear-gradient(135deg,#052e16,#111)"}},[
         h("div",{style:{fontSize:"13px",color:"#4ade80",fontWeight:"600",marginBottom:"6px"}},["💰 إجمالي السيولة المالية"]),
         h("div",{style:{fontSize:"28px",fontWeight:"900",color:"#4ade80",marginBottom:"10px"}},[totalLiquidity.toLocaleString()+" د.إ"]),
@@ -3780,7 +3813,7 @@ function renderApp(){
       // Undeposited amount card - محاسبياً: كل المقبوضات - الإيداعات
       // المقبوضات = إيجار المحصّلة كاملاً + المدفوع من الجزئي + اليومي المحصّل
       (()=>{
-        let receivedTotal=0;
+        let receivedTotal=0,bankTotal=0;
         const _received=(x)=>{
           // نفس معادلة محرك التوازن بالضبط: محصّل = الإيجار كاملاً، جزئي = المدفوع
           const ds=displayStatus(x);
@@ -3790,12 +3823,12 @@ function renderApp(){
           if(ds==="partial") return paid>0?paid:0;
           return 0;
         };
-        units.forEach(u=>u.partitions.forEach(p=>{ receivedTotal+=_received(p); }));
-        full.forEach(u=>{ receivedTotal+=_received(u); });
+        units.forEach(u=>u.partitions.forEach(p=>{ const g=_received(p); receivedTotal+=g; if(g>0&&p.collectionMethod==="bank")bankTotal+=g; }));
+        full.forEach(u=>{ const g=_received(u); receivedTotal+=g; if(g>0&&u.collectionMethod==="bank")bankTotal+=g; });
         // اليومي يُعتبر محصّلاً (مقبوضاً)
         receivedTotal+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-        // Actual deposits
-        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
+        // Actual deposits + التحويل البنكي المباشر (مودَع تلقائياً وليس بيد الموظفين)
+        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0)+bankTotal;
         const undeposited=Math.max(0,receivedTotal-deposited);
         if(undeposited<=0) return null;
 
@@ -4253,6 +4286,7 @@ function renderApp(){
             onClick:async()=>{
               if(S.reqActionLock){showMsg("⏳ جاري التنفيذ...");return;}
               S.reqActionLock=true;R();
+              try{await _flushMonthSave();}catch(_e){}
               try{
                 const rData=getMonthData(req.year,req.month);
                 if(req.type==="add_transaction"){
@@ -4293,6 +4327,7 @@ function renderApp(){
             onClick:async()=>{
               if(S.reqActionLock){showMsg("⏳ جاري التنفيذ...");return;}
               S.reqActionLock=true;R();
+              try{await _flushMonthSave();}catch(_e){}
               try{
                 // Reverse effect then delete
                 const rData=getMonthData(req.year,req.month);
