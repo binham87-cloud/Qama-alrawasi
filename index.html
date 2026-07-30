@@ -3631,7 +3631,11 @@ function renderApp(){
             if(Math.abs(candSum-surplus)<0.01)candidates.forEach(c=>S.reconSel[c.tx.id]=true);
           }
           const selSum=Math.round(candidates.reduce((s,c)=>s+(S.reconSel[c.tx.id]?Number(c.tx.amount||0):0),0)*100)/100;
-          const exact=Math.abs(selSum-surplus)<0.01;
+          // الشرط المحاسبي الصحيح: المحدد ≥ الفائض. السبب: "عند الموظفين" مبتور عند الصفر،
+          // فإذا فاقت الإيداعات المكررة النقدَ المحصّل يظهر الفرق أقل من الازدواج الحقيقي.
+          // ما يزيد عن الفائض يتحول تلقائياً إلى "متبقٍ بيد الفريق" — ويُعرض مسبقاً للتحقق.
+          const canFix=selSum>=surplus-0.01&&selSum>0;
+          const afterTeam=Math.max(0,Math.round((selSum-surplus)*100)/100);
           if(!S.showReconcile)
             return h("button",{class:"btn",style:{marginTop:"8px",width:"100%",background:"#1c1917",border:"1px solid #b45309",color:"#fbbf24",borderRadius:"8px",padding:"8px",fontSize:"13px",fontWeight:"700"},
               onClick:()=>set({showReconcile:true})},["🔍 النظام وجد "+candidates.length+" إيداعاً يُرجَّح أنه مكرر مع تحويل بنكي — اعرض التصحيح المقترح"]);
@@ -3646,14 +3650,16 @@ function renderApp(){
                   h("div",{style:{fontSize:"11px",color:"#777",marginTop:"2px"}},["يطابق: "+c.match+(c.tx.date?" · "+c.tx.date:"")])]),
                 h("div",{style:{fontSize:"13px",fontWeight:"800",color:"#fbbf24",flexShrink:"0"}},[Number(c.tx.amount).toLocaleString()+" د.إ"])]);
             }),
-            h("div",{style:{fontSize:"12px",color:exact?"#4ade80":"#f87171",fontWeight:"700",margin:"6px 0"}},
-              ["المحدد: "+selSum.toLocaleString()+" د.إ / المطلوب: "+surplus.toLocaleString()+" د.إ"+(exact?" ✓ مطابق":" — عدّل التحديد حتى يتساوى المجموع")]),
+            h("div",{style:{fontSize:"12px",color:canFix?"#4ade80":"#f87171",fontWeight:"700",margin:"6px 0"}},
+              ["المحدد: "+selSum.toLocaleString()+" د.إ / الفائض الظاهر: "+surplus.toLocaleString()+" د.إ"+(canFix?" ✓":" — حدد إيداعات بمجموع لا يقل عن الفائض")]),
+            canFix?h("div",{style:{fontSize:"12px",color:"#93c5fd",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",padding:"6px 9px",marginBottom:"8px"}},
+              ["بعد التصحيح: التوازن ✅ + المتبقي بيد الفريق سيصبح "+afterTeam.toLocaleString()+" د.إ"+(afterTeam>0?" — تأكد أن هذا النقد موجود فعلاً بيد الموظفين قبل التنفيذ":"")]):null,
             h("div",{style:{display:"flex",gap:"8px"}},[
-              h("button",{class:"btn",style:{flex:"2",background:exact?"#052e16":"#1a1a1a",border:"1px solid "+(exact?"#166534":"#2a2a2a"),color:exact?"#4ade80":"#555",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"800"},
+              h("button",{class:"btn",style:{flex:"2",background:canFix?"#052e16":"#1a1a1a",border:"1px solid "+(canFix?"#166534":"#2a2a2a"),color:canFix?"#4ade80":"#555",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"800"},
                 onClick:async()=>{
-                  if(!exact){showMsg("⚠ يجب أن يساوي المحدد الفرق بالضبط");return;}
+                  if(!canFix){showMsg("⚠ حدد إيداعات بمجموع ≥ الفائض");return;}
                   if(S.reconBusy){showMsg("⏳ جاري التنفيذ...");return;}
-                  if(!confirm("سيتم حذف "+candidates.filter(c=>S.reconSel[c.tx.id]).length+" إيداعاً بمجموع "+selSum.toLocaleString()+" د.إ وإنقاص رصيد الإيرادات بنفس المبلغ (لأنها أضيفت له عند تسجيلها). هل أنت متأكد؟"))return;
+                  if(!confirm("سيتم حذف "+candidates.filter(c=>S.reconSel[c.tx.id]).length+" إيداعاً بمجموع "+selSum.toLocaleString()+" د.إ وإنقاص رصيد الإيرادات بنفس المبلغ. بعد التصحيح سيظهر المتبقي بيد الفريق: "+afterTeam.toLocaleString()+" د.إ. هل أنت متأكد؟"))return;
                   S.reconBusy=true;R();
                   try{
                     await _flushMonthSave();
@@ -3939,8 +3945,14 @@ function renderApp(){
           let r=0;
           units.forEach(u=>u.partitions.forEach(p=>{if(p.collectedBy===emp&&p.collectionMethod!=="bank")r+=_got2(p);}));
           full.forEach(u=>{if(u.collectedBy===emp&&u.collectionMethod!=="bank")r+=_got2(u);});
+          // اليومي منسوب لمن أضاف الحجز (حقل by المخزّن في كل حجز)
+          r+=(mData.dailyBookings||[]).filter(b=>b.by===emp).reduce((s,b)=>s+Number(b.total||0),0);
           return {name:USERS[emp].name,r};
         }).filter(c=>c.r>0);
+        // المدير قد يضيف حجوزات يومية بنفسه — تُنسب له بالاسم أيضاً
+        const ownerKey=Object.keys(USERS).find(k=>USERS[k].role==="owner");
+        const ownerDaily=(mData.dailyBookings||[]).filter(b=>b.by===ownerKey).reduce((s,b)=>s+Number(b.total||0),0);
+        if(ownerDaily>0)collectedBy.push({name:USERS[ownerKey].name+" (يومي)",r:ownerDaily});
         const attributed=collectedBy.reduce((s,c)=>s+c.r,0);
         const unattributed=Math.max(0,Math.round((teamCash-attributed)*100)/100);
         if(teamCash<=0&&teamDeposited<=0)return null;
@@ -3952,6 +3964,8 @@ function renderApp(){
             h("span",{style:{color:"#888"}},["حصّل الفريق نقداً: "+teamCash.toLocaleString()]),
             h("span",{style:{color:"#4ade80"}},["أودع: "+teamDeposited.toLocaleString()]),
             teamBank>0?h("span",{style:{color:"#60a5fa"}},["🏦 بنكي (خارج العهدة): "+teamBank.toLocaleString()]):null]),
+          teamDeposited>teamCash+0.01?h("div",{style:{fontSize:"12px",color:"#f87171",background:"#2e0505",border:"1px solid #7f1d1d",borderRadius:"6px",padding:"6px 9px",marginBottom:"10px",fontWeight:"700"}},
+            ["⚠ الإيداعات أكبر من المحصّل نقداً بـ "+Math.round((teamDeposited-teamCash)*100)/100+" د.إ — هذا مستحيل واقعياً ومؤشر إيداعات مكررة. استخدم أداة التصحيح في شريط التوازن أعلاه."]):null,
           collectedBy.length>0?h("div",{style:{borderTop:"1px solid #1a1a1a",paddingTop:"8px"}},[
             h("div",{style:{fontSize:"12px",color:"#a16207",marginBottom:"5px"}},["تفصيل التحصيل النقدي (من حصّل كم):"]),
             ...collectedBy.map(c=>h("div",{style:{display:"flex",justifyContent:"space-between",padding:"3px 0"}},[
