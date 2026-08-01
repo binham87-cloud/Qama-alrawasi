@@ -234,7 +234,7 @@ async function approveRequest(req){
       const u=data.full.find(u=>u.id===R_.payload.unitId);
       if(u)Object.assign(u,R_.payload.fields);
     } else if(R_.type==="add_expense"){
-      data.expenses.push(R_.payload.expense);
+      data.expenses.push({...R_.payload.expense,revDeducted:true});
       S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(R_.payload.expense.amount||0))*100)/100);
       try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
     } else if(R_.type==="add_transaction"){
@@ -276,14 +276,14 @@ async function approveRequest(req){
       data.dailyBookings.push({...R_.payload.booking,id:R_.id});
     } else if(R_.type==="add_unit_maintenance"){
       if(!data.unitMaintenance)data.unitMaintenance=[];
-      data.unitMaintenance.push({...R_.payload.maintenance,id:R_.id});
+      data.unitMaintenance.push({...R_.payload.maintenance,id:R_.id,revDeducted:true});
       if(Number(R_.payload.maintenance.amount||0)>0){
         S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(R_.payload.maintenance.amount))*100)/100);
         try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
       }
     } else if(R_.type==="add_facility_maintenance"){
       if(!data.facilityMaintenance)data.facilityMaintenance=[];
-      data.facilityMaintenance.push({...R_.payload.maintenance,id:R_.id});
+      data.facilityMaintenance.push({...R_.payload.maintenance,id:R_.id,revDeducted:true});
       if(Number(R_.payload.maintenance.amount||0)>0){
         S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(R_.payload.maintenance.amount))*100)/100);
         try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
@@ -4059,9 +4059,14 @@ function renderApp(){
               const expense={id:Date.now(),desc,amount:Number(amount),category:cat,date,by:S.user};
               if(isOwner){
                 S.savingExp=true;
-                data.expenses.push(expense);
-                addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف مصروف: "+desc);
-                saveCurData(data);S.savingExp=false;set({showAddExp:false});showMsg("✓ تم الحفظ");
+                data.expenses.push({...expense,revDeducted:Number(amount)>0});
+                if(Number(amount)>0){
+                  // توحيد: المصروف يُخصم من رصيد الإيرادات (نفس نمط مسار الاعتماد حرفياً)
+                  S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-Number(amount))*100)/100);
+                  try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
+                }
+                addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف مصروف: "+desc+(Number(amount)>0?" (خُصم "+Number(amount).toLocaleString()+" د.إ من الإيرادات)":""));
+                saveCurData(data);S.savingExp=false;set({showAddExp:false});showMsg("✓ تم الحفظ والخصم من الإيرادات");
               } else {
                 submitRequest("add_expense",
                   `مصروف جديد: ${desc} - ${Number(amount).toLocaleString()} د.إ`,
@@ -4078,15 +4083,27 @@ function renderApp(){
         if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
         const oldVal=e[field];
         e[field]=field==="amount"?Number(val):val;
-        if(oldVal!==e[field])addLog(data,(USERS[S.user]?.name||S.user)+" عدّل مصروف: "+(e.desc||"مصروف")+" ("+field+")");
+        if(field==="amount"&&e.revDeducted&&oldVal!==e[field]){
+          // تسوية الفرق على رصيد الإيرادات: زيادة المصروف تخصم أكثر، وتخفيضه يرجّع الفرق
+          const diff=Number(e[field]||0)-Number(oldVal||0);
+          S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-diff)*100)/100);
+          try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
+        }
+        if(oldVal!==e[field])addLog(data,(USERS[S.user]?.name||S.user)+" عدّل مصروف: "+(e.desc||"مصروف")+" ("+field+")"+(field==="amount"&&e.revDeducted?" — سُوّي الفرق على الإيرادات":""));
         saveCurData(data);showMsg("✓ تم تعديل المصروف");
       };
       const delExpense=()=>{
         if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
-        if(!confirm("حذف هذا المصروف؟"))return;
+        const willRefund=e.revDeducted&&Number(e.amount||0)>0;
+        if(!confirm("حذف هذا المصروف؟"+(willRefund?" سيُرجَع "+Number(e.amount).toLocaleString()+" د.إ لرصيد الإيرادات.":"")))return;
         const removed=data.expenses.splice(idx,1)[0];
-        addLog(data,(USERS[S.user]?.name||S.user)+" حذف مصروف: "+(removed.desc||"مصروف")+" - "+Number(removed.amount||0).toLocaleString()+" د.إ");
-        saveCurData(data);set({editPart:null});showMsg("✓ تم حذف المصروف");
+        if(removed&&removed.revDeducted&&Number(removed.amount||0)>0){
+          // إلغاء المصروف = إرجاع المبلغ المخصوم لرصيد الإيرادات
+          S.revenueBalance=Math.round((S.revenueBalance+Number(removed.amount))*100)/100;
+          try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e2){}
+        }
+        addLog(data,(USERS[S.user]?.name||S.user)+" حذف مصروف: "+(removed.desc||"مصروف")+" - "+Number(removed.amount||0).toLocaleString()+" د.إ"+(removed&&removed.revDeducted?" (أُرجع المبلغ للإيرادات)":""));
+        saveCurData(data);set({editPart:null});showMsg("✓ تم حذف المصروف"+(removed&&removed.revDeducted&&Number(removed.amount||0)>0?" وأُرجع المبلغ للإيرادات":""));
       };
       const editForm=isEd?h("div",{style:{borderTop:"1px solid #222",paddingTop:"10px",marginTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
         (()=>{const inp=h("input",{type:"text",value:e.desc||"",placeholder:"الوصف"});inp.addEventListener("change",ev=>saveExpenseField("desc",ev.target.value));return inp;})(),
@@ -4698,10 +4715,22 @@ function renderApp(){
           h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"700"},
             onClick:()=>{
               if(!fm.unitId||!fm.desc)return showMsg("أدخل الشقة والوصف");
+              if(needsApproval){
+                submitRequest("add_unit_maintenance","صيانة شقة: "+fm.desc+" — "+Number(fm.amount||0).toLocaleString()+" د.إ",{maintenance:{...fm,by:S.user}});
+                set({showAddUnitMaint:false});
+                return;
+              }
               if(!mData.unitMaintenance)mData.unitMaintenance=[];
-              mData.unitMaintenance.push({...fm,id:Date.now()});
+              mData.unitMaintenance.push({...fm,id:Date.now(),by:S.user,revDeducted:Number(fm.amount||0)>0});
+              const _amt=Number(fm.amount||0);
+              if(_amt>0){
+                // نفس نمط الاعتماد حرفياً: الصيانة تُخصم من رصيد الإيرادات
+                S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-_amt)*100)/100);
+                try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+              }
+              addLog&&addLog(mData,(USERS[S.user]?.name||S.user)+" أضاف صيانة شقة: "+fm.desc+(_amt>0?" (خُصم "+_amt.toLocaleString()+" د.إ من الإيرادات)":""));
               saveMaintenanceData();set({showAddUnitMaint:false});
-            }},["حفظ"]),
+            }},[needsApproval?"📤 إرسال للاعتماد":"حفظ"]),
           h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"13px"},
             onClick:()=>set({showAddUnitMaint:false})},["إلغاء"])]);
         return h("div",{},[unitSel,descInp,row,dateInp,btns]);
@@ -4724,10 +4753,22 @@ function renderApp(){
           h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"700"},
             onClick:()=>{
               if(!fm.desc)return showMsg("أدخل وصف الصيانة");
+              if(needsApproval){
+                submitRequest("add_facility_maintenance","صيانة مرافق ("+fm.facility+"): "+fm.desc+" — "+Number(fm.amount||0).toLocaleString()+" د.إ",{maintenance:{...fm,by:S.user}});
+                set({showAddFacMaint:false});
+                return;
+              }
               if(!mData.facilityMaintenance)mData.facilityMaintenance=[];
-              mData.facilityMaintenance.push({...fm,id:Date.now()});
+              mData.facilityMaintenance.push({...fm,id:Date.now(),by:S.user,revDeducted:Number(fm.amount||0)>0});
+              const _amt=Number(fm.amount||0);
+              if(_amt>0){
+                // نفس نمط الاعتماد حرفياً: الصيانة تُخصم من رصيد الإيرادات
+                S.revenueBalance=Math.max(0,Math.round((S.revenueBalance-_amt)*100)/100);
+                try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+              }
+              addLog&&addLog(mData,(USERS[S.user]?.name||S.user)+" أضاف صيانة مرافق ("+fm.facility+"): "+fm.desc+(_amt>0?" (خُصم "+_amt.toLocaleString()+" د.إ من الإيرادات)":""));
               saveMaintenanceData();set({showAddFacMaint:false});
-            }},["حفظ"]),
+            }},[needsApproval?"📤 إرسال للاعتماد":"حفظ"]),
           h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"13px"},
             onClick:()=>set({showAddFacMaint:false})},["إلغاء"])]);
         return h("div",{},[facSel,descInp,row,dateInp,btns]);
