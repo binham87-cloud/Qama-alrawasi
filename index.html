@@ -3591,6 +3591,54 @@ function renderApp(){
     const _vBalanced=Math.abs(_vDiff)<1;
     content=h("div",{},[
       monthNav(),
+      isOwner?h("div",{style:{marginBottom:"10px"}},[h("button",{class:"btn",style:{width:"100%",background:"#052e16",border:"1px solid #166534",borderRadius:"8px",padding:"9px",fontSize:"14px",color:"#4ade80",fontWeight:"700"},onClick:()=>{
+        // ======= كشف دخل الشهر (PDF للبنك): كل شقة كسطر واحد، البارتشنات مجمّعة بدون تفاصيل =======
+        const MONTHS_AR=["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+        const _inc=(x)=>{const ds=displayStatus(x);const paid=Number(x.paid_amount)||0,rent=Number(x.rent)||0;
+          if(x.partial&&paid>0&&paid<rent)return paid;
+          if(ds==="collected")return rent;
+          if(ds==="partial")return paid>0?paid:0;
+          return 0;};
+        const rows=[];
+        mData.units.forEach(u=>{
+          let t=0;u.partitions.forEach(p=>{t+=_inc(p);});
+          if(t>0)rows.push({name:u.name,amount:t});
+        });
+        (mData.full||[]).forEach(u=>{const g=_inc(u);if(g>0)rows.push({name:"شقة "+u.id,amount:g});});
+        const dailyT=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
+        if(dailyT>0)rows.push({name:"حجوزات يومية",amount:dailyT});
+        const total=rows.reduce((s,r2)=>s+r2.amount,0);
+        if(total<=0){showMsg("لا يوجد دخل مسجّل لهذا الشهر");return;}
+        const today=new Date();
+        const dstr=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
+        const html='<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>كشف دخل '+MONTHS_AR[S.month]+' '+S.year+'</title><style>'+
+          'body{font-family:-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;color:#111;margin:40px;background:#fff}'+
+          '.hd{text-align:center;border-bottom:3px solid #14532d;padding-bottom:14px;margin-bottom:6px}'+
+          '.hd h1{margin:0;font-size:22px;color:#14532d}.hd h2{margin:6px 0 0;font-size:16px;font-weight:600}'+
+          '.meta{display:flex;justify-content:space-between;font-size:12px;color:#555;margin:10px 0 18px}'+
+          'table{width:100%;border-collapse:collapse;font-size:14px}'+
+          'th{background:#14532d;color:#fff;padding:10px;text-align:right}'+
+          'td{border-bottom:1px solid #ddd;padding:9px 10px}'+
+          'tr:nth-child(even) td{background:#f6f8f6}'+
+          '.amt{text-align:left;font-weight:700;white-space:nowrap}'+
+          '.tot td{background:#e8f2ea;border-top:2px solid #14532d;font-size:16px;font-weight:900;color:#14532d}'+
+          '.ft{margin-top:26px;font-size:11px;color:#777;text-align:center}'+
+          '@media print{body{margin:16px}.noprint{display:none}}'+
+          '.noprint{position:fixed;bottom:18px;left:18px;background:#14532d;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:15px;font-weight:700}'+
+          '</style></head><body>'+
+          '<div class="hd"><h1>بناية قمة الرواسي العقارية</h1><h2>كشف الدخل الشهري — '+MONTHS_AR[S.month]+' '+S.year+'</h2></div>'+
+          '<div class="meta"><span>تاريخ الإصدار: '+dstr+'</span><span>العملة: درهم إماراتي (AED)</span></div>'+
+          '<table><thead><tr><th>الوحدة</th><th style="text-align:left">الدخل (د.إ)</th></tr></thead><tbody>'+
+          rows.map(r2=>'<tr><td>'+r2.name+'</td><td class="amt">'+r2.amount.toLocaleString()+'</td></tr>').join('')+
+          '<tr class="tot"><td>الإجمالي</td><td class="amt">'+total.toLocaleString()+'</td></tr>'+
+          '</tbody></table>'+
+          '<div class="ft">أُصدر هذا الكشف من نظام إدارة بناية قمة الرواسي — للاستخدام الرسمي</div>'+
+          '<button class="noprint" onclick="window.print()">🖨 طباعة / حفظ PDF</button>'+
+          '<scr'+'ipt>setTimeout(function(){window.print();},600);</scr'+'ipt></body></html>';
+        const w=window.open("","_blank");
+        if(!w){showMsg("⚠ اسمح بالنوافذ المنبثقة لعرض الكشف");return;}
+        w.document.open();w.document.write(html);w.document.close();
+      }},["📄 كشف دخل الشهر للبنك (PDF)"])]):null,
       isOwner&&!isMonthLocked(S.year,S.month)?h("div",{style:{marginBottom:"10px"}},[h("button",{class:"btn",style:{background:"#1e3a5f",border:"1px solid #3b82f6",borderRadius:"8px",padding:"7px 14px",fontSize:"14px",color:"#60a5fa",fontWeight:"600"},onClick:async()=>{if(!confirm("سيتم نقل أسعار الإيجار من الشهر السابق. هل أنت متأكد؟"))return;await copyRentsFromPrevMonth(S.year,S.month);R();}},["📥 استيراد أسعار الإيجار من الشهر السابق"])]):null,
       h("div",{class:"card",style:{padding:"12px",marginBottom:"12px",border:_vBalanced?"1px solid #166534":"2px solid #b91c1c",background:_vBalanced?"#052e16":"#2e0505"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
