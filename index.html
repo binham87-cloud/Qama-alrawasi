@@ -2112,7 +2112,8 @@ function rentType(x){
 }
 function rentTypeText(x){return rentType(x)==="daily"?"يومي":"شهري";}
 function dueDateOf(x){
-  if(rentType(x)==="daily")return x?.end_date || "";
+  // الدفع مقدّم: الإيجار اليومي يُستحق من تاريخ الدخول وليس تاريخ الخروج
+  if(rentType(x)==="daily")return x?.start_date || x?.due_date || "";
   // الاستحقاق الدائم: يوم الدخول هو "يوم الرسو" — يُحتسب لنفس اليوم من الشهر المعروض تلقائياً
   // مثال: دخل 12-06 → استحقاقه 12 من كل شهر للأبد بدون تعديل يدوي
   const anchor=x?.start_date || x?.due_date || "";
@@ -2157,6 +2158,9 @@ function displayStatus(x){
   if(st==="collected")return "collected";
   if(isPartialPaid(x))return "partial";
   // تلقائي حسب تاريخ الاستحقاق: لم يصل الموعد = "لم يحل عليه"، تجاوزه = "متأخر"
+  // شهر انتهى فعلاً لا يمكن أن يحتوي "لم يحل عليه" — كل غير محصّل فيه = متأخر
+  const _monthEnded=(S.year<NOW_Y)||(S.year===NOW_Y&&S.month<NOW_M);
+  if(_monthEnded)return "late";
   const due=dueDateOf(x);
   if(due && !isDatePast(due))return "pending";
   return "late";
@@ -4129,6 +4133,34 @@ function renderApp(){
               h("span",{style:{color:"#4ade80"}},["أودع: "+c.deposited.toLocaleString()]),
               h("span",{style:{color:c.remaining>0?"#fbbf24":"#555",fontWeight:"700"}},["المتبقي معه: "+c.remaining.toLocaleString()])])]))),
           h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["استلم = ما حصّله الموظف | أودع = ما سجّله كإيداع | المتبقي = الفرق الذي بحوزته"])]);
+      })(),
+      // ======= محصّل بدون اسم موظف (يفسّر الفرق بين "محصّل لم يودع" ومجموع العهد) =======
+      (()=>{
+        const orphan=[];
+        units.forEach(u=>u.partitions.forEach(p=>{
+          const v=_recv(p);
+          if(v>0&&p.collectionMethod!=="bank"&&!p.collectedBy)orphan.push({name:u.name+" #"+p.id,tenant:p.tenant||"—",amt:v});
+        }));
+        full.forEach(u=>{
+          const v=_recv(u);
+          if(v>0&&u.collectionMethod!=="bank"&&!u.collectedBy)orphan.push({name:"شقة "+u.id,tenant:u.tenant||"—",amt:v});
+        });
+        (data.dailyBookings||[]).forEach(b=>{
+          if(Number(b.total||0)>0&&!b.by)orphan.push({name:"حجز يومي "+(b.unit||""),tenant:b.guest||"—",amt:Number(b.total||0)});
+        });
+        if(orphan.length===0)return null;
+        const oTotal=orphan.reduce((s,x)=>s+x.amt,0);
+        return h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #7f1d1d",background:"#1a0808"}},[
+          h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
+            h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#f87171"}},["⚠️ محصّل بدون اسم موظف ("+orphan.length+")"]),
+            h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#f87171"}},[oTotal.toLocaleString()+" د.إ"])]),
+          h("div",{style:{fontSize:"11px",color:"#a16207",marginBottom:"8px"}},
+            ["هذا المبلغ داخل في \"محصّل لم يودع\" لكنه غير محسوب على عهدة أي موظف — راجع من استلمه فعلياً."]),
+          h("div",{},orphan.map(x=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #2a0f0f"}},[
+            h("div",{},[
+              h("div",{style:{fontSize:"14px",color:"#fff"}},[x.name]),
+              h("div",{style:{fontSize:"11px",color:"#666"}},[x.tenant])]),
+            h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#f87171",flexShrink:"0"}},[x.amt.toLocaleString()+" د.إ"])])))]);
       })(),
       // Vacant units card
       vacantList.length>0?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1a1a1a"}},[
