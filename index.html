@@ -2652,7 +2652,7 @@ function renderApp(){
     ]);
   }
 
-  const tabs=isOwner?["overview","requests","units","daily","occupancy","maintenance","financial","expenses","audit","permissions"]:["emphome","units","daily","maintenance","expenses","transactions","myrequests"];
+  const tabs=isOwner?["overview","requests","units","daily","occupancy","maintenance","financial","expenses","audit","permissions"]:(S.user==="nader"?["emphome","units","daily","maintenance","expenses","myrequests"]:["emphome","units","daily","maintenance","expenses","transactions","myrequests"]);
   const tabLbl={overview:"الرئيسية",emphome:"🏠 الرئيسية",units:"الوحدات",financial:"المالية",expenses:"المصاريف",transactions:"الإيداعات",permissions:"الصلاحيات",requests:"الطلبات",myrequests:"طلباتي",occupancy:"الإشغال",daily:"📅 اليومي",audit:"📋 السجل",maintenance:"الصيانة"};
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
@@ -2777,7 +2777,30 @@ function renderApp(){
           h("div",{},[h("div",{style:{color:"#666",fontSize:"11px"}},["أودعت (+ سلّمت لزملاء)"]),h("div",{style:{color:"#fff",fontWeight:"700"}},[(_myDep+_hvOut).toLocaleString()+" د.إ"])])]),
         h("div",{style:{marginTop:"8px",padding:"8px",background:_myCustody>0?"#0c1a2e":"#052e16",borderRadius:"8px",display:"flex",justifyContent:"space-between"}},[
           h("span",{style:{fontSize:"13px",color:"#888"}},["المتبقي معي للإيداع:"]),
-          h("span",{style:{fontSize:"15px",fontWeight:"900",color:_myCustody>0?"#60a5fa":"#4ade80"}},[_myCustody.toLocaleString()+" د.إ"])])]),
+          h("span",{style:{fontSize:"15px",fontWeight:"900",color:_myCustody>0?"#60a5fa":"#4ade80"}},[_myCustody.toLocaleString()+" د.إ"])]),
+        h("button",{class:"btn",style:{width:"100%",background:"#083344",border:"1px solid #0e7490",color:"#22d3ee",borderRadius:"8px",padding:"9px",marginTop:"10px",fontSize:"13px",fontWeight:"600"},
+          onClick:()=>set({showHandover:!S.showHandover})},["🤝 تسليم كاش لزميل (توثيق)"]),
+        S.showHandover?(()=>{
+          const hv={to:"",amount:""};
+          const others=Object.keys(USERS).filter(k=>USERS[k].role!=="owner"&&k!==S.user);
+          const toSel=h("select",{style:{marginTop:"10px",marginBottom:"8px"}},[h("option",{value:""},["اختر الموظف المستلم"])].concat(others.map(k=>h("option",{value:k},[USERS[k].name]))));
+          toSel.addEventListener("change",e=>{hv.to=e.target.value;});
+          const amtInp=h("input",{type:"number",placeholder:"المبلغ المسلَّم",style:{marginBottom:"8px"}});
+          amtInp.addEventListener("input",e=>{hv.amount=e.target.value;});
+          return h("div",{},[toSel,amtInp,
+            h("div",{style:{display:"flex",gap:"8px"}},[
+              h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",color:"#aaa",borderRadius:"8px",padding:"8px"},onClick:()=>set({showHandover:false})},["إلغاء"]),
+              h("button",{class:"btn",style:{flex:"1",background:"#0e7490",color:"#fff",borderRadius:"8px",padding:"8px",fontWeight:"700"},onClick:()=>{
+                const amt=Number(hv.amount)||0;
+                if(!hv.to){showMsg("⚠ اختر الموظف المستلم");return;}
+                if(amt<=0){showMsg("⚠ أدخل مبلغاً صالحاً");return;}
+                if(!data.handovers)data.handovers=[];
+                data.handovers.push({id:"hv_"+Date.now(),from:S.user,to:hv.to,amount:amt,at:new Date().toISOString()});
+                addLog(data,(USERS[S.user]?.name||S.user)+" سلّم "+amt.toLocaleString()+" د.إ كاش إلى "+(USERS[hv.to]?.name||hv.to),{target:"عهدة",field:"تسليم كاش",oldVal:USERS[S.user]?.name,newVal:USERS[hv.to]?.name+" ("+amt+" د.إ)"});
+                saveCurData(data);showMsg("✓ تم توثيق التسليم");set({showHandover:false});
+              }},["توثيق التسليم"])])]);
+        })():null
+      ]),
       // 8) طلباتي المعلقة
       _myPend.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #78350f"}},[
         _secHdr("⏳","طلباتي بانتظار الاعتماد",_myPend.length,"#fbbf24",null),
@@ -3808,10 +3831,11 @@ function renderApp(){
       })(),
       // Late & partial breakdown
       (()=>{
-        const lateList=[];const partialList=[];
+        const lateList=[];const partialList=[];const pendingList=[];
         units.forEach(u=>{
           u.partitions.forEach(p=>{
             if(displayStatus(p)==="late") lateList.push({name:u.name+" #"+p.id,rent:Number(p.rent)||0,tenant:p.tenant||"—",remaining:Number(p.rent)||0});
+            else if(displayStatus(p)==="pending") pendingList.push({name:u.name+" #"+p.id,rent:Number(p.rent)||0,tenant:p.tenant||"—",due:dueDateOf(p)});
             else if(displayStatus(p)==="partial"){
               const paid=Number(p.paid_amount||0);
               const rem=Math.max(0,(Number(p.rent)||0)-paid);
@@ -3821,6 +3845,7 @@ function renderApp(){
         });
         full.forEach(u=>{
               if(u.status==="late") lateList.push({name:"شقة "+u.id,rent:Number(u.rent)||0,tenant:u.tenant||"—",remaining:Number(u.rent)||0});
+              else if(displayStatus(u)==="pending") pendingList.push({name:"شقة "+u.id,rent:Number(u.rent)||0,tenant:u.tenant||"—",due:dueDateOf(u)});
               else if(displayStatus(u)==="partial"){
                 const paidF=Number(u.paid_amount||0);
                 const remF=Math.max(0,(Number(u.rent)||0)-paidF);
@@ -3829,9 +3854,9 @@ function renderApp(){
             });
         const totalLate=lateList.reduce((s,x)=>s+x.remaining,0);
         const totalPartial=partialList.reduce((s,x)=>s+x.remaining,0);
-        if(lateList.length===0&&partialList.length===0)return null;
+        if(lateList.length===0&&partialList.length===0&&pendingList.length===0)return null;
         return h("div",{class:"card",style:{padding:"14px",marginBottom:"12px"}},[
-          (lateList.length>0 || hasLateOrPartial)?h("div",{style:{marginBottom:partialList.length>0?"12px":"0"}},[
+          lateList.length>0?h("div",{style:{marginBottom:partialList.length>0?"12px":"0"}},[
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",paddingBottom:"6px",borderBottom:"1px solid #1a1a1a"}},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#f87171"}},["⚠️ متأخرون عن الدفع ("+lateList.length+")"]),
               h("div",{style:{fontSize:"16px",fontWeight:"900",color:"#f87171"}},[totalLate.toLocaleString()+" د.إ"])]),
