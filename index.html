@@ -2088,6 +2088,9 @@ function paidValue(x){
   return 0;
 }
 function remainingValue(x){return Math.max(0,Number(x?.rent||0)-paidValue(x));}
+// التسليم بين الموظفين يُحتسب فقط بعد تأكيد المستلم.
+// السجلات القديمة بدون حقل status تُعتبر مؤكدة (توافق رجعي).
+function hvConfirmed(x){return (x&&(x.status||"confirmed"))==="confirmed";}
 function isPartialPaid(x){return !!x?.partial && (Number(x?.rent||0)>0 || Number(x?.paid_amount||0)>0) && remainingValue(x)>0;}
 function moneyText(n){return Number(n||0).toLocaleString();}
 function todayISO(){return new Date().toISOString().slice(0,10);}
@@ -2145,8 +2148,13 @@ function calculateDueDate(startDate){
 
 function displayStatus(x){
   const st=x?.status || "late";
-  // الحالة اليدوية لها الأولوية: محصّل/فارغ/موظفين
-  if(st==="collected"||st==="vacant"||st==="staff")return st;
+  // فارغ/موظفين لهما الأولوية المطلقة
+  if(st==="vacant"||st==="staff")return st;
+  // دفعة جزئية حقيقية (مبلغ مسجّل فعلاً ومتبقٍ > 0) تتقدّم على وسم "محصّل" اليدوي
+  // حتى لا يختفي المتبقي من شاشات المتابعة.
+  // شرط paid>0 يحمي البيانات القديمة المتناقضة (محصّل + partial بدون مبلغ) من التغيّر.
+  if(isPartialPaid(x) && Number(x?.paid_amount||0)>0)return "partial";
+  if(st==="collected")return "collected";
   if(isPartialPaid(x))return "partial";
   // تلقائي حسب تاريخ الاستحقاق: لم يصل الموعد = "لم يحل عليه"، تجاوزه = "متأخر"
   const due=dueDateOf(x);
@@ -2709,8 +2717,11 @@ function renderApp(){
     let _myRec=0;
     units.forEach(u=>u.partitions.forEach(p=>{if(p.collectedBy===_me&&p.collectionMethod!=="bank")_myRec+=_recvMe(p);}));
     full.forEach(u=>{if(u.collectedBy===_me&&u.collectionMethod!=="bank")_myRec+=_recvMe(u);});
-    const _hvIn=(data.handovers||[]).filter(x=>x.to===_me).reduce((s,x)=>s+Number(x.amount||0),0);
-    const _hvOut=(data.handovers||[]).filter(x=>x.from===_me).reduce((s,x)=>s+Number(x.amount||0),0);
+    const _hvIn=(data.handovers||[]).filter(x=>x.to===_me&&hvConfirmed(x)).reduce((s,x)=>s+Number(x.amount||0),0);
+    const _hvOut=(data.handovers||[]).filter(x=>x.from===_me&&hvConfirmed(x)).reduce((s,x)=>s+Number(x.amount||0),0);
+    // تسليمات بانتظار التأكيد
+    const _hvInPend=(data.handovers||[]).filter(x=>x.to===_me&&x.status==="pending");
+    const _hvOutPend=(data.handovers||[]).filter(x=>x.from===_me&&x.status==="pending");
     const _myDep=(data.transactions||[]).filter(t=>t.by===_me).reduce((s,t)=>s+Number(t.amount||0),0);
     const _myCustody=Math.round((_myRec+_hvIn-_hvOut-_myDep)*100)/100;
     // طلباتي المعلقة
@@ -2763,8 +2774,8 @@ function renderApp(){
         h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:_late.length>0?"1px solid #7f1d1d":"1px solid #1a1a1a"}},[
           h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#f87171"}},[""+_late.length]),
           h("div",{style:{fontSize:"11px",color:"#888"}},["متأخر"])]),
-        h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:(_renew.length+_noDates.length)>0?"1px solid #0e7490":"1px solid #1a1a1a"}},[
-          h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#22d3ee"}},[""+(_renew.length+_noDates.length)]),
+        h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:(_renew.length+_noDates.length+_hvInPend.length)>0?"1px solid #0e7490":"1px solid #1a1a1a"}},[
+          h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#22d3ee"}},[""+(_renew.length+_noDates.length+_hvInPend.length)]),
           h("div",{style:{fontSize:"11px",color:"#888"}},["مهمة"])]),
         h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:_myCustody>0?"1px solid #1e3a5f":"1px solid #1a1a1a"}},[
           h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#60a5fa"}},[_myCustody.toLocaleString()]),
@@ -2793,6 +2804,31 @@ function renderApp(){
             h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["المتبقي"]),
             h("div",{style:{fontSize:"22px",fontWeight:"900",color:_remaining===0?"#4ade80":"#f87171"}},[_remaining.toLocaleString()]),
             h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])])])]):null,
+      // 0) تسليمات كاش بانتظار تأكيدي — أولوية قصوى (مال بيد الموظف)
+      _hvInPend.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"2px solid #0e7490",background:"#062028"}},[
+        _secHdr("🤝","تسليم كاش بانتظار تأكيدك",_hvInPend.length,"#22d3ee",_hvInPend.reduce((s,x)=>s+Number(x.amount||0),0)),
+        h("div",{style:{fontSize:"11px",color:"#0e7490",marginBottom:"8px"}},["أكّد فقط إذا استلمت المبلغ فعلياً — قبل التأكيد يبقى المبلغ في عهدة المُسلِّم."]),
+        h("div",{},_hvInPend.map(x=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #0a2a33"}},[
+          h("div",{style:{flex:"1",minWidth:"0"}},[
+            h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"600"}},["من: "+((USERS[x.from]?.name)||x.from)]),
+            h("div",{style:{fontSize:"11px",color:"#666"}},[(x.at||"").slice(0,10)+" · "+Number(x.amount||0).toLocaleString()+" د.إ"])]),
+          h("button",{class:"btn",style:{background:"#052e16",border:"1px solid #16a34a",color:"#4ade80",borderRadius:"6px",padding:"5px 10px",fontSize:"12px",fontWeight:"700",flexShrink:"0"},
+            onClick:()=>{
+              x.status="confirmed";x.confirmedAt=new Date().toISOString();
+              addLog(data,(USERS[S.user]?.name||S.user)+" أكّد استلام "+Number(x.amount||0).toLocaleString()+" د.إ من "+((USERS[x.from]?.name)||x.from),{target:"عهدة",field:"تأكيد تسليم",oldVal:"بانتظار",newVal:"مؤكد ("+Number(x.amount||0)+" د.إ)"});
+              saveCurData(data);showMsg("✓ تم تأكيد الاستلام");R();
+            }},["✓ استلمت"]),
+          h("button",{class:"btn",style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"6px",padding:"5px 10px",fontSize:"12px",fontWeight:"700",flexShrink:"0"},
+            onClick:()=>{
+              x.status="rejected";x.rejectedAt=new Date().toISOString();
+              addLog(data,(USERS[S.user]?.name||S.user)+" أنكر استلام "+Number(x.amount||0).toLocaleString()+" د.إ من "+((USERS[x.from]?.name)||x.from),{target:"عهدة",field:"تأكيد تسليم",oldVal:"بانتظار",newVal:"مرفوض — المبلغ يبقى على المُسلِّم"});
+              saveCurData(data);showMsg("✗ سُجّل عدم الاستلام");R();
+            }},["✗ لم أستلم"])])))]):null,
+      // 0ب) تسليماتي بانتظار تأكيد الزميل
+      _hvOutPend.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #78350f"}},[
+        _secHdr("⏳","تسليماتي بانتظار تأكيد الزميل",_hvOutPend.length,"#fbbf24",_hvOutPend.reduce((s,x)=>s+Number(x.amount||0),0)),
+        h("div",{style:{fontSize:"11px",color:"#a16207",marginBottom:"6px"}},["المبلغ ما زال محسوباً في عهدتك حتى يؤكد الزميل استلامه."]),
+        h("div",{},_hvOutPend.map(x=>_row("إلى: "+((USERS[x.to]?.name)||x.to),(x.at||"").slice(0,10),Number(x.amount||0).toLocaleString()+" د.إ","#fbbf24",null)))]):null,
       // 1) المتأخرات — الأولوية القصوى
       _late.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #7f1d1d"}},[
         _secHdr("⚠️","متأخرات للتحصيل",_late.length,"#f87171",S.user==="nader"?null:_lateTotal),
@@ -2851,9 +2887,9 @@ function renderApp(){
                 if(!hv.to){showMsg("⚠ اختر الموظف المستلم");return;}
                 if(amt<=0){showMsg("⚠ أدخل مبلغاً صالحاً");return;}
                 if(!data.handovers)data.handovers=[];
-                data.handovers.push({id:"hv_"+Date.now(),from:S.user,to:hv.to,amount:amt,at:new Date().toISOString()});
+                data.handovers.push({id:"hv_"+Date.now(),from:S.user,to:hv.to,amount:amt,at:new Date().toISOString(),status:"pending"});
                 addLog(data,(USERS[S.user]?.name||S.user)+" سلّم "+amt.toLocaleString()+" د.إ كاش إلى "+(USERS[hv.to]?.name||hv.to),{target:"عهدة",field:"تسليم كاش",oldVal:USERS[S.user]?.name,newVal:USERS[hv.to]?.name+" ("+amt+" د.إ)"});
-                saveCurData(data);showMsg("✓ تم توثيق التسليم");set({showHandover:false});
+                saveCurData(data);showMsg("✓ تم التوثيق — بانتظار تأكيد المستلم");set({showHandover:false});
               }},["توثيق التسليم"])])]);
         })():null
       ]),
@@ -2862,7 +2898,7 @@ function renderApp(){
         _secHdr("⏳","طلباتي بانتظار الاعتماد",_myPend.length,"#fbbf24",null),
         h("div",{},_myPend.slice(0,8).map(r=>_row(r.desc||r.type,(r.createdAt||"").slice(0,10),"معلّق","#fbbf24",()=>set({tab:"myrequests"}))))]):null,
       // كل شيء منجز
-      (_late.length===0&&_dueSoon.length===0&&_partial.length===0&&_renew.length===0&&_noDates.length===0&&_deps.length===0&&_myPend.length===0)?
+      (_late.length===0&&_dueSoon.length===0&&_partial.length===0&&_renew.length===0&&_noDates.length===0&&_deps.length===0&&_myPend.length===0&&_hvInPend.length===0)?
         h("div",{class:"card",style:{padding:"24px",textAlign:"center",border:"1px solid #166534"}},[
           h("div",{style:{fontSize:"32px",marginBottom:"8px"}},["✅"]),
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},["كل المهام منجزة — لا يوجد شيء معلّق"])]):null
@@ -4076,8 +4112,8 @@ function renderApp(){
           });
           const deposited=txList.filter(t=>t.by===emp).reduce((s,t)=>s+Number(t.amount||0),0);
           // التسليمات الموثقة بين الموظفين
-          const hvIn=(data.handovers||[]).filter(x=>x.to===emp).reduce((s,x)=>s+Number(x.amount||0),0);
-          const hvOut=(data.handovers||[]).filter(x=>x.from===emp).reduce((s,x)=>s+Number(x.amount||0),0);
+          const hvIn=(data.handovers||[]).filter(x=>x.to===emp&&hvConfirmed(x)).reduce((s,x)=>s+Number(x.amount||0),0);
+          const hvOut=(data.handovers||[]).filter(x=>x.from===emp&&hvConfirmed(x)).reduce((s,x)=>s+Number(x.amount||0),0);
           const remaining=Math.round((received+hvIn-hvOut-deposited)*100)/100;
           return {emp,name:USERS[emp].name,received:received+hvIn,deposited:deposited+hvOut,remaining,hvIn,hvOut};
         }).filter(c=>c.received>0||c.deposited>0);
@@ -4258,9 +4294,9 @@ function renderApp(){
               if(!hv.to){showMsg("⚠ اختر الموظف المستلم");return;}
               if(amt<=0){showMsg("⚠ أدخل مبلغاً صالحاً");return;}
               if(!data.handovers)data.handovers=[];
-              data.handovers.push({id:"hv_"+Date.now(),from:S.user,to:hv.to,amount:amt,at:new Date().toISOString()});
+              data.handovers.push({id:"hv_"+Date.now(),from:S.user,to:hv.to,amount:amt,at:new Date().toISOString(),status:"pending"});
               addLog(data,(USERS[S.user]?.name||S.user)+" سلّم "+amt.toLocaleString()+" د.إ كاش إلى "+(USERS[hv.to]?.name||hv.to),{target:"عهدة",field:"تسليم كاش",oldVal:USERS[S.user]?.name,newVal:USERS[hv.to]?.name+" ("+amt+" د.إ)"});
-              saveCurData(data);showMsg("✓ تم توثيق التسليم");set({showHandover:false});
+              saveCurData(data);showMsg("✓ تم التوثيق — بانتظار تأكيد المستلم");set({showHandover:false});
             }},["توثيق التسليم"])])]);
       })()
     ]):null;
