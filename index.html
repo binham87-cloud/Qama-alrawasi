@@ -2493,7 +2493,7 @@ function pinPress(d){
   if(n.length===4){
     if(n===USERS[S.pendingUser].pin){
       S.screen="app";S.user=S.pendingUser;S.pin="";S.pinErr=false;
-      S.tab=USERS[S.pendingUser].role==="owner"?"overview":"units";
+      S.tab=USERS[S.pendingUser].role==="owner"?"overview":"emphome";
       S.selUnit=null;S.editPart=null;
       loadPermissions();
       loadRequests();
@@ -2652,8 +2652,8 @@ function renderApp(){
     ]);
   }
 
-  const tabs=isOwner?["overview","requests","units","daily","occupancy","maintenance","financial","expenses","audit","permissions"]:["units","daily","maintenance","expenses","transactions","myrequests"];
-  const tabLbl={overview:"الرئيسية",units:"الوحدات",financial:"المالية",expenses:"المصاريف",transactions:"الإيداعات",permissions:"الصلاحيات",requests:"الطلبات",myrequests:"طلباتي",occupancy:"الإشغال",daily:"📅 اليومي",audit:"📋 السجل",maintenance:"الصيانة"};
+  const tabs=isOwner?["overview","requests","units","daily","occupancy","maintenance","financial","expenses","audit","permissions"]:["emphome","units","daily","maintenance","expenses","transactions","myrequests"];
+  const tabLbl={overview:"الرئيسية",emphome:"🏠 الرئيسية",units:"الوحدات",financial:"المالية",expenses:"المصاريف",transactions:"الإيداعات",permissions:"الصلاحيات",requests:"الطلبات",myrequests:"طلباتي",occupancy:"الإشغال",daily:"📅 اليومي",audit:"📋 السجل",maintenance:"الصيانة"};
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
@@ -2673,8 +2673,122 @@ function renderApp(){
             fontSize:"14px",fontWeight:"700",padding:"1px 5px",marginRight:"4px"
           }},[S.notifCount]):null])))]);
 
-  // ======= OVERVIEW =======
+  // ======= EMPLOYEE HOME (لوحة الموظف) =======
   let content;
+  if(S.tab==="emphome"){
+    const _me=S.user;
+    const _k=getMonthKey(S.year,S.month);
+    const _real=(S.year===NOW_Y&&S.month===NOW_M);
+    const _tdy=todayISO();
+    const _soonLimit=(()=>{const d=new Date();d.setDate(d.getDate()+3);return d.toISOString().slice(0,10);})();
+    const _late=[],_partial=[],_dueSoon=[],_noDates=[],_renew=[],_deps=[];
+    const _scan=(x,label,unitId,partId)=>{
+      const ds=displayStatus(x);
+      const nav=()=>set({tab:"units",selUnit:partId!=null?unitId:null,editPart:partId!=null?unitId+"-"+partId:null});
+      if(ds==="late")_late.push({label,t:x.tenant||"—",ph:x.phone||"",amt:Number(x.rent)||0,nav});
+      else if(ds==="partial")_partial.push({label,t:x.tenant||"—",amt:Math.max(0,(Number(x.rent)||0)-(Number(x.paid_amount)||0)),nav});
+      else if(ds==="pending"){const d=dueDateOf(x);if(d&&d<=_soonLimit)_dueSoon.push({label,t:x.tenant||"—",due:d,amt:Number(x.rent)||0,nav});}
+      if(rentType(x)==="monthly"&&x.status!=="vacant"&&x.status!=="staff"){
+        if(!x.due_date&&!x.start_date)_noDates.push({label,nav});
+        if(_real&&x.lastRenewedKey!==_k)_renew.push({x,label});
+      }
+      if(x.status==="vacant"&&Number(x.deposit||0)>0)_deps.push({label,t:x.tenant||"—",amt:Number(x.deposit)});
+    };
+    units.forEach(u=>u.partitions.forEach(p=>_scan(p,u.name+" / بارتشن "+p.id,u.id,p.id)));
+    full.forEach(u=>_scan(u,"شقة "+u.id,u.id,null));
+    // عهدتي
+    let _myRec=0;
+    units.forEach(u=>u.partitions.forEach(p=>{if(p.collectedBy===_me){const ds=displayStatus(p);if(ds==="collected")_myRec+=Number(p.rent)||0;else if(ds==="partial")_myRec+=Number(p.paid_amount)||0;}}));
+    full.forEach(u=>{if(u.collectedBy===_me){const ds=displayStatus(u);if(ds==="collected")_myRec+=Number(u.rent)||0;else if(ds==="partial")_myRec+=Number(u.paid_amount)||0;}});
+    const _hvIn=(data.handovers||[]).filter(x=>x.to===_me).reduce((s,x)=>s+Number(x.amount||0),0);
+    const _hvOut=(data.handovers||[]).filter(x=>x.from===_me).reduce((s,x)=>s+Number(x.amount||0),0);
+    const _myDep=(data.transactions||[]).filter(t=>t.by===_me).reduce((s,t)=>s+Number(t.amount||0),0);
+    const _myCustody=Math.round((_myRec+_hvIn-_hvOut-_myDep)*100)/100;
+    // طلباتي المعلقة
+    const _myPend=(S.pendingRequests||[]).filter(r=>r.by===_me&&r.status==="pending");
+    const _lateTotal=_late.reduce((s,x)=>s+x.amt,0);
+    const _confirmRenewH=(item)=>{item.x.lastRenewedKey=_k;addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});saveCurData(data);R();};
+    const _confirmLeaveH=(item)=>{
+      const _t=item.x.tenant||"—";
+      addLog(data,(USERS[S.user]?.name||S.user)+" سجّل مغادرة "+_t+" من "+item.label+(Number(item.x.deposit||0)>0?" (تأمين "+Number(item.x.deposit).toLocaleString()+" د.إ بحاجة تسوية)":""),{target:item.label,field:"تأكيد شهري",oldVal:_t,newVal:"غادر → فارغ"});
+      item.x.status="vacant";item.x.collectedBy="";item.x.paid_amount=0;item.x.partial=false;
+      item.x.start_date="";item.x.due_date="";item.x.contract_end="";item.x.lastRenewedKey=_k;
+      saveCurData(data);R();
+      showMsg(Number(item.x.deposit||0)>0?"✓ سُجلت المغادرة — التأمين ينتظر التسوية":"✓ سُجلت المغادرة");
+    };
+    const _secHdr=(icon,title,count,color,amt)=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",paddingBottom:"6px",borderBottom:"1px solid #1a1a1a"}},[
+      h("div",{style:{fontSize:"14px",fontWeight:"700",color}},[icon+" "+title+" ("+count+")"]),
+      amt!=null?h("div",{style:{fontSize:"15px",fontWeight:"900",color}},[amt.toLocaleString()+" د.إ"]):null]);
+    const _row=(main,sub,right,rightColor,onClick)=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid #111",cursor:onClick?"pointer":"default"},onClick:onClick||null},[
+      h("div",{style:{flex:"1",minWidth:"0"}},[
+        h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"600"}},[main]),
+        sub?h("div",{style:{fontSize:"11px",color:"#666"}},[sub]):null]),
+      h("span",{style:{fontSize:"13px",fontWeight:"700",color:rightColor,flexShrink:"0"}},[right])]);
+    content=h("div",{},[
+      monthNav(),
+      // شريط الملخص
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"8px",marginBottom:"14px"}},[
+        h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:_late.length>0?"1px solid #7f1d1d":"1px solid #1a1a1a"}},[
+          h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#f87171"}},[""+_late.length]),
+          h("div",{style:{fontSize:"11px",color:"#888"}},["متأخر"])]),
+        h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:(_renew.length+_noDates.length)>0?"1px solid #0e7490":"1px solid #1a1a1a"}},[
+          h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#22d3ee"}},[""+(_renew.length+_noDates.length)]),
+          h("div",{style:{fontSize:"11px",color:"#888"}},["مهمة"])]),
+        h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:_myCustody>0?"1px solid #1e3a5f":"1px solid #1a1a1a"}},[
+          h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#60a5fa"}},[_myCustody.toLocaleString()]),
+          h("div",{style:{fontSize:"11px",color:"#888"}},["عهدتي د.إ"])])]),
+      // 1) المتأخرات — الأولوية القصوى
+      _late.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #7f1d1d"}},[
+        _secHdr("⚠️","متأخرات للتحصيل",_late.length,"#f87171",_lateTotal),
+        h("div",{},_late.map(x=>_row(x.label,x.t+(x.ph?" · "+x.ph:""),x.amt.toLocaleString()+" د.إ","#f87171",x.nav)))]):null,
+      // 2) تستحق خلال 3 أيام — استعداد مسبق
+      _dueSoon.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #0284c7"}},[
+        _secHdr("⏳","تستحق خلال 3 أيام",_dueSoon.length,"#7dd3fc",_dueSoon.reduce((s,x)=>s+x.amt,0)),
+        h("div",{},_dueSoon.map(x=>_row(x.label,x.t+" · يستحق "+x.due,x.amt.toLocaleString()+" د.إ","#7dd3fc",x.nav)))]):null,
+      // 3) جزئيون — متبقي للتحصيل
+      _partial.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #d97706"}},[
+        _secHdr("📊","جزئيون — متبقي",_partial.length,"#fbbf24",_partial.reduce((s,x)=>s+x.amt,0)),
+        h("div",{},_partial.map(x=>_row(x.label,x.t,x.amt.toLocaleString()+" د.إ","#fbbf24",x.nav)))]):null,
+      // 4) التأكيد الشهري
+      _renew.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"2px solid #0e7490",background:"#062028"}},[
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
+          h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#22d3ee"}},["🔄 تأكيد شهري: مستمر أم غادر؟ ("+_renew.length+")"]),
+          h("button",{class:"btn",style:{fontSize:"12px",color:"#22d3ee",background:"#083344",border:"1px solid #0e7490",borderRadius:"6px",padding:"4px 10px"},onClick:()=>set({showRenewHome:!S.showRenewHome})},[S.showRenewHome?"إخفاء":"عرض"])]),
+        S.showRenewHome?h("div",{style:{marginTop:"8px"}},_renew.map(item=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #0a2a33"}},[
+          h("div",{style:{flex:"1",minWidth:"0"}},[
+            h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"600"}},[item.label]),
+            h("div",{style:{fontSize:"11px",color:"#666"}},[item.x.tenant||"—"])]),
+          h("button",{class:"btn",style:{background:"#052e16",border:"1px solid #16a34a",color:"#4ade80",borderRadius:"6px",padding:"5px 10px",fontSize:"12px",fontWeight:"700",flexShrink:"0"},onClick:()=>_confirmRenewH(item)},["✓ مستمر"]),
+          h("button",{class:"btn",style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"6px",padding:"5px 10px",fontSize:"12px",fontWeight:"700",flexShrink:"0"},onClick:()=>_confirmLeaveH(item)},["🚪 غادر"])]))):null]):null,
+      // 5) ضبط التواريخ
+      _noDates.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"2px solid #d97706",background:"#1c1205"}},[
+        _secHdr("📋","مهمة: ضبط التواريخ",_noDates.length,"#fbbf24",null),
+        h("div",{style:{fontSize:"12px",color:"#a16207",marginBottom:"6px"}},["افتح الوحدة وسجّل \"بداية من\" حتى يحتسب الاستحقاق تلقائياً:"]),
+        h("div",{style:{display:"flex",flexWrap:"wrap",gap:"6px"}},_noDates.map(n=>h("span",{style:{fontSize:"12px",color:"#fbbf24",background:"#292008",border:"1px solid #78350f",borderRadius:"6px",padding:"3px 8px",cursor:"pointer"},onClick:n.nav},[n.label])))]):null,
+      // 6) تأمينات بحاجة تسوية
+      _deps.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #7c3aed",background:"#170b2e"}},[
+        _secHdr("🔐","تأمينات بحاجة تسوية",_deps.length,"#a78bfa",_deps.reduce((s,x)=>s+x.amt,0)),
+        h("div",{},_deps.map(x=>_row(x.label,x.t,x.amt.toLocaleString()+" د.إ","#a78bfa",null)))]):null,
+      // 7) عهدتي بالتفصيل
+      h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #1e3a5f"}},[
+        h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#60a5fa",marginBottom:"8px"}},["💼 عهدتي"]),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",fontSize:"13px"}},[
+          h("div",{},[h("div",{style:{color:"#666",fontSize:"11px"}},["استلمت (تحصيل + من زملاء)"]),h("div",{style:{color:"#4ade80",fontWeight:"700"}},[(_myRec+_hvIn).toLocaleString()+" د.إ"])]),
+          h("div",{},[h("div",{style:{color:"#666",fontSize:"11px"}},["أودعت (+ سلّمت لزملاء)"]),h("div",{style:{color:"#fff",fontWeight:"700"}},[(_myDep+_hvOut).toLocaleString()+" د.إ"])])]),
+        h("div",{style:{marginTop:"8px",padding:"8px",background:_myCustody>0?"#0c1a2e":"#052e16",borderRadius:"8px",display:"flex",justifyContent:"space-between"}},[
+          h("span",{style:{fontSize:"13px",color:"#888"}},["المتبقي معي للإيداع:"]),
+          h("span",{style:{fontSize:"15px",fontWeight:"900",color:_myCustody>0?"#60a5fa":"#4ade80"}},[_myCustody.toLocaleString()+" د.إ"])])]),
+      // 8) طلباتي المعلقة
+      _myPend.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #78350f"}},[
+        _secHdr("⏳","طلباتي بانتظار الاعتماد",_myPend.length,"#fbbf24",null),
+        h("div",{},_myPend.slice(0,8).map(r=>_row(r.desc||r.type,(r.createdAt||"").slice(0,10),"معلّق","#fbbf24",()=>set({tab:"myrequests"}))))]):null,
+      // كل شيء منجز
+      (_late.length===0&&_dueSoon.length===0&&_partial.length===0&&_renew.length===0&&_noDates.length===0&&_deps.length===0&&_myPend.length===0)?
+        h("div",{class:"card",style:{padding:"24px",textAlign:"center",border:"1px solid #166534"}},[
+          h("div",{style:{fontSize:"32px",marginBottom:"8px"}},["✅"]),
+          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},["كل المهام منجزة — لا يوجد شيء معلّق"])]):null
+    ]);
+  }
   if(S.tab==="overview"){
     const net=totalTx-totalExp-totalProfit-totalInstallments;
     const recentLogs=(data.logs||[]).slice(0,12);
