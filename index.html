@@ -2696,10 +2696,19 @@ function renderApp(){
     };
     units.forEach(u=>u.partitions.forEach(p=>_scan(p,u.name+" / بارتشن "+p.id,u.id,p.id)));
     full.forEach(u=>_scan(u,"شقة "+u.id,u.id,null));
-    // عهدتي
+    // عهدتي — نفس منطق بطاقة عهدة الموظفين عند المدير حرفياً
+    const _recvMe=(x)=>{
+      const ds=displayStatus(x);
+      const paid=Number(x.paid_amount)||0;
+      const rent=Number(x.rent)||0;
+      if(x.partial && paid>0 && paid<rent) return paid;
+      if(ds==="collected") return rent;
+      if(ds==="partial") return paid;
+      return 0;
+    };
     let _myRec=0;
-    units.forEach(u=>u.partitions.forEach(p=>{if(p.collectedBy===_me){const ds=displayStatus(p);if(ds==="collected")_myRec+=Number(p.rent)||0;else if(ds==="partial")_myRec+=Number(p.paid_amount)||0;}}));
-    full.forEach(u=>{if(u.collectedBy===_me){const ds=displayStatus(u);if(ds==="collected")_myRec+=Number(u.rent)||0;else if(ds==="partial")_myRec+=Number(u.paid_amount)||0;}});
+    units.forEach(u=>u.partitions.forEach(p=>{if(p.collectedBy===_me&&p.collectionMethod!=="bank")_myRec+=_recvMe(p);}));
+    full.forEach(u=>{if(u.collectedBy===_me&&u.collectionMethod!=="bank")_myRec+=_recvMe(u);});
     const _hvIn=(data.handovers||[]).filter(x=>x.to===_me).reduce((s,x)=>s+Number(x.amount||0),0);
     const _hvOut=(data.handovers||[]).filter(x=>x.from===_me).reduce((s,x)=>s+Number(x.amount||0),0);
     const _myDep=(data.transactions||[]).filter(t=>t.by===_me).reduce((s,t)=>s+Number(t.amount||0),0);
@@ -3582,6 +3591,20 @@ function renderApp(){
     const mData=getCurData();
     const txList=mData.transactions||[];
     const expList=mData.expenses||[];
+    // المبلغ المقبوض فعلياً — نفس منطق بطاقة "محصّل لم يُودع" حرفياً (مصدر واحد للحقيقة)
+    const _recv=(x)=>{
+      const ds=displayStatus(x);
+      const paid=Number(x.paid_amount)||0;
+      const rent=Number(x.rent)||0;
+      if(x.partial && paid>0 && paid<rent) return paid;
+      if(ds==="collected") return rent;
+      if(ds==="partial") return paid;
+      return 0;
+    };
+    // التحويلات البنكية تُعدّ مودَعة تلقائياً — ليست كاشاً بيد أحد
+    let _bankTotal=0;
+    (mData.units||[]).forEach(u=>(u.partitions||[]).forEach(p=>{if(p.collectionMethod==="bank")_bankTotal+=_recv(p);}));
+    (mData.full||[]).forEach(u=>{if(u.collectionMethod==="bank")_bankTotal+=_recv(u);});
     const totalIncome=txList.reduce((s,t)=>s+Number(t.amount||0),0);
     const maintTotal=(mData.unitMaintenance||[]).reduce((s,m)=>s+Number(m.amount||0),0)+
                      (mData.facilityMaintenance||[]).reduce((s,m)=>s+Number(m.amount||0),0);
@@ -3718,7 +3741,7 @@ function renderApp(){
     const totalLiquidity=Math.round((S.companyBalance+S.revenueBalance+S.installmentBalance)*100)/100;
 
     // ======= Financial Validation Engine =======
-    const _vDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
+    const _vDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0)+_bankTotal;
     let _vLate=0,_vPartialRem=0,_vReceived=0,_vPending=0;
     const _vCalc=(x)=>{
       const ds=displayStatus(x);
@@ -4023,8 +4046,8 @@ function renderApp(){
         full.forEach(u=>{ receivedTotal+=_received(u); });
         // اليومي يُعتبر محصّلاً (مقبوضاً)
         receivedTotal+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-        // Actual deposits
-        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
+        // Actual deposits + التحويل البنكي (مودَع تلقائياً، ليس بيد الموظفين)
+        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0)+_bankTotal;
         const undeposited=Math.max(0,receivedTotal-deposited);
         if(undeposited<=0) return null;
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #1e3a5f",background:"linear-gradient(135deg,#0c1a2e,#111)"}},[
@@ -4042,17 +4065,13 @@ function renderApp(){
         const custody=emps.map(emp=>{
           let received=0;
           units.forEach(u=>u.partitions.forEach(p=>{
-            if(p.collectedBy===emp){
-              const ds=displayStatus(p);
-              if(ds==="collected")received+=Number(p.rent)||0;
-              else if(ds==="partial")received+=Number(p.paid_amount)||0;
+            if(p.collectedBy===emp&&p.collectionMethod!=="bank"){
+              received+=_recv(p);
             }
           }));
           full.forEach(u=>{
-            if(u.collectedBy===emp){
-              const ds=displayStatus(u);
-              if(ds==="collected")received+=Number(u.rent)||0;
-              else if(ds==="partial")received+=Number(u.paid_amount)||0;
+            if(u.collectedBy===emp&&u.collectionMethod!=="bank"){
+              received+=_recv(u);
             }
           });
           const deposited=txList.filter(t=>t.by===emp).reduce((s,t)=>s+Number(t.amount||0),0);
