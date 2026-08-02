@@ -3775,7 +3775,7 @@ function renderApp(){
     });
     const targetTotalFin=occupied.reduce((s,x)=>s+x.rent,0)+(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     const vacantTotalFin=vacantList.reduce((s,x)=>s+x.rent,0);
-    const collectedTotalFin=txList.reduce((s,t)=>s+Number(t.amount||0),0);
+    const collectedTotalFin=txList.reduce((s,t)=>s+Number(t.amount||0),0)+_bankTotal;
 
     // Total liquidity
     const totalLiquidity=Math.round((S.companyBalance+S.revenueBalance+S.installmentBalance)*100)/100;
