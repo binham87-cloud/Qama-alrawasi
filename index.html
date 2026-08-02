@@ -2769,8 +2769,8 @@ function renderApp(){
         h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:_myCustody>0?"1px solid #1e3a5f":"1px solid #1a1a1a"}},[
           h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#60a5fa"}},[_myCustody.toLocaleString()]),
           h("div",{style:{fontSize:"11px",color:"#888"}},["عهدتي د.إ"])])]),
-      // 📊 التحصيل الشهري — مستهدف / متأخر / إيداع / متبقي
-      h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #1e3a1e"}},[
+      // 📊 التحصيل الشهري — يحيى فقط (نادر لا يرى أرقام الشركة)
+      S.user==="yahia"?h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #1e3a1e"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},["📊 التحصيل الشهري — "+MONTHS[S.month]]),
           h("div",{style:{fontSize:"22px",fontWeight:"900",color:_collColor}},[_collPct+"%"])]),
@@ -2792,10 +2792,10 @@ function renderApp(){
           h("div",{style:{background:"#0f0f0f",borderRadius:"10px",padding:"14px",textAlign:"center"}},[
             h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["المتبقي"]),
             h("div",{style:{fontSize:"22px",fontWeight:"900",color:_remaining===0?"#4ade80":"#f87171"}},[_remaining.toLocaleString()]),
-            h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])])])]),
+            h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])])])]):null,
       // 1) المتأخرات — الأولوية القصوى
       _late.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #7f1d1d"}},[
-        _secHdr("⚠️","متأخرات للتحصيل",_late.length,"#f87171",_lateTotal),
+        _secHdr("⚠️","متأخرات للتحصيل",_late.length,"#f87171",S.user==="nader"?null:_lateTotal),
         h("div",{},_late.map(x=>_row(x.label,x.t+(x.ph?" · "+x.ph:""),x.amt.toLocaleString()+" د.إ","#f87171",x.nav)))]):null,
       // 2) تستحق خلال 3 أيام — استعداد مسبق
       _dueSoon.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #0284c7"}},[
