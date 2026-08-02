@@ -3212,12 +3212,12 @@ function renderApp(){
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الإيجار"]),
               (()=>{const s=h("select",{},[["monthly","شهري"],["daily","يومي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(rentType(p)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=rentType(p);return;}p.rent_type=e.target.value;if(e.target.value==="monthly"){p.end_date="";p.due_date=p.start_date?addMonthsISO(p.start_date,1):"";}if(isOwner){saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},[rentType(p)==="daily"?"تاريخ الدخول":"بداية من"]),
-              (()=>{const inp=h("input",{type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{p.start_date=e.target.value;if(rentType(p)==="monthly")p.due_date=addMonthsISO(e.target.value,1);addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});});return inp;})()]),
+              (()=>{const inp=h("input",{type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.start_date||"";return;}p.start_date=e.target.value;if(rentType(p)==="monthly")p.due_date=addMonthsISO(e.target.value,1);if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()]),
             rentType(p)==="monthly"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نهاية العقد"]),
               (()=>{const inp=h("input",{type:"date",value:p.contract_end||""});inp.addEventListener("change",e=>{const _o=p.contract_end||"";p.contract_end=e.target.value;addLog(data,(USERS[S.user]?.name||S.user)+" عدّل نهاية عقد "+unit.name+" بارتشن "+p.id,{target:unit.name+" #"+p.id,field:"نهاية العقد",oldVal:_o,newVal:e.target.value});saveCurData(data);set({editPart:unit.id+"-"+p.id});});return inp;})()]):null
           ]),
           rentType(p)==="daily"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الخروج"]),
-            (()=>{const inp=h("input",{type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{p.end_date=e.target.value;addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ خروج "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});});return inp;})()
+            (()=>{const inp=h("input",{type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.end_date||"";return;}p.end_date=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ خروج "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()
           ]):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق التلقائي"]),
             h("input",{type:"date",value:dueDateOf(p)||"",disabled:"true"})
           ]),
@@ -3426,9 +3426,10 @@ function renderApp(){
               (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["بداية العقد"]),
-              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{u.start_date=e.target.value;u.due_date=addMonthsISO(e.target.value,1);if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveCurData(data);}set({editPart:"full-"+u.id});});return inp;})()]),
-            h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق"]),
-              h("input",{type:"date",value:dueDateOf(u)||"",disabled:"true"})])]),
+              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=u.start_date||"";return;}u.start_date=e.target.value;u.due_date=addMonthsISO(e.target.value,1);if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveCurData(data);set({editPart:"full-"+u.id});}});return inp;})()]),
+            h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق (تلقائي)"]),
+              h("input",{type:"date",value:dueDateOf(u)||"",disabled:"true"}),
+              !dueDateOf(u)?h("div",{style:{fontSize:"11px",color:"#a16207",marginTop:"3px"}},["↑ سجّل \"بداية العقد\" ويُحسب تلقائياً"]):null])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الكهرباء"]),
               (()=>{const s=h("select",{},[["false","لم تدفع"],["true","دفعت"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(u.elec_paid)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("elec_paid",e.target.value==="true"));return s;})()]),
