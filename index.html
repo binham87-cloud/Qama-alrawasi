@@ -2707,6 +2707,29 @@ function renderApp(){
     // طلباتي المعلقة
     const _myPend=(S.pendingRequests||[]).filter(r=>r.by===_me&&r.status==="pending");
     const _lateTotal=_late.reduce((s,x)=>s+x.amt,0);
+    // 📊 التحصيل الشهري — نظرة عامة (مستهدف/متأخر/إيداع/متبقي)
+    let _target=0,_bank=0;
+    units.forEach(u=>u.partitions.forEach(p=>{
+      const ds=displayStatus(p);
+      if(ds!=="vacant"&&ds!=="staff")_target+=Number(p.rent)||0;
+      const paid=Number(p.paid_amount)||0,rent=Number(p.rent)||0;
+      let got=0;
+      if(ds==="collected")got=rent;else if(ds==="partial")got=paid>0?paid:0;
+      if(got>0&&p.collectionMethod==="bank")_bank+=got;
+    }));
+    full.forEach(u=>{
+      const ds=displayStatus(u);
+      if(ds!=="vacant"&&ds!=="staff")_target+=Number(u.rent)||0;
+      const paid=Number(u.paid_amount)||0,rent=Number(u.rent)||0;
+      let got=0;
+      if(ds==="collected")got=rent;else if(ds==="partial")got=paid>0?paid:0;
+      if(got>0&&u.collectionMethod==="bank")_bank+=got;
+    });
+    _target+=(data.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
+    const _deposited=(data.transactions||[]).reduce((s,t)=>s+Number(t.amount||0),0)+_bank;
+    const _remaining=Math.max(0,_target-_deposited);
+    const _collPct=_target>0?Math.min(100,Math.round(_deposited/_target*100)):0;
+    const _collColor=_collPct>=100?"#4ade80":_collPct>=70?"#facc15":"#f87171";
     const _confirmRenewH=(item)=>{item.x.lastRenewedKey=_k;addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});saveCurData(data);R();};
     const _confirmLeaveH=(item)=>{
       const _t=item.x.tenant||"—";
@@ -2737,6 +2760,30 @@ function renderApp(){
         h("div",{class:"card",style:{padding:"10px",textAlign:"center",border:_myCustody>0?"1px solid #1e3a5f":"1px solid #1a1a1a"}},[
           h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#60a5fa"}},[_myCustody.toLocaleString()]),
           h("div",{style:{fontSize:"11px",color:"#888"}},["عهدتي د.إ"])])]),
+      // 📊 التحصيل الشهري — مستهدف / متأخر / إيداع / متبقي
+      h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #1e3a1e"}},[
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
+          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},["📊 التحصيل الشهري — "+MONTHS[S.month]]),
+          h("div",{style:{fontSize:"22px",fontWeight:"900",color:_collColor}},[_collPct+"%"])]),
+        h("div",{style:{background:"#1a1a1a",borderRadius:"6px",height:"8px",overflow:"hidden",marginBottom:"14px"}},[
+          h("div",{style:{height:"100%",width:_collPct+"%",background:"linear-gradient(90deg,"+_collColor+"88,"+_collColor+")",borderRadius:"6px",transition:"width 0.4s"}})]),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px"}},[
+          h("div",{style:{background:"#0f0f0f",borderRadius:"10px",padding:"14px",textAlign:"center"}},[
+            h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["المستهدف"]),
+            h("div",{style:{fontSize:"22px",fontWeight:"900",color:"#fff"}},[_target.toLocaleString()]),
+            h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])]),
+          h("div",{style:{background:"#0f0f0f",borderRadius:"10px",padding:"14px",textAlign:"center"}},[
+            h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["متأخر"]),
+            h("div",{style:{fontSize:"22px",fontWeight:"900",color:_lateTotal>0?"#f87171":"#4ade80"}},[_lateTotal.toLocaleString()]),
+            h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])]),
+          h("div",{style:{background:"#0f0f0f",borderRadius:"10px",padding:"14px",textAlign:"center"}},[
+            h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["الإيداع"]),
+            h("div",{style:{fontSize:"22px",fontWeight:"900",color:"#4ade80"}},[_deposited.toLocaleString()]),
+            h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])]),
+          h("div",{style:{background:"#0f0f0f",borderRadius:"10px",padding:"14px",textAlign:"center"}},[
+            h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["المتبقي"]),
+            h("div",{style:{fontSize:"22px",fontWeight:"900",color:_remaining===0?"#4ade80":"#f87171"}},[_remaining.toLocaleString()]),
+            h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])])])]),
       // 1) المتأخرات — الأولوية القصوى
       _late.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"1px solid #7f1d1d"}},[
         _secHdr("⚠️","متأخرات للتحصيل",_late.length,"#f87171",_lateTotal),
@@ -3548,6 +3595,52 @@ function renderApp(){
     const instDaysColor=instDaysLeft>30?"#4ade80":instDaysLeft>14?"#facc15":"#f87171";
     const paidCount=sched.filter(x=>x.paid).length;
     const saveBalancesFin=()=>{try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}};
+    const addMoneyForm=(type)=>{
+      const isProfit=type==="profit";
+      let amount="", note="", date=S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",selectedAccount="company";
+      return h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
+        h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff",marginBottom:"10px"}},[isProfit?"تحويل أرباح لصاحب المبنى":"دفع القسط"]),
+        (()=>{const inp=h("input",{type:"number",placeholder:"المبلغ",style:{marginBottom:"8px"}});inp.addEventListener("input",e=>amount=e.target.value);return inp;})(),
+        (()=>{const inp=h("input",{type:"date",value:date,style:{marginBottom:"8px"}});inp.addEventListener("input",e=>date=e.target.value);return inp;})(),
+        (()=>{const inp=h("input",{type:"text",placeholder:"ملاحظة اختياري",style:{marginBottom:"8px"}});inp.addEventListener("input",e=>note=e.target.value);return inp;})(),
+        !isProfit?h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}},[
+          h("button",{class:"btn",id:"acc-company",style:{padding:"10px",borderRadius:"8px",fontSize:"14px",fontWeight:"600",
+            background:selectedAccount==="company"?"#fff":"#1a1a1a",
+            color:selectedAccount==="company"?"#000":"#555",
+            border:selectedAccount==="company"?"none":"1px solid #2a2a2a"},
+            onClick:()=>{selectedAccount="company";document.getElementById("acc-company").style.background="#fff";document.getElementById("acc-company").style.color="#000";document.getElementById("acc-revenue").style.background="#1a1a1a";document.getElementById("acc-revenue").style.color="#555";}},
+            ["🏢 حساب الشركة | "+S.companyBalance.toLocaleString()+" د.إ"]),
+          h("button",{class:"btn",id:"acc-revenue",style:{padding:"10px",borderRadius:"8px",fontSize:"14px",fontWeight:"600",
+            background:selectedAccount==="revenue"?"#fff":"#1a1a1a",
+            color:selectedAccount==="revenue"?"#000":"#555",
+            border:selectedAccount==="revenue"?"none":"1px solid #2a2a2a"},
+            onClick:()=>{selectedAccount="revenue";document.getElementById("acc-revenue").style.background="#fff";document.getElementById("acc-revenue").style.color="#000";document.getElementById("acc-company").style.background="#1a1a1a";document.getElementById("acc-company").style.color="#555";}},
+            ["💰 حساب الإيرادات | "+S.revenueBalance.toLocaleString()+" د.إ"])]):null,
+        h("div",{style:{display:"flex",gap:"8px"}},[
+          h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
+            if(!amount)return showMsg("أدخل المبلغ");
+            const item={id:Date.now(),amount:Number(amount),date,note,by:S.user,account:selectedAccount};
+            if(isProfit){mData.profits.push(item);addLog&&addLog(mData,"مدير حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");set({showAddProfit:false});}
+            else{
+              mData.installments.push(item);
+              // Deduct from selected account
+              const amt=Number(amount);
+              if(selectedAccount==="company"){
+                S.companyBalance=Math.max(0,S.companyBalance-amt);
+              } else {
+                S.revenueBalance=Math.max(0,S.revenueBalance-amt);
+              }
+              // Save balances to Firebase
+              try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+              addLog&&addLog(mData,"مدير سجّل دفع قسط: "+Number(amount).toLocaleString()+" د.إ من "+(selectedAccount==="company"?"حساب الشركة":"حساب الإيرادات"));
+              set({showAddInstallment:false});
+            }
+            saveCurData(mData);showMsg("✓ تم الحفظ");
+          }},["حفظ"]),
+          h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"15px"},onClick:()=>isProfit?set({showAddProfit:false}):set({showAddInstallment:false})},["إلغاء"])
+        ])
+      ]);
+    };
     const installmentCard=h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #854d0e"}},[
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}},[
         h("div",{},[
@@ -3649,6 +3742,33 @@ function renderApp(){
     const _vSum=_vDeposited+_vLate+_vPending+_vPartialRem+_vUndeposited;
     const _vDiff=Math.round((_vTarget-_vSum)*100)/100;
     const _vBalanced=Math.abs(_vDiff)<1;
+    const _copyReport=()=>{
+      const lines=[
+        "تقرير "+MONTHS[S.month]+" "+S.year+" — قمة الرواسي",
+        "التوازن: "+(_vBalanced?"متوازن ✅":"فرق "+Math.abs(_vDiff).toLocaleString()+" د.إ ⚠️"),
+        "المستهدف: "+_vTarget.toLocaleString()+" د.إ",
+        "المودع: "+_vDeposited.toLocaleString()+" د.إ",
+        "متأخر: "+_vLate.toLocaleString()+" د.إ",
+        "لم يحل عليه: "+_vPending.toLocaleString()+" د.إ",
+        "جزئي متبقي: "+_vPartialRem.toLocaleString()+" د.إ",
+        "محصّل لم يودع: "+_vUndeposited.toLocaleString()+" د.إ",
+        "",
+        "إجمالي الدخل: "+totalIncome.toLocaleString()+" د.إ",
+        "إجمالي المصاريف: "+totalExp.toLocaleString()+" د.إ",
+        "الصافي: "+netTotal.toLocaleString()+" د.إ",
+        "",
+        "السيولة الكلية: "+totalLiquidity.toLocaleString()+" د.إ",
+        "  رصيد الشركة: "+S.companyBalance.toLocaleString()+" د.إ",
+        "  رصيد الإيرادات: "+S.revenueBalance.toLocaleString()+" د.إ",
+        "  رصيد اقتطاع القسط: "+S.installmentBalance.toLocaleString()+" د.إ"
+      ];
+      const text=lines.join("\n");
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(()=>showMsg("✓ تم نسخ التقرير")).catch(()=>set({reportText:text}));
+      } else {
+        set({reportText:text});
+      }
+    };
     content=h("div",{},[
       monthNav(),
       h("div",{class:"card",style:{padding:"12px",marginBottom:"12px",border:_vBalanced?"1px solid #166534":"2px solid #b91c1c",background:_vBalanced?"#052e16":"#2e0505"}},[
