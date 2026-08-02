@@ -3642,9 +3642,56 @@ function renderApp(){
       return 0;
     };
     // التحويلات البنكية تُعدّ مودَعة تلقائياً — ليست كاشاً بيد أحد
+    // التحويلات البنكية: تبقى "محصّلة ولم تودع" حتى يعتمدها المدير، وعندها تُضاف للإيداعات تلقائياً
     let _bankTotal=0;
-    (mData.units||[]).forEach(u=>(u.partitions||[]).forEach(p=>{if(p.collectionMethod==="bank")_bankTotal+=_recv(p);}));
-    (mData.full||[]).forEach(u=>{if(u.collectionMethod==="bank")_bankTotal+=_recv(u);});
+    const _bankPend=[];
+    (mData.units||[]).forEach(u=>(u.partitions||[]).forEach(p=>{
+      if(p.collectionMethod==="bank"){
+        const v=_recv(p);
+        if(v>0){_bankTotal+=v; if(!p.bankDeposited)_bankPend.push({ref:"bank_"+u.id+"_"+p.id,name:u.name+" #"+p.id,tenant:p.tenant||"—",amt:v,obj:p});}
+      }
+    }));
+    (mData.full||[]).forEach(u=>{
+      if(u.collectionMethod==="bank"){
+        const v=_recv(u);
+        if(v>0){_bankTotal+=v; if(!u.bankDeposited)_bankPend.push({ref:"bank_full_"+u.id,name:"شقة "+u.id,tenant:u.tenant||"—",amt:v,obj:u});}
+      }
+    });
+    const _bankPendTotal=_bankPend.reduce((s,x)=>s+x.amt,0);
+    const _approveBank=(items)=>{
+      if(!items.length)return;
+      const fresh=getCurData();
+      const existing=new Set((fresh.transactions||[]).map(t=>t.bankRef).filter(Boolean));
+      let added=0,sum=0;
+      items.forEach(it=>{
+        if(existing.has(it.ref))return; // منع التكرار
+        fresh.transactions.push({
+          id:Date.now()+Math.floor(Math.random()*1000),
+          type:"تحويل بنكي",
+          desc:"تحويل بنكي — "+it.name+(it.tenant&&it.tenant!=="—"?" ("+it.tenant+")":""),
+          amount:it.amt,
+          date:todayISO(),
+          by:S.user,
+          bankRef:it.ref
+        });
+        existing.add(it.ref);
+        // وسم الوحدة كمودعة حتى لا تُعتمد مرتين
+        if(it.ref.startsWith("bank_full_")){
+          const fu=(fresh.full||[]).find(x=>"bank_full_"+x.id===it.ref);
+          if(fu)fu.bankDeposited=true;
+        } else {
+          (fresh.units||[]).forEach(u=>(u.partitions||[]).forEach(p=>{
+            if("bank_"+u.id+"_"+p.id===it.ref)p.bankDeposited=true;
+          }));
+        }
+        added++;sum+=it.amt;
+      });
+      if(added===0){showMsg("لا يوجد جديد للاعتماد");return;}
+      addLog(fresh,(USERS[S.user]?.name||S.user)+" اعتمد "+added+" تحويل بنكي كإيداع بمجموع "+sum.toLocaleString()+" د.إ",{target:"الإيداعات",field:"اعتماد تحويل بنكي",oldVal:"معلّق",newVal:sum+" د.إ"});
+      saveCurData(fresh);
+      showMsg("✓ أُضيف "+sum.toLocaleString()+" د.إ للإيداعات");
+      R();
+    };
     const totalIncome=txList.reduce((s,t)=>s+Number(t.amount||0),0);
     const maintTotal=(mData.unitMaintenance||[]).reduce((s,m)=>s+Number(m.amount||0),0)+
                      (mData.facilityMaintenance||[]).reduce((s,m)=>s+Number(m.amount||0),0);
@@ -3775,13 +3822,13 @@ function renderApp(){
     });
     const targetTotalFin=occupied.reduce((s,x)=>s+x.rent,0)+(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     const vacantTotalFin=vacantList.reduce((s,x)=>s+x.rent,0);
-    const collectedTotalFin=txList.reduce((s,t)=>s+Number(t.amount||0),0)+_bankTotal;
+    const collectedTotalFin=txList.reduce((s,t)=>s+Number(t.amount||0),0);
 
     // Total liquidity
     const totalLiquidity=Math.round((S.companyBalance+S.revenueBalance+S.installmentBalance)*100)/100;
 
     // ======= Financial Validation Engine =======
-    const _vDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0)+_bankTotal;
+    const _vDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
     let _vLate=0,_vPartialRem=0,_vReceived=0,_vPending=0;
     const _vCalc=(x)=>{
       const ds=displayStatus(x);
@@ -4086,19 +4133,44 @@ function renderApp(){
         full.forEach(u=>{ receivedTotal+=_received(u); });
         // اليومي يُعتبر محصّلاً (مقبوضاً)
         receivedTotal+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-        // Actual deposits + التحويل البنكي (مودَع تلقائياً، ليس بيد الموظفين)
-        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0)+_bankTotal;
+        // الإيداعات الفعلية فقط — التحويل البنكي لا يُحتسب حتى يعتمده المدير
+        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
         const undeposited=Math.max(0,receivedTotal-deposited);
         if(undeposited<=0) return null;
+        const _cashPart=Math.max(0,undeposited-_bankPendTotal);
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #1e3a5f",background:"linear-gradient(135deg,#0c1a2e,#111)"}},[
           h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
             h("div",{},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#60a5fa",marginBottom:"4px"}},["💼 محصّل ولم يُودع بعد"]),
               h("div",{style:{fontSize:"12px",color:"#555"}},["إيجارات المحصّلة − الإيداعات الفعلية"])]),
             h("div",{style:{fontSize:"26px",fontWeight:"900",color:"#60a5fa"}},[undeposited.toLocaleString()+" د.إ"])]),
-          h("div",{style:{fontSize:"12px",color:"#3b82f6",background:"#1e3a5f",borderRadius:"6px",padding:"6px 10px",marginTop:"4px"}},
-            ["هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"])]);
+          _bankPendTotal>0?h("div",{style:{display:"flex",gap:"8px",marginTop:"6px"}},[
+            h("div",{style:{flex:"1",background:"#0f0f0f",borderRadius:"8px",padding:"8px",textAlign:"center"}},[
+              h("div",{style:{fontSize:"11px",color:"#666"}},["كاش عند الموظفين"]),
+              h("div",{style:{fontSize:"15px",fontWeight:"800",color:"#60a5fa"}},[_cashPart.toLocaleString()+" د.إ"])]),
+            h("div",{style:{flex:"1",background:"#1a1505",borderRadius:"8px",padding:"8px",textAlign:"center"}},[
+              h("div",{style:{fontSize:"11px",color:"#a16207"}},["تحويلات بنكية معلّقة"]),
+              h("div",{style:{fontSize:"15px",fontWeight:"800",color:"#fbbf24"}},[_bankPendTotal.toLocaleString()+" د.إ"])])]):null,
+          h("div",{style:{fontSize:"12px",color:"#3b82f6",background:"#1e3a5f",borderRadius:"6px",padding:"6px 10px",marginTop:"6px"}},
+            [_bankPendTotal>0?"الكاش يجب أن يكون عند الموظفين · التحويلات البنكية تنتظر اعتمادك أدناه":"هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"])]);
       })(),
+      // ======= 🏦 تحويلات بنكية بانتظار اعتماد المدير =======
+      (_bankPend.length>0)?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"2px solid #a16207",background:"#1a1505"}},[
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
+          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24"}},["🏦 تحويلات بنكية بانتظار الاعتماد ("+_bankPend.length+")"]),
+          h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#fbbf24"}},[_bankPendTotal.toLocaleString()+" د.إ"])]),
+        h("div",{style:{fontSize:"11px",color:"#a16207",marginBottom:"8px"}},
+          ["تأكّد من وصول المبلغ للحساب البنكي، ثم اعتمده — سيُضاف تلقائياً إلى الإيداعات."]),
+        h("div",{},_bankPend.map(x=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #2a2207"}},[
+          h("div",{style:{flex:"1",minWidth:"0"}},[
+            h("div",{style:{fontSize:"14px",color:"#fff"}},[x.name]),
+            h("div",{style:{fontSize:"11px",color:"#666"}},[x.tenant])]),
+          h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fbbf24",flexShrink:"0"}},[x.amt.toLocaleString()+" د.إ"]),
+          h("button",{class:"btn",style:{background:"#052e16",border:"1px solid #16a34a",color:"#4ade80",borderRadius:"6px",padding:"5px 10px",fontSize:"12px",fontWeight:"700",flexShrink:"0"},
+            onClick:()=>_approveBank([x])},["✓ اعتماد"])]))),
+        _bankPend.length>1?h("button",{class:"btn",style:{width:"100%",marginTop:"10px",background:"#16a34a",color:"#fff",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},
+          onClick:()=>_approveBank(_bankPend)},["✓ اعتماد الكل ("+_bankPendTotal.toLocaleString()+" د.إ)"]):null
+      ]):null,
       // ======= عهدة الموظفين =======
       (()=>{
         const emps=Object.keys(USERS).filter(k=>USERS[k].role!=="owner");
