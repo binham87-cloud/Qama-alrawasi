@@ -45,13 +45,18 @@ const MONTHS=["يناير","فبراير","مارس","أبريل","مايو","ي
 const CY=2026;
 const NOW_M=new Date().getMonth();
 const NOW_Y=new Date().getFullYear();
+function isPastMonth(){ return (S.year<NOW_Y)||(S.year===NOW_Y&&S.month<NOW_M); }
 function canEdit(){
   if(!S.user)return false;
-  if(USERS[S.user].role==="owner")return true;
-  // Check if owner granted this employee full access
+  if(USERS[S.user].role==="owner"){
+    // الأشهر المنتهية مقفلة على المدير أيضاً — تُفتح بتأكيد صريح لهذا الشهر فقط
+    if(isPastMonth() && S.unlockMonth!==getMonthKey(S.year,S.month))return false;
+    return true;
+  }
+  // الأشهر المنتهية مقفلة نهائياً على الموظفين — لا تعديل ولا حذف بعد انقضاء الشهر
+  if(isPastMonth())return false;
   const perms=S.permissions[S.user];
   if(perms&&perms.allMonths)return true;
-  // Yahia gets ±1 month window by default
   if(S.user==="yahia"){
     const cur=new Date(NOW_Y,NOW_M,1);
     const sel=new Date(S.year,S.month,1);
@@ -2077,8 +2082,20 @@ const SC={
   pending:{label:"لم يحل عليه",bg:"#082f49",border:"#0284c7",text:"#7dd3fc"},
   late:{label:"متأخر",bg:"#450a0a",border:"#dc2626",text:"#f87171"},
   vacant:{label:"فارغ",bg:"#1c1917",border:"#333",text:"#a8a29e"},
-  staff:{label:"موظفين",bg:"#1e1b4b",border:"#4f46e5",text:"#a5b4fc"}
+  staff:{label:"موظفين",bg:"#1e1b4b",border:"#4f46e5",text:"#a5b4fc"},
+  expired:{label:"انتهت المدة – يحتاج إجراء",bg:"#3b0764",border:"#a855f7",text:"#e9d5ff"}
 };
+
+// انتهت مدة الدورة ولم يُتخذ إجراء (مستمر/غادر).
+// لا تُعد فارغة ولا مستمرة — تبقى ظاهرة حتى يقرر الموظف.
+function needsAction(x){
+  if(!x)return false;
+  if(x.status==="vacant"||x.status==="staff")return false;
+  if(rentType(x)==="daily")return false;
+  const end=x.contract_end||"";
+  if(!end)return false;
+  return todayISO()>=end;
+}
 
 function paidValue(x){
   const rent=Number(x?.rent||0), paid=Number(x?.paid_amount||0);
@@ -2157,6 +2174,8 @@ function displayStatus(x){
   if(isPartialPaid(x) && Number(x?.paid_amount||0)>0)return "partial";
   if(st==="collected")return "collected";
   if(isPartialPaid(x))return "partial";
+  // انتهت الدورة ولم يُتخذ إجراء — لا متأخر ولا لم يحل عليه
+  if(needsAction(x))return "expired";
   // تلقائي حسب تاريخ الاستحقاق: لم يصل الموعد = "لم يحل عليه"، تجاوزه = "متأخر"
   // شهر انتهى فعلاً لا يمكن أن يحتوي "لم يحل عليه" — كل غير محصّل فيه = متأخر
   const _monthEnded=(S.year<NOW_Y)||(S.year===NOW_Y&&S.month<NOW_M);
@@ -2286,7 +2305,7 @@ async function loadCustomUnits(){
 function prevMonthYM(y,m){ return m===0 ? [y-1,11] : [y,m-1]; }
 function prevMonthKeyOf(y,m){ const a=prevMonthYM(y,m); return getMonthKey(a[0],a[1]); }
 // بيانات الساكن والعقد فقط — لا شيء مالي
-const CARRY_FIELDS=["tenant","phone","deposit","note","rent","rent_type","start_date","due_date","contract_end","collectionMethod","elec_amount"];
+const CARRY_FIELDS=["tenant","phone","deposit","note","rent","rent_type","start_date","due_date","contract_end","collectionMethod","elec_amount","cycle_anchor","cycle_i","renewStamp"];
 // بند فارغ تماماً = لا أثر عمل فيه. شرط عدم المساس بأي بيانات موجودة.
 function _isBlankItem(x){
   if(!x)return true;
@@ -2302,8 +2321,40 @@ function isBlankMonth(d){
   if(all.length===0)return false;
   return all.every(function(x){return _isBlankItem(x);});
 }
+// ✓ مستمر: يتقدّم بالدورة شهراً واحداً ويصفّر تحصيل الفترة الجديدة.
+// idempotent: لو ضُغط مرتين لا تتقدّم الدورة مرتين (renewStamp يحمل نهاية الدورة المعتمدة).
+function renewCycle(x){
+  if(!x)return false;
+  const anchor=x.cycle_anchor||x.start_date||"";
+  if(!anchor)return false;
+  // منع الترحيل المكرر: لا تجديد إلا لدورة انتهت فعلاً.
+  // بعد أول ضغطة تصير النهاية في المستقبل، فالضغطة الثانية تُرفض تلقائياً.
+  if(!needsAction(x))return false;
+  const i=(Number(x.cycle_i)||0)+1;
+  const newStart=addMonthsISO(anchor,i);
+  x.cycle_anchor=anchor;
+  x.cycle_i=i;
+  x.start_date=newStart;
+  x.contract_end=addMonthsISO(anchor,i+1);
+  x.due_date=newStart;
+  x.renewStamp=newStart;
+  // تصفير تحصيل الفترة الجديدة
+  x.status="late"; x.paid_amount=0; x.partial=false;
+  x.collectedBy=""; x.collectedAt=""; x.elec_paid=false;
+  x.bankDeposited=false; x.bankDepositedAmount=0;
+  return true;
+}
+
+// رقم الدورة الموافق لشهر معيّن — يُحسب من المرساة الأصلية لا بالتراكم،
+// فلا ينجرف التاريخ في الأشهر القصيرة ولا عند تخطّي شهر كامل.
+function cycleIndexFor(anchor,y,m){
+  if(!anchor)return 0;
+  const ay=Number(anchor.slice(0,4)), am=Number(anchor.slice(5,7))-1;
+  if(!ay)return 0;
+  return Math.max(0,(Number(y)-ay)*12+(Number(m)-am));
+}
 // ينسخ بيانات المستأجر والسعر من prev إلى data. يعيد true إن تم.
-function applyCarryForward(data,prev){
+function applyCarryForward(data,prev,y,m){
   if(!prev||!Array.isArray(prev.units))return false;
   const apply=function(dst,src){
     if(!src||!dst)return;
@@ -2314,6 +2365,13 @@ function applyCarryForward(data,prev){
     if(src.status==="staff"){ dst.status="staff"; dst.note=src.note||dst.note||"موظفين"; return; }
     if(src.status==="vacant"){ dst.status="vacant"; dst.tenant=""; dst.note=src.note||""; return; }
     CARRY_FIELDS.forEach(function(f){ if(src[f]!==undefined&&src[f]!=="")dst[f]=src[f]; });
+    // تقدّم الدورة تلقائياً: بداية الدورة الجديدة = نهاية السابقة، والنهاية = بعدها بشهر
+    // الدورة تُنقل كما هي — لا تتقدّم تلقائياً.
+    // التقدّم يحدث فقط بضغطة "✓ مستمر" (renewCycle)، فلا يُرحَّل مَن غادر بالخطأ.
+    if((src.rent_type||rentType(src))!=="daily"){
+      dst.cycle_anchor=src.cycle_anchor||src.start_date||"";
+      dst.cycle_i=Number(src.cycle_i)||0;
+    }
     // التحصيل يبدأ من صفر — لا يُرحَّل أبداً
     dst.status="late"; dst.paid_amount=0; dst.partial=false;
     dst.collectedBy=""; dst.collectedAt=""; dst.elec_paid=false;
@@ -2406,7 +2464,7 @@ function createZeroMonthData(y,m){
     try{
       const _pk=prevMonthKeyOf(y,m);
       const _raw=localStorage.getItem("qama_month_"+_pk);
-      if(_raw){ const _prev=JSON.parse(_raw); _prev._key=_pk; if(!isBlankMonth(_prev))applyCarryForward(data,_prev); }
+      if(_raw){ const _prev=JSON.parse(_raw); _prev._key=_pk; if(!isBlankMonth(_prev))applyCarryForward(data,_prev,y,m); }
     }catch(e){}
   }
   return data;
@@ -2543,14 +2601,14 @@ async function loadMonthOnline(y,m){
         // بعد إعادة البناء: نُرحّل من الشهر السابق (من السيرفر) بدل البدء فارغاً
         if(!isAprilMonth(y,m)&&!isBeforeFirstMonth(y,m)){
           const _prev=await fetchPrevForCarry(y,m);
-          if(_prev)applyCarryForward(data,_prev);
+          if(_prev)applyCarryForward(data,_prev,y,m);
         }
         await setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true});
         S.syncMsg=isAprilMonth(y,m)?"تم تحميل إيرادات أبريل":(data.monthInitMode==="carry-v1"?"تم بناء الشهر من الشهر السابق":"بدأ الشهر من الصفر");
       }else if(isBlankMonth(data)&&!isAprilMonth(y,m)&&!isBeforeFirstMonth(y,m)){
         // إصلاح ذاتي: شهر أُنشئ سابقاً بالتصفّح وبقي فارغاً تماماً — يُبنى من الشهر السابق
         const _prev=await fetchPrevForCarry(y,m);
-        if(_prev&&applyCarryForward(data,_prev)){
+        if(_prev&&applyCarryForward(data,_prev,y,m)){
           mergeCustomUnits(data,y,m);
           await setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true});
           S.syncMsg="تم بناء الشهر من الشهر السابق";
@@ -2571,7 +2629,7 @@ async function loadMonthOnline(y,m){
       // شهر جديد: يُبنى من الشهر السابق (من السيرفر) — الأسماء والتواريخ والأسعار تنتقل، والمقبوض صفر
       if(!isAprilMonth(y,m)&&!isBeforeFirstMonth(y,m)){
         const _prev=await fetchPrevForCarry(y,m);
-        if(_prev)applyCarryForward(data,_prev);
+        if(_prev)applyCarryForward(data,_prev,y,m);
       }
       await setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true});
       localStorage.setItem("qama_month_"+k,JSON.stringify(data));
@@ -2778,6 +2836,12 @@ function renderApp(){
       h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
+        (USERS[S.user]&&USERS[S.user].role==="owner"&&isPastMonth())?h("button",{class:"btn",style:{background:S.unlockMonth===getMonthKey(S.year,S.month)?"#3a2505":"#111",border:"1px solid "+(S.unlockMonth===getMonthKey(S.year,S.month)?"#d97706":"#222"),borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:S.unlockMonth===getMonthKey(S.year,S.month)?"#fbbf24":"#888"},onClick:()=>{
+          const _k=getMonthKey(S.year,S.month);
+          if(S.unlockMonth===_k){set({unlockMonth:null});showMsg("🔒 أُقفل الشهر");return;}
+          if(S.confirmUnlock!==_k){set({confirmUnlock:_k});showMsg("⚠ شهر منتهٍ — اضغط مرة أخرى لفتحه للتعديل");return;}
+          set({unlockMonth:_k,confirmUnlock:null});showMsg("🔓 فُتح الشهر للتعديل");
+        }},[S.unlockMonth===getMonthKey(S.year,S.month)?"🔓 مفتوح":"🔒 مقفل"]):null,
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:()=>{loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
         h("button",{class:"btn",style:{background:"#1a1a1a",border:"1px solid #222",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",color:"#666"},onClick:()=>set({screen:"home",user:null,selUnit:null,editPart:null,showAddExp:false,showAddTx:false,showAddProfit:false,showAddInstallment:false})},["خروج"])])]),
     h("div",{style:{display:"flex",gap:"4px",overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}},tabs.map(t=>
@@ -2808,7 +2872,7 @@ function renderApp(){
       else if(ds==="pending"){const d=dueDateOf(x);if(d&&d<=_soonLimit)_dueSoon.push({label,t:x.tenant||"—",due:d,amt:Number(x.rent)||0,nav});}
       if(rentType(x)==="monthly"&&x.status!=="vacant"&&x.status!=="staff"){
         if(!x.due_date&&!x.start_date)_noDates.push({label,nav});
-        if(_real&&x.lastRenewedKey!==_k)_renew.push({x,label});
+        if(_real&&needsAction(x))_renew.push({x,label});
       }
       if(x.status==="vacant"&&Number(x.deposit||0)>0)_deps.push({label,t:x.tenant||"—",amt:Number(x.deposit)});
     };
@@ -2841,7 +2905,7 @@ function renderApp(){
     let _target=0,_bank=0;
     units.forEach(u=>u.partitions.forEach(p=>{
       const ds=displayStatus(p);
-      if(ds!=="vacant"&&ds!=="staff")_target+=Number(p.rent)||0;
+      if(ds!=="vacant"&&ds!=="staff"&&ds!=="expired")_target+=Number(p.rent)||0;
       const paid=Number(p.paid_amount)||0,rent=Number(p.rent)||0;
       let got=0;
       if(ds==="collected")got=rent;else if(ds==="partial")got=paid>0?paid:0;
@@ -2849,7 +2913,7 @@ function renderApp(){
     }));
     full.forEach(u=>{
       const ds=displayStatus(u);
-      if(ds!=="vacant"&&ds!=="staff")_target+=Number(u.rent)||0;
+      if(ds!=="vacant"&&ds!=="staff"&&ds!=="expired")_target+=Number(u.rent)||0;
       const paid=Number(u.paid_amount)||0,rent=Number(u.rent)||0;
       let got=0;
       if(ds==="collected")got=rent;else if(ds==="partial")got=paid>0?paid:0;
@@ -2860,7 +2924,7 @@ function renderApp(){
     const _remaining=Math.max(0,_target-_deposited);
     const _collPct=_target>0?Math.min(100,Math.round(_deposited/_target*100)):0;
     const _collColor=_collPct>=100?"#4ade80":_collPct>=70?"#facc15":"#f87171";
-    const _confirmRenewH=(item)=>{item.x.lastRenewedKey=_k;addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});saveCurData(data);R();};
+    const _confirmRenewH=(item)=>{if(S.renewing)return; S.renewing=true; setTimeout(()=>{S.renewing=false;},800);if(!renewCycle(item.x)){showMsg("⚠ تم التجديد مسبقاً");S.renewing=false;R();return;}item.x.lastRenewedKey=_k;addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});saveCurData(data);R();};
     const _confirmLeaveH=(item)=>{
       const _t=item.x.tenant||"—";
       addLog(data,(USERS[S.user]?.name||S.user)+" سجّل مغادرة "+_t+" من "+item.label+(Number(item.x.deposit||0)>0?" (تأمين "+Number(item.x.deposit).toLocaleString()+" د.إ بحاجة تسوية)":""),{target:item.label,field:"تأكيد شهري",oldVal:_t,newVal:"غادر → فارغ"});
@@ -2954,9 +3018,9 @@ function renderApp(){
       // 4) التأكيد الشهري
       _renew.length>0?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"2px solid #0e7490",background:"#062028"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
-          h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#22d3ee"}},["🔄 تأكيد شهري: مستمر أم غادر؟ ("+_renew.length+")"]),
-          h("button",{class:"btn",style:{fontSize:"12px",color:"#22d3ee",background:"#083344",border:"1px solid #0e7490",borderRadius:"6px",padding:"4px 10px"},onClick:()=>set({showRenewHome:!S.showRenewHome})},[S.showRenewHome?"إخفاء":"عرض"])]),
-        S.showRenewHome?h("div",{style:{marginTop:"8px"}},_renew.map(item=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #0a2a33"}},[
+          h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#22d3ee"}},["⏳ انتهت المدة – يحتاج إجراء ("+_renew.length+")"]),
+          h("button",{class:"btn",style:{fontSize:"12px",color:"#22d3ee",background:"#083344",border:"1px solid #0e7490",borderRadius:"6px",padding:"4px 10px"},onClick:()=>set({hideRenewHome:!S.hideRenewHome})},[S.hideRenewHome?"عرض":"إخفاء"])]),
+        (!S.hideRenewHome)?h("div",{style:{marginTop:"8px"}},_renew.map(item=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #0a2a33"}},[
           h("div",{style:{flex:"1",minWidth:"0"}},[
             h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"600"}},[item.label]),
             h("div",{style:{fontSize:"11px",color:"#666"}},[item.x.tenant||"—"])]),
@@ -3101,6 +3165,11 @@ function renderApp(){
         full.forEach(u=>{
           if(u.contract_end&&u.status!=="vacant"&&u.contract_end<=_limit)_expiring.push({n:"شقة "+u.id,d:u.contract_end,past:u.contract_end<_tdy2});
         });
+        // لا توجد عقود سنوية — كل الإيجارات شهرية/يومية، و contract_end صار "نهاية الدورة".
+        // التنبيه معطّل لأنه سيشمل كل الوحدات كل شهر ويفقد معناه.
+        return null;
+        /* eslint-disable-next-line no-unreachable */
+        // eslint-disable-next-line
         if(_expiring.length===0)return null;
         return h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"14px",border:"1px solid #b45309",background:"#1c1205"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}},["📆 عقود تنتهي خلال 30 يوم ("+_expiring.length+")"]),
@@ -3318,9 +3387,9 @@ function renderApp(){
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الإيجار"]),
               (()=>{const s=h("select",{},[["monthly","شهري"],["daily","يومي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(rentType(p)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=rentType(p);return;}p.rent_type=e.target.value;if(e.target.value==="monthly"){p.end_date="";p.due_date=p.start_date?addMonthsISO(p.start_date,1):"";}if(isOwner){saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},[rentType(p)==="daily"?"تاريخ الدخول":"بداية من"]),
-              (()=>{const inp=h("input",{type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.start_date||"";return;}p.start_date=e.target.value;if(rentType(p)==="monthly")p.due_date=addMonthsISO(e.target.value,1);if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()]),
-            rentType(p)==="monthly"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نهاية العقد"]),
-              (()=>{const inp=h("input",{type:"date",value:p.contract_end||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.contract_end||"";return;}const _o=p.contract_end||"";p.contract_end=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل نهاية عقد "+unit.name+" بارتشن "+p.id,{target:unit.name+" #"+p.id,field:"نهاية العقد",oldVal:_o,newVal:e.target.value});saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()]):null
+              (()=>{const inp=h("input",{type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.start_date||"";return;}p.start_date=e.target.value;if(rentType(p)==="monthly"){p.cycle_anchor=e.target.value;p.cycle_i=0;p.contract_end=addMonthsISO(e.target.value,1);p.due_date=e.target.value;}if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()]),
+            rentType(p)==="monthly"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نهاية الدورة"]),
+              (()=>{const inp=h("input",{type:"date",value:p.contract_end||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.contract_end||"";return;}const _o=p.contract_end||"";p.contract_end=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل نهاية دورة "+unit.name+" بارتشن "+p.id,{target:unit.name+" #"+p.id,field:"نهاية الدورة",oldVal:_o,newVal:e.target.value});saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()]):null
           ]),
           rentType(p)==="daily"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الخروج"]),
             (()=>{const inp=h("input",{type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.end_date||"";return;}p.end_date=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ خروج "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()
@@ -3532,7 +3601,7 @@ function renderApp(){
               (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["بداية العقد"]),
-              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=u.start_date||"";return;}u.start_date=e.target.value;u.due_date=addMonthsISO(e.target.value,1);if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveCurData(data);set({editPart:"full-"+u.id});}});return inp;})()]),
+              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=u.start_date||"";return;}u.start_date=e.target.value;u.cycle_anchor=e.target.value;u.cycle_i=0;u.contract_end=addMonthsISO(e.target.value,1);u.due_date=e.target.value;if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveCurData(data);set({editPart:"full-"+u.id});}});return inp;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق (تلقائي)"]),
               h("input",{type:"date",value:dueDateOf(u)||"",disabled:"true"}),
               !dueDateOf(u)?h("div",{style:{fontSize:"11px",color:"#a16207",marginTop:"3px"}},["↑ سجّل \"بداية العقد\" ويُحسب تلقائياً"]):null])]),
@@ -3678,13 +3747,16 @@ function renderApp(){
       const _needConfirm=[];
       if(_isRealMonth){
         units.forEach(u=>u.partitions.forEach(p=>{
-          if(rentType(p)==="monthly"&&p.status!=="vacant"&&p.status!=="staff"&&p.lastRenewedKey!==_curKey)_needConfirm.push({x:p,label:u.name+" / بارتشن "+p.id});
+          if(needsAction(p))_needConfirm.push({x:p,label:u.name+" / بارتشن "+p.id});
         }));
         full.forEach(u=>{
-          if(rentType(u)==="monthly"&&u.status!=="vacant"&&u.status!=="staff"&&u.lastRenewedKey!==_curKey)_needConfirm.push({x:u,label:"شقة "+u.id});
+          if(needsAction(u))_needConfirm.push({x:u,label:"شقة "+u.id});
         });
       }
       const _confirmRenew=(item)=>{
+        if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+        if(S.renewing)return; S.renewing=true; setTimeout(()=>{S.renewing=false;},800);
+        if(!renewCycle(item.x)){showMsg("⚠ تم التجديد مسبقاً");S.renewing=false;R();return;}
         item.x.lastRenewedKey=_curKey;
         addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});
         saveCurData(data);R();
@@ -3702,9 +3774,9 @@ function renderApp(){
       };
       const renewCard=(_needConfirm.length>0&&canEdit())?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"2px solid #0e7490",background:"#062028"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[
-          h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#22d3ee"}},["🔄 تأكيد شهري: مستمر أم غادر؟ ("+_needConfirm.length+")"]),
-          h("button",{class:"btn",style:{fontSize:"12px",color:"#22d3ee",background:"#083344",border:"1px solid #0e7490",borderRadius:"6px",padding:"4px 10px"},onClick:()=>set({showRenew:!S.showRenew})},[S.showRenew?"إخفاء":"عرض"])]),
-        S.showRenew?h("div",{style:{marginTop:"8px"}},_needConfirm.map(item=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #0a2a33"}},[
+          h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#22d3ee"}},["⏳ انتهت المدة – يحتاج إجراء ("+_needConfirm.length+")"]),
+          h("button",{class:"btn",style:{fontSize:"12px",color:"#22d3ee",background:"#083344",border:"1px solid #0e7490",borderRadius:"6px",padding:"4px 10px"},onClick:()=>set({hideRenew:!S.hideRenew})},[S.hideRenew?"عرض":"إخفاء"])]),
+        (!S.hideRenew)?h("div",{style:{marginTop:"8px"}},_needConfirm.map(item=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",padding:"6px 0",borderBottom:"1px solid #0a2a33"}},[
           h("div",{style:{flex:"1",minWidth:"0"}},[
             h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"600"}},[item.label]),
             h("div",{style:{fontSize:"11px",color:"#666"}},[item.x.tenant||"—"])]),
@@ -3952,8 +4024,8 @@ function renderApp(){
     _vReceived+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     const _vUndeposited=Math.max(0,_vReceived-_vDeposited);
     let _vTarget=0;
-    mData.units.forEach(u=>u.partitions.forEach(p=>{if(displayStatus(p)!=="vacant"&&displayStatus(p)!=="staff")_vTarget+=Number(p.rent)||0;}));
-    (mData.full||[]).forEach(u=>{if(displayStatus(u)!=="vacant"&&displayStatus(u)!=="staff")_vTarget+=Number(u.rent)||0;});
+    mData.units.forEach(u=>u.partitions.forEach(p=>{if(displayStatus(p)!=="vacant"&&displayStatus(p)!=="staff"&&displayStatus(p)!=="expired")_vTarget+=Number(p.rent)||0;}));
+    (mData.full||[]).forEach(u=>{if(displayStatus(u)!=="vacant"&&displayStatus(u)!=="staff"&&displayStatus(u)!=="expired")_vTarget+=Number(u.rent)||0;});
     _vTarget+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     // المعادلة: المستهدف = المودع + المتأخر + لم يحل عليه + الجزئي المتبقي + (محصّل لم يودع)
     const _vSum=_vDeposited+_vLate+_vPending+_vPartialRem+_vUndeposited;
