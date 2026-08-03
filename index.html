@@ -2280,6 +2280,84 @@ async function loadCustomUnits(){
   }catch(e){}
 }
 
+// ========== الترحيل من الشهر السابق (carry-v1) ==========
+// الهدف: بقاء "تاريخ الدخول" (المرساة) وبيانات المستأجر، فيحتسب dueDateOf استحقاق كل شهر تلقائياً.
+// قاعدة صارمة: لا يُرحَّل أي مبلغ أو حالة تحصيل — كل شهر يبدأ بمقبوض صفر.
+function prevMonthYM(y,m){ return m===0 ? [y-1,11] : [y,m-1]; }
+function prevMonthKeyOf(y,m){ const a=prevMonthYM(y,m); return getMonthKey(a[0],a[1]); }
+// بيانات الساكن والعقد فقط — لا شيء مالي
+const CARRY_FIELDS=["tenant","phone","deposit","note","rent","rent_type","start_date","due_date","contract_end","collectionMethod","elec_amount"];
+// بند فارغ تماماً = لا أثر عمل فيه. شرط عدم المساس بأي بيانات موجودة.
+function _isBlankItem(x){
+  if(!x)return true;
+  return !x.tenant && !x.start_date && !Number(x.paid_amount||0) && !x.collectedBy;
+}
+// شهر فارغ تماماً: لا مستأجرين ولا أي عملية مالية
+function isBlankMonth(d){
+  if(!d)return false;
+  if((d.transactions||[]).length||(d.expenses||[]).length||(d.profits||[]).length||
+     (d.installments||[]).length||(d.dailyBookings||[]).length||
+     (d.unitMaintenance||[]).length||(d.facilityMaintenance||[]).length)return false;
+  const all=(d.units||[]).flatMap(u=>u.partitions||[]).concat(d.full||[]);
+  if(all.length===0)return false;
+  return all.every(function(x){return _isBlankItem(x);});
+}
+// ينسخ بيانات المستأجر والسعر من prev إلى data. يعيد true إن تم.
+function applyCarryForward(data,prev){
+  if(!prev||!Array.isArray(prev.units))return false;
+  const apply=function(dst,src){
+    if(!src||!dst)return;
+    if(!_isBlankItem(dst))return;                     // فيه عمل فعلي — لا نقترب إطلاقاً
+    // السعر ينتقل دائماً (حتى للفارغة) — يبقى آخر سعر لا سعر BASE_UNITS
+    if(src.rent!=null)dst.rent=Number(src.rent)||0;
+    if(src.rent_type)dst.rent_type=src.rent_type;
+    if(src.status==="staff"){ dst.status="staff"; dst.note=src.note||dst.note||"موظفين"; return; }
+    if(src.status==="vacant"){ dst.status="vacant"; dst.tenant=""; dst.note=src.note||""; return; }
+    CARRY_FIELDS.forEach(function(f){ if(src[f]!==undefined&&src[f]!=="")dst[f]=src[f]; });
+    // التحصيل يبدأ من صفر — لا يُرحَّل أبداً
+    dst.status="late"; dst.paid_amount=0; dst.partial=false;
+    dst.collectedBy=""; dst.collectedAt=""; dst.elec_paid=false;
+    dst.bankDeposited=false; dst.bankDepositedAmount=0;
+    delete dst.lastRenewedKey;
+  };
+  (data.units||[]).forEach(function(u){
+    const pu=(prev.units||[]).find(function(x){return String(x.id)===String(u.id);});
+    if(!pu)return;
+    (u.partitions||[]).forEach(function(p){
+      apply(p,(pu.partitions||[]).find(function(x){return String(x.id)===String(p.id);}));
+    });
+  });
+  (data.full||[]).forEach(function(f){
+    apply(f,(prev.full||[]).find(function(x){return String(x.id)===String(f.id);}));
+  });
+  data.monthInitMode="carry-v1";
+  data.carriedFrom=prev._key||"";
+  return true;
+}
+// يقرأ وثيقة شهر من Firebase (أدق من نسخة الجهاز)
+async function fetchMonthDoc(y,m){
+  try{
+    const s=await getDoc(doc(db,"months",getMonthKey(y,m)));
+    if(s.exists()){
+      const d=normalizeData(s.data().data||s.data());
+      d._key=getMonthKey(y,m);
+      return d;
+    }
+  }catch(e){}
+  return null;
+}
+// يبحث عن أقرب شهر سابق فيه بيانات فعلية (يتخطى الأشهر الفارغة، حتى 3 أشهر للخلف)
+async function fetchPrevForCarry(y,m){
+  let py=y, pm=m;
+  for(let i=0;i<3;i++){
+    if(pm===0){pm=11;py--;}else{pm--;}
+    if(isBeforeFirstMonth(py,pm))return null;
+    const d=await fetchMonthDoc(py,pm);
+    if(d&&!isBlankMonth(d))return d;
+  }
+  return null;
+}
+
 function createZeroMonthData(y,m){
   const data = {
     monthInitMode:"zero-v2",
@@ -2323,6 +2401,14 @@ function createZeroMonthData(y,m){
     }
   });
   if(isAprilMonth(y,m))return applyAprilImportedRevenue(data,false);
+  // ترحيل احتياطي من نسخة الجهاز (يُستخدم أوفلاين؛ loadMonthOnline يقرأ من السيرفر وهو الأدق)
+  if(!isBeforeFirstMonth(y,m)){
+    try{
+      const _pk=prevMonthKeyOf(y,m);
+      const _raw=localStorage.getItem("qama_month_"+_pk);
+      if(_raw){ const _prev=JSON.parse(_raw); _prev._key=_pk; if(!isBlankMonth(_prev))applyCarryForward(data,_prev); }
+    }catch(e){}
+  }
   return data;
 }
 
@@ -2344,7 +2430,8 @@ function getMonthData(y,m){
 }
 
 function isOldAutoFilledMonth(data){
-  if(!data || data.monthInitMode==="zero-v2")return false;
+  // carry-v1 = شهر مبني من الشهر السابق: فيه مستأجرون بلا عمليات مالية وهذا طبيعي — لا يُمسح
+  if(!data || data.monthInitMode==="zero-v2" || data.monthInitMode==="carry-v1")return false;
   const hasOps=(data.expenses&&data.expenses.length)||(data.transactions&&data.transactions.length)||(data.profits&&data.profits.length)||(data.installments&&data.installments.length)||(data.logs&&data.logs.length);
   if(hasOps)return false;
   const parts=(data.units||[]).flatMap(u=>u.partitions||[]);
@@ -2453,8 +2540,22 @@ async function loadMonthOnline(y,m){
         S.syncMsg="تم تحميل إيرادات أبريل";
       }else if(isOldAutoFilledMonth(data)){
         data=createZeroMonthData(y,m);
+        // بعد إعادة البناء: نُرحّل من الشهر السابق (من السيرفر) بدل البدء فارغاً
+        if(!isAprilMonth(y,m)&&!isBeforeFirstMonth(y,m)){
+          const _prev=await fetchPrevForCarry(y,m);
+          if(_prev)applyCarryForward(data,_prev);
+        }
         await setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true});
-        S.syncMsg=isAprilMonth(y,m)?"تم تحميل إيرادات أبريل":"بدأ الشهر من الصفر";
+        S.syncMsg=isAprilMonth(y,m)?"تم تحميل إيرادات أبريل":(data.monthInitMode==="carry-v1"?"تم بناء الشهر من الشهر السابق":"بدأ الشهر من الصفر");
+      }else if(isBlankMonth(data)&&!isAprilMonth(y,m)&&!isBeforeFirstMonth(y,m)){
+        // إصلاح ذاتي: شهر أُنشئ سابقاً بالتصفّح وبقي فارغاً تماماً — يُبنى من الشهر السابق
+        const _prev=await fetchPrevForCarry(y,m);
+        if(_prev&&applyCarryForward(data,_prev)){
+          mergeCustomUnits(data,y,m);
+          await setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true});
+          S.syncMsg="تم بناء الشهر من الشهر السابق";
+        }else{ S.syncMsg="متصل"; }
+        localStorage.setItem("qama_month_"+k,JSON.stringify(data));
       }else{
         // Merge any custom units added later
         const merged=mergeCustomUnits(data,y,m);
@@ -2467,9 +2568,14 @@ async function loadMonthOnline(y,m){
       localStorage.setItem("qama_month_"+k,JSON.stringify(data));
     }else{
       const data=normalizeData(createZeroMonthData(y,m));
+      // شهر جديد: يُبنى من الشهر السابق (من السيرفر) — الأسماء والتواريخ والأسعار تنتقل، والمقبوض صفر
+      if(!isAprilMonth(y,m)&&!isBeforeFirstMonth(y,m)){
+        const _prev=await fetchPrevForCarry(y,m);
+        if(_prev)applyCarryForward(data,_prev);
+      }
       await setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true});
       localStorage.setItem("qama_month_"+k,JSON.stringify(data));
-      S.syncMsg=isAprilMonth(y,m)?"تم إنشاء أبريل مع الإيرادات":"تم إنشاء شهر جديد من الصفر";
+      S.syncMsg=isAprilMonth(y,m)?"تم إنشاء أبريل مع الإيرادات":(data.monthInitMode==="carry-v1"?"تم بناء الشهر من الشهر السابق":"تم إنشاء شهر جديد من الصفر");
     }
   }catch(e){
     console.error(e);
