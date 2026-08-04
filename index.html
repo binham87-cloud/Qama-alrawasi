@@ -46,6 +46,32 @@ const CY=2026;
 const NOW_M=new Date().getMonth();
 const NOW_Y=new Date().getFullYear();
 function isPastMonth(){ return (S.year<NOW_Y)||(S.year===NOW_Y&&S.month<NOW_M); }
+// القفل المشترك: يفتحه المدير فيراه يحيى ونادر على أجهزتهم، ويُقفل تلقائياً بعد 10 دقائق.
+var UNLOCK_MS=10*60*1000;
+function unlockActive(){
+  var u=S.unlock;
+  if(!u||!u.key)return false;
+  if(u.key!==getMonthKey(S.year,S.month))return false;
+  return (Date.now()-Number(u.at||0))<UNLOCK_MS;
+}
+function unlockLeftMin(){
+  var u=S.unlock; if(!u||!u.at)return 0;
+  return Math.max(0,Math.ceil((UNLOCK_MS-(Date.now()-Number(u.at)))/60000));
+}
+function loadUnlock(){
+  try{
+    import("https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js").then(function(m){
+      return m.getDocFromServer(doc(db,"config","unlock")).catch(function(){return getDoc(doc(db,"config","unlock"));});
+    }).then(function(snap){
+      if(snap&&snap.exists()){ S.unlock=snap.data()||{key:null,at:0}; R(); }
+    }).catch(function(){});
+  }catch(e){}
+}
+function saveUnlock(key){
+  S.unlock={key:key,at:key?Date.now():0,by:S.user};
+  try{ setDoc(doc(db,"config","unlock"),S.unlock,{merge:false}); }catch(e){}
+  R();
+}
 function canEdit(){
   if(!S.user)return false;
   // صلاحية المستخدم الحالي تُقرأ أولاً — "كل الشهور (بالاعتماد)" تتجاوز قفل الأشهر
@@ -54,11 +80,11 @@ function canEdit(){
   if(perms&&perms.allMonths&&USERS[S.user].role!=="owner")return true;
   if(USERS[S.user].role==="owner"){
     // الأشهر المنتهية مقفلة على المدير أيضاً — تُفتح بتأكيد صريح لهذا الشهر فقط
-    if(isPastMonth() && S.unlockMonth!==getMonthKey(S.year,S.month))return false;
+    if(isPastMonth() && !unlockActive())return false;
     return true;
   }
-  // الأشهر المنتهية مقفلة على الموظف بلا صلاحية "كل الشهور"
-  if(isPastMonth())return false;
+  // الأشهر المنتهية مقفلة على الموظف — إلا إذا فتحها المدير (قفل مشترك مؤقت)
+  if(isPastMonth())return unlockActive();
   if(S.user==="yahia"){
     const cur=new Date(NOW_Y,NOW_M,1);
     const sel=new Date(S.year,S.month,1);
@@ -2676,6 +2702,7 @@ function pinPress(d){
       S.tab=USERS[S.pendingUser].role==="owner"?"overview":"emphome";
       S.selUnit=null;S.editPart=null;
       loadPermissions();
+      loadUnlock();
       loadRequests();
       loadCustomUnits();
       R();
@@ -2840,14 +2867,16 @@ function renderApp(){
       h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
-        (USERS[S.user]&&USERS[S.user].role==="owner"&&isPastMonth())?h("button",{class:"btn",style:{background:S.unlockMonth===getMonthKey(S.year,S.month)?"#3a2505":"#111",border:"1px solid "+(S.unlockMonth===getMonthKey(S.year,S.month)?"#d97706":"#222"),borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:S.unlockMonth===getMonthKey(S.year,S.month)?"#fbbf24":"#888"},onClick:()=>{
+        (USERS[S.user]&&USERS[S.user].role==="owner"&&isPastMonth())?h("button",{class:"btn",style:{background:unlockActive()?"#3a2505":"#111",border:"1px solid "+(unlockActive()?"#d97706":"#222"),borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:unlockActive()?"#fbbf24":"#888"},onClick:()=>{
           var _k=getMonthKey(S.year,S.month);
-          if(S.unlockMonth===_k){set({unlockMonth:null});showMsg("🔒 أُقفل الشهر");return;}
-          if(S.confirmUnlock!==_k){set({confirmUnlock:_k});showMsg("⚠ شهر منتهٍ — اضغط مرة أخرى لفتحه للتعديل");return;}
-          set({unlockMonth:_k,confirmUnlock:null});showMsg("🔓 فُتح الشهر للتعديل");
-        }},[S.unlockMonth===getMonthKey(S.year,S.month)?"🔓 مفتوح":"🔒 مقفل"]):null,
-        h("span",{style:{fontSize:"10px",color:"#444",marginLeft:"6px"}},["B7"]),
-        h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:()=>{loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
+          if(unlockActive()){saveUnlock(null);showMsg("🔒 أُقفل الشهر");return;}
+          if(S.confirmUnlock!==_k){set({confirmUnlock:_k});showMsg("⚠ شهر منتهٍ — اضغط مرة أخرى لفتحه 10 دقائق للجميع");return;}
+          S.confirmUnlock=null; saveUnlock(_k);
+          showMsg("🔓 فُتح الشهر 10 دقائق — يظهر عند يحيى ونادر بعد ضغط تحديث");
+          setTimeout(function(){R();},UNLOCK_MS+1000);
+        }},[unlockActive()?("🔓 مفتوح "+unlockLeftMin()+"د"):"🔒 مقفل"]):null,
+        h("span",{style:{fontSize:"10px",color:"#444",marginLeft:"6px"}},["B8"]),
+        h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:()=>{loadMonthOnline(S.year,S.month);loadUnlock();loadBalances().then(()=>R());}},["تحديث"]),
         h("button",{class:"btn",style:{background:"#1a1a1a",border:"1px solid #222",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",color:"#666"},onClick:()=>set({screen:"home",user:null,selUnit:null,editPart:null,showAddExp:false,showAddTx:false,showAddProfit:false,showAddInstallment:false})},["خروج"])])]),
     h("div",{style:{display:"flex",gap:"4px",overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}},tabs.map(t=>
       h("button",{class:"btn",style:{padding:"8px 14px",borderRadius:"8px",fontSize:"16px",flexShrink:"0",
