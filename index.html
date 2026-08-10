@@ -2736,7 +2736,7 @@ function renderApp(){
     ]);
   }
 
-  const tabs=isOwner?["overview","requests","units","daily","occupancy","maintenance","financial","expenses","audit","permissions"]:
+  const tabs=isOwner?["overview","requests","units","daily","occupancy","maintenance","financial","transactions","expenses","audit","permissions"]:
     (["emphome","units","daily","maintenance","expenses"].concat(hasCapability("deposits")?["transactions"]:[]).concat(["myrequests"]));
   const tabLbl={overview:"الرئيسية",emphome:"🏠 الرئيسية",units:"الوحدات",financial:"المالية",expenses:"المصاريف",transactions:"الإيداعات",permissions:"الصلاحيات",requests:"الطلبات",myrequests:"طلباتي",occupancy:"الإشغال",daily:"📅 اليومي",audit:"📋 السجل",maintenance:"الصيانة"};
 
