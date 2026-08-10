@@ -166,7 +166,15 @@ async function submitRequest(type, desc, payload){
     saved=true;
     showMsg("✓ تم إرسال الطلب لاعتماد المدير");
   }catch(e){
-    showMsg("⚠ تعذر إرسال الطلب");
+    // إظهار السبب الفعلي بدل رسالة عامة — يوفّر تشخيصاً بلا فتح Console
+    console.error("submitRequest",e);
+    const c=String(e&&e.code||e&&e.message||"");
+    let t="⚠ تعذر إرسال الطلب";
+    if(c.includes("permission-denied")) t="⛔ القواعد رفضت الطلب — تحقق أن users/"+(S.uid||"")+" فيه role:\"employee\" و userKey:\""+S.user+"\"";
+    else if(c.includes("unauthenticated")) t="⛔ انتهت الجلسة — سجّل خروجاً ثم دخولاً";
+    else if(c.includes("unavailable")||c.includes("network")) t="⚠ لا اتصال — حاول مجدداً";
+    else if(c) t="⚠ تعذر إرسال الطلب — "+c.slice(0,60);
+    showMsg(t);
   }finally{
     delete S.requestLocks[lockKey];
   }
@@ -1933,10 +1941,11 @@ const CALC = (function(){
   // ===== المعادلة الأساسية: المحصّل الفعلي = المودع + عهدة الموظفين =====
   // التحويل البنكي المعلّق خارج الطرفين، ويُعرض في بطاقة مستقلة.
   function staffKeys(){ return Object.keys(USERS).filter(k=>USERS[k]&&USERS[k].role!=="owner"); }
+  // ===== محصّل ولم يودع — رقم واحد للفريق بلا نسبة لأي موظف =====
+  // = ما استُلم فعلاً − ما أُودع − التحويلات البنكية المعلّقة (ليست كاشاً بيد أحد).
+  // لا يعتمد على collectedBy إطلاقاً، فالمبلغ بلا اسم موظف يُحتسب أيضاً.
   function employeeHoldingTotal(d){
-    let t=0;
-    staffKeys().forEach(k=>{ t+=custody(d,k).remaining; });
-    return r2(t);
+    return r2(Math.max(0, collected(d) - deposited(d) - bankPending(d)));
   }
   function actualCollected(d){ return r2(netDepositedForKPI(d) + employeeHoldingTotal(d)); }
   function collectionRate(d){
@@ -2806,7 +2815,9 @@ function renderApp(){
     _target=CALC.target(data);
     _bank=CALC.bankPending(data);
     const _deposited=CALC.depositedTotal(data);
-    const _remaining=CALC.remaining(data);
+    // المتبقي يجب أن يتسق مع "المحصّل" المعروض بجانبه (actualCollected)
+    // وإلا ظهر رقمان بتعريفين مختلفين في بطاقة واحدة.
+    const _remaining=Math.max(0, Math.round((CALC.target(data)-CALC.actualCollected(data))*100)/100);
     const _surplus=CALC.surplus(data);
     // نسبة التحصيل على المحصّل الفعلي (المودع + عهدة الفريق) لا على المودع وحده
     const _actualColl=CALC.actualCollected(data);
@@ -4344,57 +4355,12 @@ function renderApp(){
                   h("div",{style:{fontSize:"10px",color:"#666",flexShrink:"0"}},[a.status==="reversed"?"معكوسة":""])])]))):
             h("div",{style:{fontSize:"12px",color:"#444",marginTop:"8px",textAlign:"center"}},["لا توجد تسويات هذا الشهر"])]);
       })():null,
-      // ======= عهدة الموظفين =======
-      (()=>{
-        const emps=Object.keys(USERS).filter(k=>USERS[k].role!=="owner");
-        const custody=emps.map(emp=>{
-          // من الطبقة المركزية — نفس الأرقام التي يراها الموظف بالضبط
-          const c=CALC.custody(mData,emp);
-          return {emp,name:USERS[emp].name,
-                  received:c.received+c.handoverIn, deposited:c.deposited+c.handoverOut,
-                  remaining:c.remaining, hvIn:c.handoverIn, hvOut:c.handoverOut};
-        }).filter(c=>c.received>0||c.deposited>0);
-        if(custody.length===0)return null;
-        return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #3a2e0c",background:"linear-gradient(135deg,#1a1505,#111)"}},[
-          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24",marginBottom:"10px"}},["👥 عهدة الموظفين"]),
-          h("div",{},custody.map(c=>h("div",{style:{padding:"10px 0",borderBottom:"1px solid #1a1a1a"}},[
-            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
-              h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[c.name]),
-              h("div",{style:{fontSize:"17px",fontWeight:"900",color:c.remaining>0?"#fbbf24":"#4ade80"}},[c.remaining.toLocaleString()+" د.إ"])]),
-            h("div",{style:{display:"flex",gap:"12px",fontSize:"13px"}},[
-              h("span",{style:{color:"#888"}},["استلم: "+c.received.toLocaleString()]),
-              h("span",{style:{color:"#4ade80"}},["أودع: "+c.deposited.toLocaleString()]),
-              h("span",{style:{color:c.remaining>0?"#fbbf24":"#555",fontWeight:"700"}},["المتبقي معه: "+c.remaining.toLocaleString()])])]))),
-          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["استلم = ما حصّله الموظف | أودع = ما سجّله كإيداع | المتبقي = الفرق الذي بحوزته"])]);
-      })(),
-      // ======= محصّل بدون اسم موظف (يفسّر الفرق بين "محصّل لم يودع" ومجموع العهد) =======
-      (()=>{
-        const orphan=[];
-        units.forEach(u=>u.partitions.forEach(p=>{
-          const v=_recv(p);
-          if(v>0&&p.collectionMethod!=="bank"&&!p.collectedBy)orphan.push({name:u.name+" #"+p.id,tenant:p.tenant||"—",amt:v});
-        }));
-        full.forEach(u=>{
-          const v=_recv(u);
-          if(v>0&&u.collectionMethod!=="bank"&&!u.collectedBy)orphan.push({name:"شقة "+u.id,tenant:u.tenant||"—",amt:v});
-        });
-        (data.dailyBookings||[]).forEach(b=>{
-          if(Number(b.total||0)>0&&!b.by)orphan.push({name:"حجز يومي "+(b.unit||""),tenant:b.guest||"—",amt:Number(b.total||0)});
-        });
-        if(orphan.length===0)return null;
-        const oTotal=orphan.reduce((s,x)=>s+x.amt,0);
-        return h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #7f1d1d",background:"#1a0808"}},[
-          h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
-            h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#f87171"}},["⚠️ محصّل بدون اسم موظف ("+orphan.length+")"]),
-            h("div",{style:{fontSize:"17px",fontWeight:"900",color:"#f87171"}},[oTotal.toLocaleString()+" د.إ"])]),
-          h("div",{style:{fontSize:"11px",color:"#a16207",marginBottom:"8px"}},
-            ["هذا المبلغ داخل في \"محصّل لم يودع\" لكنه غير محسوب على عهدة أي موظف — راجع من استلمه فعلياً."]),
-          h("div",{},orphan.map(x=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #2a0f0f"}},[
-            h("div",{},[
-              h("div",{style:{fontSize:"14px",color:"#fff"}},[x.name]),
-              h("div",{style:{fontSize:"11px",color:"#666"}},[x.tenant])]),
-            h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#f87171",flexShrink:"0"}},[x.amt.toLocaleString()+" د.إ"])])))]);
-      })(),
+      // ======= (أُلغيت بطاقة عهدة الموظفين الفردية) =======
+      // المبالغ المحصّلة وغير المودعة تُعرض كرقم واحد للفريق في بطاقة
+      // "محصّل ولم يُودع بعد" أعلاه، بلا نسبتها لأي موظف.
+      // ======= (أُلغيت بطاقة "محصّل بدون اسم موظف") =======
+      // لم تعد ذات معنى: الرقم صار للفريق ولا يعتمد على collectedBy إطلاقاً.
+
       // Vacant units card
       vacantList.length>0?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1a1a1a"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}},[
