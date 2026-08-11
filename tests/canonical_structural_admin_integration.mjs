@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { initializeApp as adminInit } from "firebase-admin/app";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import { initializeApp } from "firebase/app";
+import { connectAuthEmulator, getAuth, signInWithCustomToken } from "firebase/auth";
+import { connectFunctionsEmulator, getFunctions, httpsCallable } from "firebase/functions";
+
+process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080"; process.env.FIREBASE_AUTH_EMULATOR_HOST ||= "127.0.0.1:9099";
+const projectId="qama-test";const admin=adminInit({projectId},"structural-admin-test");const db=getFirestore(admin);const aa=getAdminAuth(admin);
+for(const [uid,key,role] of [["structure_owner","owner_structure","owner"],["structure_employee","employee_structure","employee"]]){await db.collection("users").doc(uid).set({userKey:key,role,active:true});try{await aa.createUser({uid});}catch{}}
+await db.collection("config").doc("canonicalControl").set({state:"CANONICAL_ACTIVE",version:1});
+async function callable(uid,name){const app=initializeApp({projectId,apiKey:"fake",appId:name},name);const auth=getAuth(app);connectAuthEmulator(auth,"http://127.0.0.1:9099",{disableWarnings:true});await signInWithCustomToken(auth,await aa.createCustomToken(uid));const fn=getFunctions(app);connectFunctionsEmulator(fn,"127.0.0.1",5001);return httpsCallable(fn,"structuralCommand");}
+const owner=await callable("structure_owner","structure-owner-app"),employee=await callable("structure_employee","structure-employee-app");let n=0;const call=(command,payload,id=`structural:test:${String(++n).padStart(4,"0")}`)=>owner({command,operationId:id,payload});
+const ledgerBefore=(await db.collection("financialLedger").get()).size;
+await db.collection("config").doc("canonicalControl").set({state:"MAINTENANCE_LOCKED",version:1});
+await assert.rejects(call("createProperty",{propertyId:"property:locked",name:"Locked"},"structural:test:locked-denied"));
+await db.collection("config").doc("canonicalControl").set({state:"CANONICAL_ACTIVE",version:2});
+assert.equal((await db.collection("properties").get()).size,0);
+await call("createProperty",{propertyId:"property:alpha",name:"Alpha"});await call("createProperty",{propertyId:"property:beta",name:"Beta"});
+for(let i=1;i<=7;i++){await call("createUnit",{unitId:`unit:${i}`,propertyId:i<5?"property:alpha":"property:beta",name:`Unit ${i}`});await call("createRentableSpace",{spaceId:`space:${i}`,unitId:`unit:${i}`,name:`Space ${i}`,spaceType:i%2?"partition":"full_unit"});}
+await call("createTenant",{tenantId:"tenant:a",displayName:"Tenant A"});await call("createTenant",{tenantId:"tenant:b",displayName:"Tenant B"});
+await call("createTenancy",{tenancyId:"tenancy:a",tenantId:"tenant:a",spaceId:"space:1",startDate:"2038-01-01",sourceReference:"lease:a"});
+await assert.rejects(call("createTenancy",{tenancyId:"tenancy:conflict",tenantId:"tenant:b",spaceId:"space:1",startDate:"2038-01-02"}));
+await assert.rejects(call("createRentalCycle",{cycleId:"cycle:bad",tenancyId:"tenancy:missing",startDate:"2038-01-01",dueDate:"2038-01-10",contractualAmountFils:100000}));
+const cycle={cycleId:"cycle:a:1",tenancyId:"tenancy:a",startDate:"2038-01-01",dueDate:"2038-01-10",contractualAmountFils:123400,reportingMonth:"2038_0",sourceReference:"lease:a:period:1",origin:"normal"};
+const first=await call("createRentalCycle",cycle,"structural:test:cycle-idempotent"),replay=await call("createRentalCycle",cycle,"structural:test:cycle-idempotent");assert.equal(first.data.entityId,replay.data.entityId);assert.equal(replay.data.replay,true);
+await call("correctRentalCycle",{cycleId:"cycle:a:1",contractualAmountFils:130000,dueDate:"2038-01-12",reason:"signed amendment"});
+await call("renewRentalCycle",{cycleId:"cycle:a:2",previousCycleId:"cycle:a:1",tenancyId:"tenancy:a",startDate:"2038-02-01",dueDate:"2038-02-10",contractualAmountFils:130000,reportingMonth:"2038_1",sourceReference:"lease:a:period:2"});
+await call("endTenancy",{tenancyId:"tenancy:a",endDate:"2038-03-01",reason:"departed"});
+await call("createTenancy",{tenancyId:"tenancy:b",tenantId:"tenant:b",spaceId:"space:1",startDate:"2038-03-02",sourceReference:"lease:b"});
+await assert.rejects(employee({command:"createProperty",operationId:"structural:test:employee-denied",payload:{propertyId:"property:denied",name:"Denied"}}));
+await assert.rejects(call("setUnitActive",{unitId:"unit:1",active:false}));
+assert.ok((await db.collection("properties").doc("property:alpha").get()).exists);assert.ok((await db.collection("properties").doc("property:beta").get()).exists);for(let i=1;i<=7;i++){assert.ok((await db.collection("units").doc(`unit:${i}`).get()).exists);assert.ok((await db.collection("rentableSpaces").doc(`space:${i}`).get()).exists);}assert.ok((await db.collection("rentalCycles").doc("cycle:a:1").get()).exists);assert.ok((await db.collection("rentalCycles").doc("cycle:a:2").get()).exists);assert.ok((await db.collection("auditEvents").get()).size>=15);assert.equal((await db.collection("financialLedger").get()).size,ledgerBefore);
+const oldTenant=(await db.collection("tenancies").doc("tenancy:a").get()).data();assert.equal(oldTenant.tenantId,"tenant:a");assert.equal(oldTenant.status,"ended");
+await db.collection("reconstructionPlans").doc("plan:future").set({id:"plan:future",monthKey:"2044_6",status:"DRAFT"});await db.collection("config").doc("canonicalControl").set({state:"RECONSTRUCTION_ALLOWED",version:3});
+const reconstructed={propertyId:"property:reconstructed",name:"Reconstructed",origin:"reconstruction",reconstructionPlanId:"plan:future"};
+await call("createProperty",reconstructed,"structural:test:reconstruction-idempotent");const reconstructionReplay=await call("createProperty",reconstructed,"structural:test:reconstruction-idempotent");assert.equal(reconstructionReplay.data.replay,true);assert.equal((await db.collection("properties").doc("property:reconstructed").get()).data().origin,"reconstruction");
+await assert.rejects(call("createProperty",{propertyId:"property:unscoped",name:"Unscoped"}));
+await assert.rejects(call("createProperty",{propertyId:"property:wrong-plan",name:"Wrong",origin:"reconstruction",reconstructionPlanId:"plan:missing"}));
+await assert.rejects(employee({command:"createProperty",operationId:"structural:test:employee-reconstruction-denied",payload:{propertyId:"property:employee-reconstruction",name:"Denied",origin:"reconstruction",reconstructionPlanId:"plan:future"}}));
+const financialCollections=["collectionEvents","deposits","expenses","financialLedger","cashMovements","installments","refunds"];
+const financialCountsBefore=Object.fromEntries(await Promise.all(financialCollections.map(async collection=>[collection,(await db.collection(collection).get()).size])));
+await db.collection("months").doc("2044_6").set({data:{units:[{id:"legacy-u1",name:"Legacy Unit 1",type:"shared",partitions:[{id:1,rent:1000,status:"collected",paid_amount:1000,tenant:"Evidence only"},{id:2,rent:1200,status:"late"}]}],full:[{id:"legacy-full",rent:9000,status:"collected",paid_amount:9000}],expenses:[{amount:50}],transactions:[{amount:100}]}});
+const bootstrapPayload={origin:"reconstruction",reconstructionPlanId:"plan:future",sourceMonthKey:"2044_6",property:{legacyKey:"qama-test-property",name:"QAMA Test Property"}};
+const bootstrap=await call("bootstrapLegacyPhysicalStructure",bootstrapPayload,"structural:test:legacy-bootstrap");
+assert.deepEqual(bootstrap.data.counts,{properties:1,units:2,rentableSpaces:3,skipped:0,conflicts:0});
+assert.deepEqual(bootstrap.data.financialEffect,{collectionEvents:0,deposits:0,expenses:0,ledgerMovements:0,custodyMovements:0,bankInstallments:0,reserveTransfers:0,refunds:0});
+const replayBootstrap=await call("bootstrapLegacyPhysicalStructure",bootstrapPayload,"structural:test:legacy-bootstrap");assert.equal(replayBootstrap.data.replay,true);
+const secondOperation=await call("bootstrapLegacyPhysicalStructure",bootstrapPayload,"structural:test:legacy-bootstrap-second");assert.equal(secondOperation.data.created.length,0);assert.equal(secondOperation.data.unchanged.length,6);
+for(const collection of financialCollections)assert.equal((await db.collection(collection).get()).size,financialCountsBefore[collection]);
+assert.equal((await db.collection("financialLedger").get()).size,ledgerBefore);
+console.log(JSON.stringify({tests:35,pass:35,fail:0}));process.exit(0);

@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import { initializeApp as adminInit } from "firebase-admin/app";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import { initializeApp } from "firebase/app";
+import { connectAuthEmulator, getAuth, signInWithCustomToken } from "firebase/auth";
+import { connectFunctionsEmulator, getFunctions, httpsCallable } from "firebase/functions";
+
+process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
+process.env.FIREBASE_AUTH_EMULATOR_HOST ||= "127.0.0.1:9099";
+const projectId="qama-test",uid="clean_start_owner",month="2035_08",planId="plan:clean-start",build="qama-phase3c-canonical-events-2026-08-12.3-clean-august-start";
+const admin=adminInit({projectId},`clean-start-${Date.now()}`),db=getFirestore(admin),authAdmin=getAdminAuth(admin);
+try{await authAdmin.createUser({uid});}catch{}
+await db.collection("users").doc(uid).set({userKey:"clean-owner",role:"owner",active:true});
+await db.collection("config").doc("system").set({financialTruthVersion:2,buildId:"prior-build",preservedSetting:"keep"});
+await db.collection("config").doc("canonicalControl").set({state:"ACTIVATION_REVIEW",version:9});
+await db.collection("properties").doc("property:clean").set({id:"property:clean",status:"active"});
+await db.collection("units").doc("unit:clean").set({id:"unit:clean",propertyId:"property:clean",status:"active"});
+await db.collection("rentableSpaces").doc("space:clean").set({id:"space:clean",propertyId:"property:clean",unitId:"unit:clean",status:"active"});
+await db.collection("reconstructionPlans").doc(planId).set({id:planId,monthKey:month,status:"DRAFT",reviewedObligations:[{obligationId:"unknown:1",structuralStatus:"NEEDS_TENANT_CONFIRMATION",planItemStatus:"REVIEWED"}]});
+await db.collection("monthAuthorities").doc(month).set({id:month,monthKey:month,status:"STAGED",authority:"CANONICAL_RECONSTRUCTION",reconstructionPlanId:planId,legacyProjectionEffect:"evidence_only_zero",activated:false});
+for(const [account,amountFils] of [["company",49175400],["revenue",7086395],["deduction",9117248]])await db.collection("accountBalances").doc(account).set({account,amountFils,version:4});
+const beforeBalances=Object.fromEntries((await db.collection("accountBalances").get()).docs.map(d=>[d.id,d.data().amountFils]));
+const app=initializeApp({projectId,apiKey:"fake",appId:"clean-start"},`clean-start-client-${Date.now()}`);const auth=getAuth(app);connectAuthEmulator(auth,"http://127.0.0.1:9099",{disableWarnings:true});await signInWithCustomToken(auth,await authAdmin.createCustomToken(uid));const functions=getFunctions(app);connectFunctionsEmulator(functions,"127.0.0.1",5001);const command=httpsCallable(functions,"financialCommand");
+const request={command:"abandonReconstructionAndActivate",operationId:"clean:start:functions:001",payload:{reconstructionPlanId:planId,reason:"Owner approved clean canonical month from zero",expectedBuildId:build}};
+const first=await command(request),replay=await command(request);assert.equal(first.data.gate,"CANONICAL_ACTIVE");assert.equal(replay.data.replay,true);
+const plan=(await db.collection("reconstructionPlans").doc(planId).get()).data(),authority=(await db.collection("monthAuthorities").doc(month).get()).data(),control=(await db.collection("config").doc("canonicalControl").get()).data(),system=(await db.collection("config").doc("system").get()).data();
+assert.equal(plan.status,"ABANDONED");assert.equal(plan.reviewedObligations[0].historicalException,undefined);assert.equal(authority.authority,"CANONICAL_CLEAN_START");assert.equal(authority.legacyProjectionEffect,"evidence_only_zero");assert.equal(control.state,"CANONICAL_ACTIVE");assert.equal(system.financialTruthVersion,3);assert.equal(system.buildId,build);assert.equal(system.preservedSetting,"keep");
+assert.equal((await db.collection("auditEvents").where("action","==","reconstruction_abandoned_clean_start_activated").get()).size,1);assert.equal((await db.collection("financialOperations").where("operationId","==",request.operationId).get()).size,1);
+for(const name of ["rentalCycles","collectionEvents","payments","deposits","expenses","cashLots","cashMovements","custodyTransfers","financialLedger","refunds","installments"])assert.equal((await db.collection(name).get()).docs.filter(d=>[d.data().reportingMonth,d.data().collectionMonth,d.data().monthKey,d.data().effectiveMonth].includes(month)).length,0,name);
+const afterBalances=Object.fromEntries((await db.collection("accountBalances").get()).docs.map(d=>[d.id,d.data().amountFils]));assert.deepEqual(afterBalances,beforeBalances);assert.equal((await db.collection("properties").doc("property:clean").get()).exists,true);assert.equal((await db.collection("units").doc("unit:clean").get()).exists,true);assert.equal((await db.collection("rentableSpaces").doc("space:clean").get()).exists,true);
+for(const [collection,id] of [["rentableSpaces","space:clean"],["units","unit:clean"],["properties","property:clean"]])await db.collection(collection).doc(id).delete();
+console.log(JSON.stringify({tests:12,pass:12,fail:0,atomicCleanStart:true,idempotent:true,balancesUnchanged:true,structurePreserved:true,legacyProjectionEffect:"evidence_only_zero"}));
+process.exit(0);

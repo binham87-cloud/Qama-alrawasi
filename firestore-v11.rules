@@ -1,0 +1,174 @@
+rules_version = '2';
+// ============================================================
+// قواعد أمان Firestore — قمة الرواسي v11
+// ✅ شُغّلت على Cloud Firestore Emulator: 61/61. لم تُنشر على المشروع الحقيقي.
+//
+// معيار role في Firestore (لا أسماء أو مستخدمون ثابتون في الواجهة):
+// users/{uid} = { userKey, role, name, active }
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- أساسيات ----------
+    function signedIn()  { return request.auth != null; }
+    function me()        { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function role()      { return signedIn() ? me().role : 'none'; }
+    function active()    { return signedIn() && me().active != false; }
+    function myKey()     { return signedIn() ? me().userKey : ''; }
+
+    function isOwner()   { return active() && role() == 'owner'; }
+    function isManager() { return active() && role() in ['owner','manager']; }
+    function isFinance() { return active() && role() in ['owner','manager','finance']; }
+    function isStaff()   { return active() && role() in ['owner','manager','finance','employee']; }
+
+    function positive(v) { return v is number && v > 0 && v < 10000000; }
+    function nonNeg(v)   { return v is number && v >= 0 && v < 100000000; }
+    // الحقول المتغيّرة أثناء التحديث — لا شيء خارج القائمة
+    function only(keys)  { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+    function must(keys)  { return request.resource.data.diff(resource.data).affectedKeys().hasAll(keys); }
+
+    // ---------- المستخدمون ----------
+    match /users/{uid} {
+      allow read:   if isStaff();
+      allow create, delete: if false;             // Console / Admin SDK فقط
+      // المالك يغيّر الدور أو الاسم أو التفعيل — ولا يمسّ userKey ولا يعدّل نفسه
+      allow update: if isOwner()
+                    && request.auth.uid != uid
+                    && request.resource.data.role != 'owner'
+                    && request.resource.data.role in ['manager','finance','employee']
+                    && only(['role','name','active']);
+    }
+
+    // ---------- الأرصدة ----------
+    match /config/balances {
+      allow read:  if isFinance();
+      allow write: if false; // retired client authority; Backend commands only
+    }
+    match /config/permissions { allow read: if isStaff(); allow write: if isManager(); }
+    match /config/unlock      { allow read: if isStaff(); allow write: if isManager(); }
+    match /config/customUnits { allow read: if isStaff(); allow write: if isManager(); }
+    match /config/system      { allow read: if isStaff(); allow write: if false; }
+    match /config/canonicalControl { allow read: if isStaff(); allow write: if false; }
+    match /config/auth        { allow read, write: if false; }   // ملغى
+
+    // مادة التحقق من PIN لا تصل إلى المتصفح مطلقاً؛ Cloud Functions/Admin SDK فقط.
+    match /authPins/{userKey} { allow read, write: if false; }
+
+    // ---------- بيانات الشهور ----------
+    match /months/{monthId} {
+      allow read:   if isStaff();
+      allow create, update: if false; // mixed legacy document is read-only to clients
+      allow delete: if false;
+    }
+
+    // ---------- الطلبات ----------
+    match /requests/{reqId} {
+      allow read: if isFinance() || (isStaff() && resource.data.by == myKey());
+      allow create, update, delete: if false; // compatibility read only
+    }
+
+    // ---------- الدفعات البنكية ----------
+    match /bankPayments/{paymentId} {
+      allow read: if isStaff();
+      allow create, update, delete: if false; // Backend commands only
+    }
+
+    // التحقق من الطلب المرتبط — قراءتان فقط: قبل المعاملة وبعدها.
+    // before.status=='pending' هو الشرط الحاسم: يثبت أن الاعتماد حدث داخل هذه
+    // المعاملة نفسها. بدونه يكفي طلب معتمد سابقاً لإنشاء دفعة لاحقاً خارجها.
+    function bookingReqValid(bp) {
+      return
+        // ملاحظة: get() على مستند غير موجود يُسقط التقييم، فلا حاجة إلى exists()
+        bookingReqCheck(
+          get(/databases/$(database)/documents/requests/$(bp.bookingId)).data,
+          getAfter(/databases/$(database)/documents/requests/$(bp.bookingId)).data,
+          bp
+        );
+    }
+    function bookingReqCheck(before, after, bp) {
+      return before.status == 'pending'                     // كان معلّقاً قبل المعاملة
+          && before.type == 'add_daily'
+          && before.by == bp.createdBy
+          && before.payload.booking.total == bp.amount
+          && after.status == 'approved'                     // واعتُمد داخلها
+          && after.approvedBy == myKey();
+    }
+
+    // ---------- تسويات الأرصدة ----------
+    match /balanceAdjustments/{adjId} {
+      allow read:   if isFinance();
+      allow create, update, delete: if false;
+    }
+
+    // ---------- دفتر القيود ----------
+    match /ledger/{entryId} {
+      allow read:   if isFinance();
+      allow create, update, delete: if false;
+    }
+
+    // ---------- Canonical financial engine v2 ----------
+    // جميع الكتابات من Trusted Backend/Admin SDK فقط. لا يستطيع أي عميل،
+    // بما فيه owner/manager/finance، تجاوز أوامر الـBackend.
+    match /canonicalState/{docId} { allow read, write: if false; }
+    match /financialOperations/{operationId} {
+      allow read: if isManager() || (isStaff() && resource.data.actorUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+    match /operationalOperations/{operationId} {
+      allow read: if isManager() || (isStaff() && resource.data.actorUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+    match /auditEvents/{eventId} {
+      allow read: if isManager();
+      allow create, update, delete: if false;
+    }
+    match /operationalProjections/{projectionId} {
+      allow read: if isStaff();
+      allow create, update, delete: if false;
+    }
+    match /financialProjections/{projectionId} {
+      allow read: if isManager();
+      allow create, update, delete: if false;
+    }
+
+    match /rentalCycles/{id}          { allow read: if isStaff();   allow write: if false; }
+    match /properties/{id}            { allow read: if isStaff();   allow write: if false; }
+    match /units/{id}                 { allow read: if isStaff();   allow write: if false; }
+    match /rentableSpaces/{id}        { allow read: if isStaff();   allow write: if false; }
+    match /tenants/{id}               { allow read: if isStaff();   allow write: if false; }
+    match /tenancies/{id}             { allow read: if isStaff();   allow write: if false; }
+    match /structuralOperations/{id}  { allow read: if isManager() || (isStaff() && resource.data.actorUid == request.auth.uid); allow write: if false; }
+    match /payments/{id}              { allow read: if isStaff();   allow write: if false; }
+    match /collectionEvents/{id}      { allow read: if isStaff();   allow write: if false; }
+    match /collectionReversals/{id}   { allow read: if isManager(); allow write: if false; }
+    match /unallocatedPayments/{id}   { allow read: if isManager(); allow write: if false; }
+    match /paymentAllocations/{id}    { allow read: if isStaff();   allow write: if false; }
+    match /cashLots/{id}              { allow read: if isStaff();   allow write: if false; }
+    match /cashMovements/{id}         { allow read: if isStaff();   allow write: if false; }
+    match /custodyTransfers/{id}      { allow read: if isStaff();   allow write: if false; }
+    match /deposits/{id}              { allow read: if isStaff();   allow write: if false; }
+    match /discounts/{id}             { allow read: if isStaff();   allow write: if false; }
+    match /evictions/{id}             { allow read: if isStaff();   allow write: if false; }
+    match /refunds/{id}               { allow read: if isStaff();   allow write: if false; }
+    match /monthStates/{id}           { allow read: if isStaff();   allow write: if false; }
+    match /canonicalRequests/{id}     { allow read: if isManager() || (isStaff() && resource.data.createdByUid == request.auth.uid); allow write: if false; }
+    match /accountBalances/{id}       { allow read: if isManager(); allow write: if false; }
+    match /financialLedger/{id}       { allow read: if isManager(); allow write: if false; }
+    match /expenses/{id}              { allow read: if isManager() || (isStaff() && resource.data.requestedByUid == request.auth.uid); allow write: if false; }
+    match /externalRevenues/{id}      { allow read: if isManager(); allow write: if false; }
+    match /ownerProfitDistributions/{id} { allow read: if isManager(); allow write: if false; }
+    match /legacyFinancialCorrections/{id} { allow read: if isManager(); allow write: if false; }
+    match /balanceTransfers/{id}      { allow read: if isManager(); allow write: if false; }
+    match /balanceAdjustmentsV2/{id}  { allow read: if isManager(); allow write: if false; }
+    match /installments/{id}          { allow read: if isManager(); allow write: if false; }
+    match /installmentObligations/{id} { allow read: if isManager(); allow write: if false; }
+    match /legacyOpeningStates/{id}   { allow read: if isStaff();   allow write: if false; }
+    match /reconstructionPlans/{id}   { allow read: if isStaff();   allow write: if false; }
+    match /monthAuthorities/{id}      { allow read: if isStaff();   allow write: if false; }
+    match /legacyCustodyEvidence/{id} { allow read: if isManager(); allow write: if false; }
+    match /legacyFinancialAnomalies/{id} { allow read: if isManager(); allow write: if false; }
+    match /bootstrapBatches/{id}      { allow read: if isManager(); allow write: if false; }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
