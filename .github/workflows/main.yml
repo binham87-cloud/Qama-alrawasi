@@ -19,6 +19,10 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
+      - name: Install Functions dependencies
+        working-directory: functions
+        run: npm ci
+
       - name: Create Firebase service account file
         shell: bash
         env:
