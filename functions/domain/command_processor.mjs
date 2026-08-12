@@ -447,13 +447,27 @@ function reverseInstallmentReserveTransfer(state, ctx) {
 function executeExpense(state, ctx) {
   assertManager(ctx.actor); const account = ctx.payload.account; const amountFils = requirePositive(ctx.payload.amountFils); const reason = String(ctx.payload.reason || "").trim(); if (!reason) throw new Error("REASON_REQUIRED");
   changeBalance(state, account, -amountFils); const id = `expense:${ctx.operationId}`;
-  state.expenses.push({ id, account, amountFils, reason, status: "active", approvedBy: ctx.actor.id, approvedAt: nowIso(ctx), approvedMonth: ctx.payload.monthKey || monthOf(nowIso(ctx).slice(0,10)) });
+  const category = expenseCategory(ctx.payload); const subject = expenseSubject(ctx.payload, category);
+  state.expenses.push({ id, account, amountFils, reason, category, subject, status: "active", approvedBy: ctx.actor.id, approvedAt: nowIso(ctx), approvedMonth: ctx.payload.monthKey || monthOf(nowIso(ctx).slice(0,10)) });
   ledger(state, ctx, [{ account, direction: "debit", amountFils, sourceType: "expense", sourceId: id }]); audit(state, ctx, "expense_approved", "expense", id, null, state.expenses.at(-1)); return { expenseId: id };
+}
+
+const EXPENSE_CATEGORIES = Object.freeze(["operating", "unitMaintenance", "facilityMaintenance"]);
+function expenseCategory(payload) {
+  const raw = String(payload?.category || "operating");
+  if (!EXPENSE_CATEGORIES.includes(raw)) throw new Error("EXPENSE_CATEGORY_INVALID");
+  return raw;
+}
+function expenseSubject(payload, category) {
+  const subject = String(payload?.subject || "").trim();
+  if (category !== "operating" && !subject) throw new Error("EXPENSE_SUBJECT_REQUIRED");
+  return subject || null;
 }
 
 function requestExpense(state, ctx) {
   assertEmployeeOrManager(ctx.actor); const amountFils = requirePositive(ctx.payload.amountFils); const reason = String(ctx.payload.reason || "").trim(); if (!reason) throw new Error("REASON_REQUIRED"); const id = `expense:${ctx.operationId}`;
-  state.expenses.push({ id, amountFils, reason, status: "pending", requestedBy: ctx.actor.id, requestedByUid: ctx.actor.uid || null, requestedAt: nowIso(ctx), monthKey: ctx.payload.monthKey || monthOf(nowIso(ctx).slice(0,10)), version: 1 });
+  const category = expenseCategory(ctx.payload); const subject = expenseSubject(ctx.payload, category);
+  state.expenses.push({ id, amountFils, reason, category, subject, status: "pending", requestedBy: ctx.actor.id, requestedByUid: ctx.actor.uid || null, requestedAt: nowIso(ctx), monthKey: ctx.payload.monthKey || monthOf(nowIso(ctx).slice(0,10)), version: 1 });
   audit(state, ctx, "expense_requested", "expense", id, null, state.expenses.at(-1)); return { expenseId: id, status: "pending" };
 }
 
