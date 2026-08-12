@@ -19,10 +19,12 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
-      - name: Create Firebase service account file
+          - name: Create Firebase service account file
         shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_QAMA_ALRAWASI }}
         run: |
-          printf '%s' '${{ secrets.FIREBASE_SERVICE_ACCOUNT_QAMA_ALRAWASI }}' > "$RUNNER_TEMP/firebase-service-account.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
 
       - name: Deploy to Firebase
