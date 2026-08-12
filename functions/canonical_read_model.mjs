@@ -23,11 +23,12 @@ const merge = (...groups) => [...new Map(groups.flat().map((x) => [x.id, x])).va
 async function by(db, collectionName, field, value) { return rows(await db.collection(collectionName).where(field, "==", value).get()); }
 async function containing(db, collectionName, field, value) { return rows(await db.collection(collectionName).where(field, "array-contains", value).get()); }
 async function related(db, collectionName, field, values) {
-  const out = [];
-  // Individual equality queries avoid a global scan and avoid Firestore's
-  // `in` operand limit. Independent entities/months do not contend on a read.
-  for (const value of new Set(values)) out.push(...await by(db, collectionName, field, value));
-  return merge(out);
+  const unique = [...new Set(values)].filter((value) => value !== undefined && value !== null);
+  if (!unique.length) return [];
+  // Firestore accepts at most 30 comparison values for `in`. Chunking keeps
+  // a populated operational month bounded without changing financial scope.
+  const chunks=[];for(let i=0;i<unique.length;i+=30)chunks.push(unique.slice(i,i+30));
+  return merge(...await Promise.all(chunks.map(async(chunk)=>rows(await db.collection(collectionName).where(field,"in",chunk).get()))));
 }
 
 async function loadCanonicalState(db, monthKey, profile, uid) {
