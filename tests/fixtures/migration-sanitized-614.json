@@ -1,0 +1,4033 @@
+{
+  "fixture": "SANITIZED_DETERMINISTIC",
+  "documents": {
+    "bankPayments/safe-verified-1": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-1"
+    },
+    "bankPayments/safe-verified-2": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-2"
+    },
+    "bankPayments/safe-verified-3": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-3"
+    },
+    "bankPayments/safe-verified-4": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-4"
+    },
+    "bankPayments/safe-verified-5": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-5"
+    },
+    "bankPayments/safe-verified-6": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-6"
+    },
+    "bankPayments/safe-verified-7": {
+      "status": "approved",
+      "amount": 100,
+      "paymentDate": "2026-01-01",
+      "createdBy": "synthetic-actor",
+      "unitRef": "synthetic-unit-7"
+    },
+    "requests/safe-partial-cash-1": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-2": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-3": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-4": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-5": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-6": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-7": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-8": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-9": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-10": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-11": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-12": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-13": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-14": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-15": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-16": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-17": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-18": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-19": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-20": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-21": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-22": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-23": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-24": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-25": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-26": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-27": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-28": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-29": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-30": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-31": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-32": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-33": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-34": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-35": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-36": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-37": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-38": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-39": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-40": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-41": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-42": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-43": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-44": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-45": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-46": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-47": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-48": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-49": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-50": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-51": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-52": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-53": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-54": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-55": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-56": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-57": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-58": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-59": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-60": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-61": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-62": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-63": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-64": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-65": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-66": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-67": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-68": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-69": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-70": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-71": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-72": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-73": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-74": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-75": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-76": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-77": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-78": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-79": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-80": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-81": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-82": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-83": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-84": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-85": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-86": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-87": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-88": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-89": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-90": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-91": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-92": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-93": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-94": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-95": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-96": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-97": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-98": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-99": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-100": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-101": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-102": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-103": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-104": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-105": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-106": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-107": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-108": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-109": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-110": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-111": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-112": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-113": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-114": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-115": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-116": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-117": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-118": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-119": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-120": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-121": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-122": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-123": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-124": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-125": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-126": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-127": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-128": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-129": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-130": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-131": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-132": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-133": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-134": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-cash-135": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-partial-bank-1": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "bank"
+      }
+    },
+    "requests/safe-partial-bank-2": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "bank"
+      }
+    },
+    "requests/safe-partial-bank-3": {
+      "type": "add_transaction",
+      "status": "approved",
+      "approvedAt": "2026-01-01T00:00:00Z",
+      "by": "synthetic-actor",
+      "payload": {
+        "amount": 100,
+        "method": "bank"
+      }
+    },
+    "requests/safe-missing-amount-1": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-2": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-3": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-4": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-5": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-6": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-7": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-8": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-9": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-10": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-11": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-12": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-13": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-14": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-15": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-16": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-17": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-18": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-19": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-20": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-21": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-22": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-23": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-24": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-25": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-26": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-27": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-28": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-29": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-30": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-31": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-32": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-33": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-34": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-35": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-36": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-37": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-38": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-39": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-40": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-41": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-42": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-43": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-44": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-45": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-46": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-47": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-48": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-49": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-50": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-51": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-52": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-53": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-54": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-55": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-56": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-57": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-58": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-59": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-60": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-61": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-62": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-63": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-64": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-65": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-66": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-67": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-68": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-69": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-70": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-71": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-72": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-73": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-74": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-75": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-76": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-77": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-78": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-79": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-80": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-81": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-82": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-83": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-84": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-85": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-86": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-87": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-88": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-89": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-90": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-91": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-92": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-93": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-94": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-95": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-96": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-97": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-98": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-99": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-100": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-101": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-102": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-103": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-104": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-105": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-106": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-107": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-108": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-109": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-110": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-111": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-112": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-113": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-114": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-115": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-116": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-117": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-118": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-119": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-120": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-121": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-122": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-123": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-124": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-125": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-126": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-127": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-128": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-129": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-130": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-131": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-132": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-133": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-134": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-135": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-136": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-137": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-138": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-139": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-140": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-141": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-142": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-143": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-144": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-145": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-146": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-147": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-148": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-149": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-150": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-151": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-152": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-153": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-154": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-155": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-156": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-157": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-158": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-159": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-160": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-161": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-162": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-163": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-164": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-165": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-166": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-167": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-168": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-169": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-170": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-171": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-172": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-173": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-174": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-175": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-176": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-177": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-178": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-179": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-180": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-181": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-182": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-183": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-184": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-185": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-186": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-187": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-188": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-189": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-190": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-191": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-192": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-193": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-194": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-195": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-196": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-197": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-amount-198": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {}
+    },
+    "requests/safe-missing-method-1": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-2": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-3": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-4": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-5": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-6": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-7": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-8": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-9": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-10": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-11": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-12": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-13": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-14": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-15": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-16": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-17": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-18": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-19": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-20": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-21": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-22": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-23": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-24": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-25": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-26": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-27": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-28": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-29": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-30": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-31": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-32": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-33": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-34": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-35": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-36": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-37": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-38": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-39": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-40": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-41": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-42": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-43": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-44": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-45": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-46": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-47": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-48": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-49": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-50": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-51": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-52": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-53": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-54": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-55": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-56": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-57": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-58": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-59": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-60": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-61": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-62": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-63": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-64": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-65": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-66": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-67": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-68": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-69": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-70": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-71": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-72": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-73": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-74": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-75": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-76": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-77": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-78": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-79": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-80": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-81": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-82": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-83": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-84": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-85": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-86": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-87": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-88": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-89": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-90": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-91": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-92": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-93": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-94": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-95": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-96": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-97": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-98": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-99": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-100": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-101": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-102": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-103": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-104": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-105": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-106": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-107": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-108": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-109": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-110": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-111": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-112": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-113": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-114": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-115": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-116": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-117": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-118": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-119": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-120": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-121": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-122": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-123": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-124": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-125": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-126": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-127": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-128": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-129": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-130": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-131": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-132": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-133": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-134": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-135": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-136": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-137": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-138": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-139": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-140": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-141": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-142": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-143": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-144": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-145": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-146": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-147": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-148": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-149": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-150": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-151": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-152": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-153": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-154": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-155": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-156": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-157": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-158": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-159": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-160": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-161": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-162": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-163": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-164": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-165": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-166": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-167": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-method-168": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100
+      }
+    },
+    "requests/safe-missing-collector-1": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-missing-collector-2": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-missing-collector-3": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-missing-collector-4": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "requests/safe-missing-collector-5": {
+      "type": "add_transaction",
+      "status": "pending",
+      "payload": {
+        "amount": 100,
+        "method": "cash"
+      }
+    },
+    "config/balances": {
+      "companyBalance": 1000,
+      "revenueBalance": 2000,
+      "installmentBalance": 3000
+    },
+    "operationalFixtures/safe-1": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 1
+    },
+    "operationalFixtures/safe-2": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 2
+    },
+    "operationalFixtures/safe-3": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 3
+    },
+    "operationalFixtures/safe-4": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 4
+    },
+    "operationalFixtures/safe-5": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 5
+    },
+    "operationalFixtures/safe-6": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 6
+    },
+    "operationalFixtures/safe-7": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 7
+    },
+    "operationalFixtures/safe-8": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 8
+    },
+    "operationalFixtures/safe-9": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 9
+    },
+    "operationalFixtures/safe-10": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 10
+    },
+    "operationalFixtures/safe-11": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 11
+    },
+    "operationalFixtures/safe-12": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 12
+    },
+    "operationalFixtures/safe-13": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 13
+    },
+    "operationalFixtures/safe-14": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 14
+    },
+    "operationalFixtures/safe-15": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 15
+    },
+    "operationalFixtures/safe-16": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 16
+    },
+    "operationalFixtures/safe-17": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 17
+    },
+    "operationalFixtures/safe-18": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 18
+    },
+    "operationalFixtures/safe-19": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 19
+    },
+    "operationalFixtures/safe-20": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 20
+    },
+    "operationalFixtures/safe-21": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 21
+    },
+    "operationalFixtures/safe-22": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 22
+    },
+    "operationalFixtures/safe-23": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 23
+    },
+    "operationalFixtures/safe-24": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 24
+    },
+    "operationalFixtures/safe-25": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 25
+    },
+    "operationalFixtures/safe-26": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 26
+    },
+    "operationalFixtures/safe-27": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 27
+    },
+    "operationalFixtures/safe-28": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 28
+    },
+    "operationalFixtures/safe-29": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 29
+    },
+    "operationalFixtures/safe-30": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 30
+    },
+    "operationalFixtures/safe-31": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 31
+    },
+    "operationalFixtures/safe-32": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 32
+    },
+    "operationalFixtures/safe-33": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 33
+    },
+    "operationalFixtures/safe-34": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 34
+    },
+    "operationalFixtures/safe-35": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 35
+    },
+    "operationalFixtures/safe-36": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 36
+    },
+    "operationalFixtures/safe-37": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 37
+    },
+    "operationalFixtures/safe-38": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 38
+    },
+    "operationalFixtures/safe-39": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 39
+    },
+    "operationalFixtures/safe-40": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 40
+    },
+    "operationalFixtures/safe-41": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 41
+    },
+    "operationalFixtures/safe-42": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 42
+    },
+    "operationalFixtures/safe-43": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 43
+    },
+    "operationalFixtures/safe-44": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 44
+    },
+    "operationalFixtures/safe-45": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 45
+    },
+    "operationalFixtures/safe-46": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 46
+    },
+    "operationalFixtures/safe-47": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 47
+    },
+    "operationalFixtures/safe-48": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 48
+    },
+    "operationalFixtures/safe-49": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 49
+    },
+    "operationalFixtures/safe-50": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 50
+    },
+    "operationalFixtures/safe-51": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 51
+    },
+    "operationalFixtures/safe-52": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 52
+    },
+    "operationalFixtures/safe-53": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 53
+    },
+    "operationalFixtures/safe-54": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 54
+    },
+    "operationalFixtures/safe-55": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 55
+    },
+    "operationalFixtures/safe-56": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 56
+    },
+    "operationalFixtures/safe-57": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 57
+    },
+    "operationalFixtures/safe-58": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 58
+    },
+    "operationalFixtures/safe-59": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 59
+    },
+    "operationalFixtures/safe-60": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 60
+    },
+    "operationalFixtures/safe-61": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 61
+    },
+    "operationalFixtures/safe-62": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 62
+    },
+    "operationalFixtures/safe-63": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 63
+    },
+    "operationalFixtures/safe-64": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 64
+    },
+    "operationalFixtures/safe-65": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 65
+    },
+    "operationalFixtures/safe-66": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 66
+    },
+    "operationalFixtures/safe-67": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 67
+    },
+    "operationalFixtures/safe-68": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 68
+    },
+    "operationalFixtures/safe-69": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 69
+    },
+    "operationalFixtures/safe-70": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 70
+    },
+    "operationalFixtures/safe-71": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 71
+    },
+    "operationalFixtures/safe-72": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 72
+    },
+    "operationalFixtures/safe-73": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 73
+    },
+    "operationalFixtures/safe-74": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 74
+    },
+    "operationalFixtures/safe-75": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 75
+    },
+    "operationalFixtures/safe-76": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 76
+    },
+    "operationalFixtures/safe-77": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 77
+    },
+    "operationalFixtures/safe-78": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 78
+    },
+    "operationalFixtures/safe-79": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 79
+    },
+    "operationalFixtures/safe-80": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 80
+    },
+    "operationalFixtures/safe-81": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 81
+    },
+    "operationalFixtures/safe-82": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 82
+    },
+    "operationalFixtures/safe-83": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 83
+    },
+    "operationalFixtures/safe-84": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 84
+    },
+    "operationalFixtures/safe-85": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 85
+    },
+    "operationalFixtures/safe-86": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 86
+    },
+    "operationalFixtures/safe-87": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 87
+    },
+    "operationalFixtures/safe-88": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 88
+    },
+    "operationalFixtures/safe-89": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 89
+    },
+    "operationalFixtures/safe-90": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 90
+    },
+    "operationalFixtures/safe-91": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 91
+    },
+    "operationalFixtures/safe-92": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 92
+    },
+    "operationalFixtures/safe-93": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 93
+    },
+    "operationalFixtures/safe-94": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 94
+    },
+    "operationalFixtures/safe-95": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 95
+    },
+    "operationalFixtures/safe-96": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 96
+    },
+    "operationalFixtures/safe-97": {
+      "kind": "synthetic-non-financial",
+      "ordinal": 97
+    }
+  }
+}

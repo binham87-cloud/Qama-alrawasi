@@ -1,0 +1,1 @@
+const tabLbl={overview:"الرئيسية",emphome:"🏠 الرئيسية",units:"الوحدات",financial:"المالية",expenses:"المصاريف",transactions:"الإيداعات",permissions:"الصلاحيات",requests:"الطلبات",myrequests:"طلباتي",occupancy:"الإشغال",daily:"📅 اليومي",audit:"📋 السجل",maintenance:"الصيانة"};

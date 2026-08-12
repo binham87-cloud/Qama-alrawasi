@@ -1,0 +1,10 @@
+import fs from "node:fs";
+const html=fs.readFileSync(new URL("../public/index.html",import.meta.url),"utf8");
+const lines=html.split("\n");
+const guards=[];
+for(let i=0;i<lines.length;i++)if(lines[i].includes("blockLegacyFinancialWrite"))guards.push({line:i+1,text:lines[i].trim()});
+const backend=[];
+for(let i=0;i<lines.length;i++)if(lines[i].includes("runUiFinancialCommand"))backend.push({line:i+1,text:lines[i].trim()});
+const buttons=[];
+for(let i=0;i<lines.length;i++)if(/onClick\s*:/.test(lines[i]))buttons.push({line:i+1,text:lines[i].trim().slice(0,240)});
+console.log(JSON.stringify({source:"public/index.html",visibleActionCandidates:buttons.length,legacyGuardSites:guards,backendAdapterSites:backend},null,2));

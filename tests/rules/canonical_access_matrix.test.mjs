@@ -1,0 +1,25 @@
+import { after, before, beforeEach, test } from "node:test";
+import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import fs from "node:fs";
+
+let env;
+const profiles={employee_uid:{userKey:"employee_1",role:"employee",active:true},owner_uid:{userKey:"owner_1",role:"owner",active:true},finance_uid:{userKey:"finance_1",role:"finance",active:true},disabled_uid:{userKey:"disabled_1",role:"employee",active:false}};
+before(async()=>{env=await initializeTestEnvironment({projectId:"qama-test",firestore:{rules:fs.readFileSync(new URL("../../firestore-v11.rules",import.meta.url),"utf8"),host:"127.0.0.1",port:8080}});});
+after(async()=>env?.cleanup());
+beforeEach(async()=>{await env.clearFirestore();await env.withSecurityRulesDisabled(async c=>{const db=c.firestore();for(const [uid,p] of Object.entries(profiles))await setDoc(doc(db,"users",uid),p);await setDoc(doc(db,"config","canonicalControl"),{state:"STAGED_READ_ONLY",version:1});await setDoc(doc(db,"rentalCycles","cycle_1"),{id:"cycle_1"});await setDoc(doc(db,"accountBalances","revenue"),{amountFils:100});await setDoc(doc(db,"financialLedger","led_1"),{amountFils:100});await setDoc(doc(db,"expenses","exp_1"),{requestedByUid:"employee_uid",amountFils:100});await setDoc(doc(db,"financialOperations","op_1"),{actorUid:"employee_uid",status:"completed"});await setDoc(doc(db,"reconstructionPlans","plan_1"),{monthKey:"2031_04",status:"DRAFT"});await setDoc(doc(db,"monthAuthorities","2031_04"),{status:"STAGED"});});});
+const as=uid=>env.authenticatedContext(uid).firestore();
+test("employee reads operational cycle",()=>assertSucceeds(getDoc(doc(as("employee_uid"),"rentalCycles","cycle_1"))));
+test("employee cannot read account balance",()=>assertFails(getDoc(doc(as("employee_uid"),"accountBalances","revenue"))));
+test("employee cannot read financial ledger",()=>assertFails(getDoc(doc(as("employee_uid"),"financialLedger","led_1"))));
+test("employee reads own expense request",()=>assertSucceeds(getDoc(doc(as("employee_uid"),"expenses","exp_1"))));
+test("owner reads balances and ledger",async()=>{await assertSucceeds(getDoc(doc(as("owner_uid"),"accountBalances","revenue")));await assertSucceeds(getDoc(doc(as("owner_uid"),"financialLedger","led_1")));});
+test("finance legacy is not mapped to canonical balances",()=>assertFails(getDoc(doc(as("finance_uid"),"accountBalances","revenue"))));
+test("finance legacy is not mapped to canonical ledger",()=>assertFails(getDoc(doc(as("finance_uid"),"financialLedger","led_1"))));
+test("employee reads own operation result and manager can audit operations",async()=>{await assertSucceeds(getDoc(doc(as("employee_uid"),"financialOperations","op_1")));await assertSucceeds(getDoc(doc(as("owner_uid"),"financialOperations","op_1")));});
+test("disabled user cannot read operational cycle",()=>assertFails(getDoc(doc(as("disabled_uid"),"rentalCycles","cycle_1"))));
+test("anonymous cannot read operational cycle",()=>assertFails(getDoc(doc(env.unauthenticatedContext().firestore(),"rentalCycles","cycle_1"))));
+test("all new canonical financial collections deny direct client writes",async()=>{for(const uid of ["employee_uid","owner_uid","finance_uid"]){for(const collection of ["collectionEvents","collectionReversals","unallocatedPayments","legacyOpeningStates","legacyCustodyEvidence","legacyFinancialAnomalies","bootstrapBatches"]){await assertFails(setDoc(doc(as(uid),collection,"direct_write_probe"),{amountFils:100,status:"active"}));}}});
+test("canonical structural registries deny every direct client write",async()=>{for(const uid of ["employee_uid","owner_uid","finance_uid"]){for(const collection of ["properties","units","rentableSpaces","tenants","tenancies","rentalCycles","structuralOperations"]){await assertFails(setDoc(doc(as(uid),collection,"direct_write_probe"),{name:"bypass",status:"active"}));}}});
+test("reconstruction controls are readable by staff but never client-writable",async()=>{for(const uid of ["employee_uid","owner_uid"]){await assertSucceeds(getDoc(doc(as(uid),"reconstructionPlans","plan_1")));await assertSucceeds(getDoc(doc(as(uid),"monthAuthorities","2031_04")));await assertFails(setDoc(doc(as(uid),"reconstructionPlans","direct_write_probe"),{status:"ACTIVE"}));await assertFails(setDoc(doc(as(uid),"monthAuthorities","direct_write_probe"),{status:"ACTIVE"}));}});
+test("canonical control is staff-readable but no employee or owner can change it",async()=>{for(const uid of ["employee_uid","owner_uid"]){await assertSucceeds(getDoc(doc(as(uid),"config","canonicalControl")));await assertFails(setDoc(doc(as(uid),"config","canonicalControl"),{state:"CANONICAL_ACTIVE",version:2}));}});
