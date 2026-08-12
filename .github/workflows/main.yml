@@ -22,7 +22,7 @@ jobs:
       - name: Create Firebase service account file
         shell: bash
         run: |
-          printf '%s' '${{ ${{ secrets.FIREBASE_SERVICE_ACCOUNT_QAMA_ALRAWASI }} }}' > "$RUNNER_TEMP/firebase-service-account.json"
+          printf '%s' '${{ secrets.FIREBASE_SERVICE_ACCOUNT_QAMA_ALRAWASI }}' > "$RUNNER_TEMP/firebase-service-account.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
 
       - name: Deploy to Firebase
