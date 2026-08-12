@@ -12,4 +12,8 @@ firestore-debug.log
 *service-account*.json
 *serviceAccount*.json
 .DS_Store
-
+backups/
+deployments/
+reference/
+firebase-debug.log*
+firestore-debug.log*
