@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="qama-build-id" content="qama-phase3d-employee-rental-entry-2026-08-12.4"/>
+<meta name="qama-build-id" content="qama-phase2-local-2026-08-10.1"/>
 <title>قمة الرواسي v11 PIN Safe</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
@@ -40,7 +40,7 @@ const firebaseConfig = {
   appId: "1:717899519677:web:b61329cd6e4dda0314c9d4",
   measurementId: "G-EZCBZWFVWM"
 };
-const BUILD_ID="qama-phase3d-employee-rental-entry-2026-08-12.4";
+const BUILD_ID="qama-phase3c-canonical-events-2026-08-11.13-employee-canonical-workspace";
 console.log("QAMA BUILD:",BUILD_ID);
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
@@ -102,50 +102,8 @@ function canonicalId(prefix){return prefix+":"+(crypto.randomUUID?crypto.randomU
 function chooseCanonical(label,items){if(!items?.length)throw new Error(label+"_NOT_FOUND");const answer=prompt(label+"\n"+items.map((x,i)=>(i+1)+". "+(x.name||x.displayName||x.id)).join("\n"));const selected=items[Number(answer)-1];if(!selected)throw new Error(label+"_REQUIRED");return selected;}
 async function canonicalAdminAction(action){const s=S.canonicalReadModel?.structure||{};if(action==="property")return sendStructuralCommand("createProperty",{propertyId:canonicalId("property"),name:prompt("اسم العقار / المبنى")||""});if(action==="unit"){const p=chooseCanonical("اختر العقار",(s.properties||[]).filter(x=>x.status==="active"));return sendStructuralCommand("createUnit",{unitId:canonicalId("unit"),propertyId:p.id,name:prompt("اسم الوحدة")||""});}if(action==="space"){const u=chooseCanonical("اختر الوحدة",(s.units||[]).filter(x=>x.status==="active"));return sendStructuralCommand("createRentableSpace",{spaceId:canonicalId("space"),unitId:u.id,name:prompt("اسم المساحة / البارتشن")||"",spaceType:confirm("هل هي وحدة كاملة؟")?"full_unit":"partition"});}if(action==="tenant")return sendStructuralCommand("createTenant",{tenantId:canonicalId("tenant"),displayName:prompt("اسم المستأجر")||"",phone:prompt("الهاتف (اختياري)")||""});if(action==="tenancy"){const t=chooseCanonical("اختر المستأجر",(s.tenants||[]).filter(x=>x.status==="active"));const sp=chooseCanonical("اختر المساحة",(s.rentableSpaces||[]).filter(x=>x.status==="active"));return sendStructuralCommand("createTenancy",{tenancyId:canonicalId("tenancy"),tenantId:t.id,spaceId:sp.id,startDate:prompt("تاريخ بداية السكن YYYY-MM-DD")||"",sourceReference:prompt("مرجع العقد")||""});}if(action==="cycle"){const t=chooseCanonical("اختر علاقة السكن",(s.tenancies||[]).filter(x=>x.status==="active"));return sendStructuralCommand("createRentalCycle",{cycleId:canonicalId("cycle"),tenancyId:t.id,startDate:prompt("بداية الدورة YYYY-MM-DD")||"",dueDate:prompt("تاريخ الاستحقاق YYYY-MM-DD")||"",contractualAmountFils:Math.round(Number(prompt("الإيجار بالدرهم"))*100),sourceReference:prompt("مرجع العقد")||"",origin:"normal"});}}
 async function canonicalLifecycleAction(action){const s=S.canonicalReadModel?.structure||{},cycles=S.canonicalReadModel?.rentalCycles||[];if(action==="renew"){const prior=chooseCanonical("اختر الدورة السابقة",cycles);return sendStructuralCommand("renewRentalCycle",{cycleId:canonicalId("cycle"),previousCycleId:prior.id,tenancyId:prior.tenancyId,startDate:prompt("بداية التجديد YYYY-MM-DD")||"",dueDate:prompt("استحقاق التجديد YYYY-MM-DD")||"",contractualAmountFils:Math.round(Number(prompt("الإيجار الجديد بالدرهم"))*100),sourceReference:prompt("مرجع التجديد")||"",origin:"normal"});}if(action==="depart"){const t=chooseCanonical("اختر علاقة السكن",(s.tenancies||[]).filter(x=>x.status==="active"));return sendStructuralCommand("endTenancy",{tenancyId:t.id,endDate:prompt("تاريخ المغادرة YYYY-MM-DD")||"",reason:prompt("سبب المغادرة / المرجع")||""});}if(action==="replace"){const old=chooseCanonical("اختر علاقة السكن الحالية",(s.tenancies||[]).filter(x=>x.status==="active")),tenant=chooseCanonical("اختر المستأجر البديل",(s.tenants||[]).filter(x=>x.status==="active"));return sendStructuralCommand("replaceTenancyTenant",{tenancyId:old.id,newTenancyId:canonicalId("tenancy"),tenantId:tenant.id,effectiveDate:prompt("تاريخ الاستبدال YYYY-MM-DD")||"",sourceReference:prompt("مرجع الاستبدال")||""});}if(action==="deactivate-unit"){const u=chooseCanonical("اختر الوحدة",(s.units||[]).filter(x=>x.status==="active"));return sendStructuralCommand("setUnitActive",{unitId:u.id,active:false,reason:prompt("سبب إيقاف الوحدة")||""});}}
-
-// ===== دخول بيانات الإيجار الحالية =====
-// تُبنى الحمولة هنا فقط؛ التنفيذ يمر بـrunUiFinancialCommand للحصول على
-// معرّف عملية ثابت وحارس in-flight وكشف إعادة التنفيذ.
-function buildSpaceRentalPayload(spaceId,form){
-  const monthKey=String(S.canonicalReadMonth||getCanonicalMonthKey(S.year,S.month));
-  const payload={spaceId,reportingMonth:monthKey,occupancy:form.occupancy};
-  if(form.occupancy==="occupied"){
-    const aed=Number(form.rent);
-    if(!isFinite(aed)||aed<=0) throw new Error("RENT_REQUIRED");
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(String(form.dueDate||""))) throw new Error("DUE_DATE_INVALID");
-    payload.contractualAmountFils=Math.round(aed*100);
-    payload.dueDate=form.dueDate;
-    payload.startDate=form.startDate||form.dueDate;
-    payload.tenantName=String(form.tenantName||"").trim();
-    payload.tenantPhone=String(form.tenantPhone||"").trim();
-  }
-  return payload;
-}
-// حالة الدورة كما يراها الموظف — من الحقيقة القانونية لا من Legacy
-function cycleDisplayStatus(cycle,model){
-  const details=model?.selectors?.details||model?.details||{};
-  const row=((details.target||[]).find(x=>x.cycleId===cycle.id)||{});
-  const base=Number(cycle.contractualAmountFils||cycle.baseAmountFils||0);
-  const left=row.remainingFils==null?base:Number(row.remainingFils);
-  if(left<=0) return {label:"محصل",color:"#4ade80",bg:"#052e16",border:"#166534"};
-  if(left<base) return {label:"جزئي",color:"#fbbf24",bg:"#1c1917",border:"#a16207"};
-  return {label:"متأخر",color:"#f87171",bg:"#1a0505",border:"#7f1d1d"};
-}
 const UI_COMMAND_IN_FLIGHT=new Map();
 const BACKEND_ERROR_MESSAGES=Object.freeze({
-  RENT_REQUIRED:"أدخل مبلغ الإيجار.",
-  OCCUPANCY_INVALID:"حدد حالة المساحة: مؤجّرة أو فارغ.",
-  CONTRACTUAL_AMOUNT_INVALID:"مبلغ الإيجار غير صالح.",
-  DUE_DATE_INVALID:"تاريخ الاستحقاق غير صالح (YYYY-MM-DD).",
-  START_DATE_INVALID:"تاريخ بداية السكن غير صالح (YYYY-MM-DD).",
-  RENTABLE_SPACE_NOT_FOUND:"المساحة غير موجودة في السجل القانوني.",
-  CYCLE_HAS_FINANCIAL_ACTIVITY:"لا يمكن تعديل بيانات الإيجار بعد تسجيل تحصيل. استخدم التصحيح المعتمد.",
-  REASON_REQUIRED:"السبب إلزامي.",
-  DEPOSIT_ALREADY_CANCELLED:"هذا الإيداع ملغى مسبقاً.",
-  DEPOSIT_NOT_CANCELLABLE:"لا يمكن إلغاء هذا الإيداع في حالته الحالية.",
-  DEPOSIT_NOT_FOUND:"الإيداع غير موجود.",
-  MANAGER_REQUIRED:"هذه العملية للمدير فقط.",
-  STAFF_REQUIRED:"غير مصرّح لك بهذه العملية.",
   STALE_OPERATIONAL_ENTITY:"تغيرت البيانات التشغيلية من جهاز آخر. أعد فتح العنصر وراجع التعديل.",
   STALE_CASH_ALLOCATION:"تغيرت العهدة. حدّث تخصيص النقد وراجعه قبل الإرسال.",
   STALE_EVICTION_REQUEST:"تغيرت الحالة المالية بعد إنشاء طلب الإخلاء. يلزم مراجعته من جديد.",
@@ -171,19 +129,9 @@ function stableUiOperationId(action,identity){
 }
 function finishUiOperation(action,identity){if(S.uiOperationIds)delete S.uiOperationIds["qama-ui-op:"+action+":"+String(identity||"")];}
 async function loadCanonicalReadModel(){
-  let monthKey=getCanonicalMonthKey(S.year,S.month);
-  let response=await canonicalReadModelCall({monthKey,asOfDate:new Date().toISOString().slice(0,10)});
-  let model=response.data||{};
-  // The reviewed reconstruction authority uses the existing application month
-  // scope (August = 2026_7). If the normal calendar key has no authority, read
-  // that exact alternate scope and accept it only when the server returns the
-  // matching staged authority. Normal canonical operation remains YYYY_MM.
-  const reconstructionMonthKey=getMonthKey(S.year,S.month);
-  if(String(model.canonicalControl?.state||"")==="RECONSTRUCTION_ALLOWED"&&!model.monthAuthority&&reconstructionMonthKey!==monthKey){
-    const alternate=await canonicalReadModelCall({monthKey:reconstructionMonthKey,asOfDate:new Date().toISOString().slice(0,10)});
-    const alternateModel=alternate.data||{};
-    if(alternateModel.monthAuthority?.monthKey===reconstructionMonthKey){monthKey=reconstructionMonthKey;model=alternateModel;}
-  }
+  const monthKey=getCanonicalMonthKey(S.year,S.month);
+  const response=await canonicalReadModelCall({monthKey,asOfDate:new Date().toISOString().slice(0,10)});
+  const model=response.data||{};
   S.canonicalControlState=String(model.canonicalControl?.state||"MAINTENANCE_LOCKED");
   S.structuralPreparation=model.canonicalControl?.structuralPreparation||{enabled:false};
   window.QAMA_CONTROL_STATE=S.canonicalControlState;
@@ -345,8 +293,7 @@ async function submitTenantCashCollectionFromUi({cycleId,amount,paymentDate,iden
   }
   return runUiFinancialCommand({command:"createCashReceipt",identity,payload,successMessage:acceptUnallocatedOverpayment?"✓ سُجّل التحصيل وحُفظ الفرق كدفعة غير مخصصة":"✓ سُجّل التحصيل النقدي وأُضيف للعهدة"});
 }
-function canonicalCashCollectionControl({cycleId,defaultAmount}){
-  if(!cycleId)throw new Error("CANONICAL_CYCLE_REQUIRED");
+function canonicalCashCollectionControl({unitId,partId,defaultAmount}){
   let amount=Number(defaultAmount)||0;
   let acceptUnallocatedOverpayment=false;
   const draftIdentity="cash-ui:"+(crypto.randomUUID?crypto.randomUUID():Date.now()+":"+Math.random().toString(16).slice(2));
@@ -361,7 +308,8 @@ function canonicalCashCollectionControl({cycleId,defaultAmount}){
     h("button",{class:"btn",style:{width:"100%",background:"#16a34a",color:"#fff",borderRadius:"7px",padding:"8px",fontWeight:"700"},onClick:async()=>{
       if(!Number.isFinite(amount)||amount<=0)return showMsg("⚠ أدخل مبلغ تحصيل صالح");
       try{
-        await submitTenantCashCollectionFromUi({cycleId:String(cycleId),amount,paymentDate:todayISO(),identity:draftIdentity,acceptUnallocatedOverpayment});
+        const cycleId=await resolveCanonicalCycleForUi({unitId,partId});
+        await submitTenantCashCollectionFromUi({cycleId,amount,paymentDate:todayISO(),identity:draftIdentity,acceptUnallocatedOverpayment});
       }catch(error){if(String(error?.message||error)!=="USER_CANCELLED")showMsg(backendErrorMessage(error));}
     }},["تأكيد استلام المبلغ"])
   ]);
@@ -2569,10 +2517,6 @@ const S={
 
 function getMonthKey(y,m){return `${y}_${m}`;}
 function getCanonicalMonthKey(y,m){return `${y}_${String(Number(m)+1).padStart(2,"0")}`;}
-function canonicalReadModelMatchesSelectedMonth(){
-  return S.canonicalReadMonth===getCanonicalMonthKey(S.year,S.month)||
-    (String(S.canonicalControlState||"")==="RECONSTRUCTION_ALLOWED"&&S.canonicalReadMonth===getMonthKey(S.year,S.month));
-}
 
 function initialPartitionStatus(p){
   if(p.note==="موظفين")return "staff";
@@ -3070,10 +3014,8 @@ function monthNav(){
 }
 
 function canonicalReconstructionWorkspaceActive(){
-  return String(S.canonicalControlState||"")==="RECONSTRUCTION_ALLOWED";
-}
-function canonicalOperationalWorkspaceActive(){
-  return String(S.canonicalControlState||"")==="CANONICAL_ACTIVE";
+  return String(S.canonicalControlState||"")==="RECONSTRUCTION_ALLOWED"&&
+    S.canonicalReadMonth===getCanonicalMonthKey(S.year,S.month)&&!!S.reconstructionMode?.enabled;
 }
 function renderCanonicalReconstructionOverview(){
   const model=S.canonicalReadModel||{},cards=model.projection?.cards||{},headlines=model.projection?.headlines||{};
@@ -3104,237 +3046,28 @@ function renderCanonicalReconstructionOverview(){
     ])
   ]);
 }
-function renderCanonicalReconstructionUnits(mode="reconstruction"){
-  const active=mode==="active";
+function renderCanonicalReconstructionUnits(){
   const model=S.canonicalReadModel||{},s=model.structure||{},cycles=model.rentalCycles||[];
   const byId=(rows)=>new Map((rows||[]).map(x=>[x.id,x]));
   const properties=byId(s.properties),units=byId(s.units),spaces=byId(s.rentableSpaces),tenants=byId(s.tenants),tenancies=byId(s.tenancies);
-  const isManager=USERS[S.user]?.role==="owner";
-  const monthKey=String(S.canonicalReadMonth||getCanonicalMonthKey(S.year,S.month));
-  S.rentalForm=S.rentalForm||{};
   const rows=(s.rentableSpaces||[]).map(space=>{
     const unit=units.get(space.unitId)||{},property=properties.get(space.propertyId||unit.propertyId)||{};
     const tenancy=(s.tenancies||[]).find(x=>x.spaceId===space.id&&x.status==="active");
     const tenant=tenancy?tenants.get(tenancy.tenantId):null;
-    // الدورة الحالية لهذه المساحة في هذا الشهر
-    const cycle=cycles.find(x=>x.spaceId===space.id&&x.reportingMonth===monthKey&&x.status!=="cancelled")||null;
-    const label=(unit.name||"—")+" / "+(space.name||"مساحة");
-    const isOpen=S.editSpace===space.id;
-    const st=cycle?cycleDisplayStatus(cycle,model):null;
-    const vacant=!cycle;
-    const rentAed=cycle?Number(cycle.contractualAmountFils||cycle.baseAmountFils||0)/100:0;
-
-    // شريط الحالة — نفس منطق البطاقة القديم
-    const badge=vacant
-      ?h("div",{style:{padding:"4px 10px",borderRadius:"7px",background:"#111",border:"1px solid #2a2a2a",color:"#777",fontSize:"13px",fontWeight:"700"}},["فارغ"])
-      :h("div",{style:{padding:"4px 10px",borderRadius:"7px",background:st.bg,border:"1px solid "+st.border,color:st.color,fontSize:"13px",fontWeight:"800"}},[st.label]);
-
-    const header=h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px",cursor:"pointer"},
-      onClick:()=>set({editSpace:isOpen?null:space.id})},[
-      h("div",{style:{flex:"1",minWidth:"0"}},[
-        h("div",{style:{fontWeight:"800",color:"#fff",fontSize:"15px"}},[label]),
-        h("div",{style:{fontSize:"12px",color:"#888",marginTop:"3px"}},[
-          vacant?"لا يوجد إيجار مسجّل لهذا الشهر"
-                :((tenant?.displayName||cycle.tenant||"ساكن غير محدد")+" · "+rentAed.toLocaleString()+" د.إ · استحقاق "+(cycle.dueDate||"—"))])]),
-      badge]);
-
-    if(!isOpen) return h("div",{class:"card",style:{padding:"13px",marginBottom:"8px"}},[header]);
-
-    // ===== فورم دخول بيانات الإيجار الحالية =====
-    const f=S.rentalForm[space.id]||(S.rentalForm[space.id]={
-      occupancy:vacant?"occupied":"occupied",
-      tenantName:tenant?.displayName||cycle?.tenant||"",
-      tenantPhone:tenant?.phone||"",
-      rent:cycle?String(rentAed):"",
-      dueDate:cycle?.dueDate||"",
-      startDate:tenancy?.startDate||""
-    });
-    const field=(labelTxt,key,type,ph)=>h("div",{style:{marginBottom:"8px"}},[
-      h("div",{style:{fontSize:"13px",color:"#888",marginBottom:"3px"}},[labelTxt]),
-      (()=>{const i=h("input",{type:type||"text",placeholder:ph||"",value:f[key]||""});
-        i.addEventListener("input",e=>{f[key]=e.target.value;});return i;})()]);
-    const occBtn=(val,txt,col)=>h("button",{class:"btn",style:{flex:"1",padding:"9px",borderRadius:"8px",fontSize:"14px",fontWeight:"700",
-      background:f.occupancy===val?col:"#141414",color:f.occupancy===val?"#000":"#666",
-      border:f.occupancy===val?"none":"1px solid #2a2a2a"},
-      onClick:()=>{f.occupancy=val;R();}},[txt]);
-
-    const busy=!!S.rentalBusy;
-    const saveBtn=h("button",{class:"btn",style:{flex:"2",background:busy?"#333":"#fff",color:busy?"#888":"#000",borderRadius:"8px",padding:"10px",fontSize:"15px",fontWeight:"800"},
-      onClick:()=>{
-        if(S.rentalBusy)return;
-        let payload;
-        try{ payload=buildSpaceRentalPayload(space.id,f); }
-        catch(e){ return showMsg("⚠ "+(BACKEND_ERROR_MESSAGES[String(e.message)]||"أكمل بيانات الإيجار")); }
-        S.rentalBusy=true;R();
-        runUiFinancialCommand({command:"setSpaceRental",identity:space.id+":"+monthKey,payload,
-          successMessage:f.occupancy==="vacant"?"✓ سُجّلت المساحة فارغة":"✓ حُفظت بيانات الإيجار"})
-          .then(()=>set({editSpace:null}))
-          .finally(()=>{S.rentalBusy=false;R();});
-      }},[busy?"جاري الحفظ...":"حفظ"]);
-
-    const form=h("div",{style:{borderTop:"1px solid #222",marginTop:"10px",paddingTop:"10px"}},[
-      h("div",{style:{fontSize:"13px",color:"#888",marginBottom:"5px"}},["حالة المساحة"]),
-      h("div",{style:{display:"flex",gap:"7px",marginBottom:"10px"}},[occBtn("occupied","مؤجّرة","#4ade80"),occBtn("vacant","فارغ","#9ca3af")]),
-      ...(f.occupancy==="occupied"?[
-        field("اسم المستأجر","tenantName","text","اتركه فارغاً إن لم يكن معروفاً"),
-        field("الهاتف","tenantPhone","text","اختياري"),
-        field("الإيجار (د.إ)","rent","number","المبلغ الشهري"),
-        field("تاريخ الاستحقاق","dueDate","date"),
-        field("تاريخ بداية السكن","startDate","date")
-      ]:[h("div",{style:{fontSize:"12px",color:"#777",marginBottom:"9px"}},["ستُسجَّل المساحة فارغة ولن تدخل في المستهدف."])]),
-      h("div",{style:{display:"flex",gap:"8px"}},[
-        h("button",{class:"btn",style:{flex:"1",background:"#141414",border:"1px solid #2a2a2a",color:"#888",borderRadius:"8px",padding:"10px",fontSize:"14px"},
-          onClick:()=>set({editSpace:null})},["إغلاق"]),
-        saveBtn])]);
-
-    // تحصيل + تصحيح الاستحقاق — من دورة قانونية صريحة فقط، لا من أي حقل Legacy
-    const related=cycle?[cycle]:[];
-    const cycleBox=related.length?h("div",{style:{marginTop:"10px",padding:"9px",border:"1px solid #1e3a5f",borderRadius:"8px",background:"#0b1728"}},[
-      ...related.map(cycle=>canonicalCashCollectionControl({cycleId:cycle.id,defaultAmount:Number(cycle.contractualAmountFils||cycle.baseAmountFils||0)/100})),
-      isManager?h("button",{class:"btn",style:{width:"100%",marginTop:"8px",background:"#141414",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"8px",padding:"8px",fontSize:"13px"},
-        onClick:()=>{
-          const nd=prompt("تاريخ الاستحقاق الجديد (YYYY-MM-DD)",cycle.dueDate||"");
-          if(!nd)return;
-          const why=prompt("سبب التصحيح (إلزامي)");
-          if(!why||!why.trim())return showMsg("⚠ السبب إلزامي");
-          runUiFinancialCommand({command:"correctCycleDueDate",identity:cycle.id+":"+nd,
-            payload:{cycleId:cycle.id,dueDate:nd,reason:why.trim()},
-            successMessage:"✓ صُحّح تاريخ الاستحقاق"});
-        }},["✎ تصحيح تاريخ الاستحقاق"]):null
-    ]):null;
-
-    return h("div",{class:"card",style:{padding:"13px",marginBottom:"8px"}},[header,form,cycleBox]);
+    const related=cycles.filter(x=>x.spaceId===space.id||x.tenancyId===tenancy?.id);
+    return h("div",{class:"card",style:{padding:"13px",marginBottom:"8px"}},[
+      h("div",{style:{fontWeight:"800",color:"#fff"}},[(property.name||"—")+" / "+(unit.name||"—")+" / "+(space.name||space.id)]),
+      h("div",{style:{fontSize:"12px",color:"#888",marginTop:"5px"}},["المستأجر: "+(tenant?.displayName||"غير مؤكد")+" · حالة السكن: "+(tenancy?.status||"غير منشأ")]),
+      h("div",{style:{fontSize:"12px",color:"#60a5fa",marginTop:"4px"}},["دورات الإيجار القانونية: "+related.length])
+    ]);
   });
-
   return h("div",{},[monthNav(),
     h("div",{class:"card",style:{padding:"13px",marginBottom:"12px",border:"1px solid #2563eb"}},[
-      h("div",{style:{fontWeight:"900",color:"#bfdbfe"}},[active?"الوحدات القانونية التشغيلية":"الوحدات القانونية لإعادة البناء"]),
-      h("div",{style:{fontSize:"12px",color:"#888",marginTop:"4px"}},[active?"المصدر التشغيلي هو العقارات والوحدات والمساحات والمستأجرون وعلاقات السكن ودورات الإيجار القانونية فقط.":"لا تعرض هذه الصفحة مستأجري Legacy أو حالاتهم المالية. استخدم أزرار الإدارة القانونية أعلاه لإعداد السجل الحقيقي."])
+      h("div",{style:{fontWeight:"900",color:"#bfdbfe"}},["الوحدات القانونية لإعادة البناء"]),
+      h("div",{style:{fontSize:"12px",color:"#888",marginTop:"4px"}},["لا تعرض هذه الصفحة مستأجري Legacy أو حالاتهم المالية. استخدم أزرار الإدارة القانونية أعلاه لإعداد السجل الحقيقي."])
     ]),
-    ...(rows.length?rows:[h("div",{class:"card",style:{padding:"18px",textAlign:"center",color:"#888"}},[active?"لا توجد مساحات قانونية تشغيلية بعد.":"لا توجد مساحات قانونية بعد. يبدأ المدير بإنشاء العقار والوحدات والمساحات والمستأجرين."])])
+    ...(rows.length?rows:[h("div",{class:"card",style:{padding:"18px",textAlign:"center",color:"#888"}},["لا توجد مساحات قانونية بعد. يبدأ المدير بإنشاء العقار والوحدات والمساحات والمستأجرين."])])
   ]);
-}
-
-function renderCanonicalAdminControls(){
-  if(USERS[S.user]?.role!=="owner")return null;
-  const style={background:"#111",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"10px",padding:"10px",fontSize:"13px",fontWeight:"600"};
-  return h("div",{class:"card",style:{padding:"12px",marginBottom:"12px"}},[
-    h("div",{style:{fontWeight:"800",marginBottom:"9px"}},["الإدارة القانونية"]),
-    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"8px"}},[
-      ...[["property","+ عقار"],["unit","+ وحدة"],["space","+ مساحة"],["tenant","+ مستأجر"],["tenancy","+ سكن"],["cycle","+ دورة إيجار"]].map(([action,label])=>h("button",{class:"btn",style,onClick:()=>canonicalAdminAction(action).then(()=>showMsg("✓ تم الحفظ في السجل القانوني")).catch(e=>showMsg("⚠ "+String(e?.message||e)))},[label])),
-      ...[["renew","تجديد دورة"],["depart","مغادرة مستأجر"],["replace","استبدال مستأجر"],["deactivate-unit","إيقاف وحدة"]].map(([action,label])=>h("button",{class:"btn",style,onClick:()=>canonicalLifecycleAction(action).then(()=>showMsg("✓ تم تحديث دورة الحياة القانونية")).catch(e=>showMsg("⚠ "+String(e?.message||e)))},[label]))
-    ])
-  ]);
-}
-
-function renderCanonicalOperationalOverview(){
-  const model=S.canonicalReadModel||{},cards=model.projection?.cards||{},headlines=model.projection?.headlines||{},structure=model.structure||{},cycles=model.rentalCycles||[];
-  const metric=(label,value,color="#fff")=>h("div",{class:"card",style:{padding:"13px",textAlign:"center"}},[h("div",{style:{fontSize:"12px",color:"#777",marginBottom:"5px"}},[label]),h("div",{style:{fontSize:"19px",fontWeight:"900",color}},[(Number(value||0)/100).toLocaleString()+" د.إ"])]);
-  return h("div",{},[monthNav(),
-    h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #166534",background:"#071b12"}},[
-      h("div",{style:{fontWeight:"900",color:"#bbf7d0"}},["QAMA القانوني — التشغيل الدائم"]),
-      h("div",{style:{fontSize:"12px",color:"#86efac",marginTop:"5px"}},["كل النتائج محسوبة من السجلات والأحداث القانونية. لا تدخل بيانات Legacy في الحقيقة التشغيلية."])
-    ]),
-    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"8px",marginBottom:"12px"}},[
-      metric("المستهدف",cards.targetFils),metric("المحصّل",cards.collectedFils,"#4ade80"),metric("المودع",cards.depositedFils,"#60a5fa"),metric("عهدة الموظفين",cards.receivedNotDepositedFils,"#fbbf24"),metric("المتأخر",cards.arrearsFils,"#f87171"),metric("لم يحل عليه",cards.notYetDueFils),metric("المتبقي الجزئي",cards.partialRemainingFils,"#fbbf24"),metric("الدخل",headlines.incomeFils,"#4ade80"),metric("المصاريف",headlines.expensesFils,"#f87171"),metric("الصافي",headlines.netFils,Number(headlines.netFils||0)>=0?"#4ade80":"#f87171")
-    ]),
-    h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontWeight:"800",marginBottom:"7px"}},["السجل التشغيلي"]),h("div",{style:{fontSize:"13px",color:"#aaa",lineHeight:"1.8"}},["العقارات: "+(structure.properties||[]).length+" · الوحدات: "+(structure.units||[]).length+" · المساحات: "+(structure.rentableSpaces||[]).length+" · المستأجرون: "+(structure.tenants||[]).length+" · علاقات السكن: "+(structure.tenancies||[]).length+" · دورات الإيجار: "+cycles.length])])
-  ]);
-}
-
-async function canonicalOperationalPrompt(action){
-  const model=S.canonicalReadModel||{},cycles=model.rentalCycles||[],role=String(model.role||"");
-  if(action==="bank"){
-    const cycle=chooseCanonical("اختر دورة الإيجار القانونية",cycles.filter(x=>String(x.status||"").startsWith("open")));
-    const amount=Number(prompt("مبلغ التحصيل البنكي")),bankReference=String(prompt("مرجع البنك")||"").trim();
-    if(amount>0&&bankReference)return createBankPayment({cycleId:cycle.id,amount,bankReference,paymentDate:todayISO()});
-  }
-  if(action==="deposit"){
-    const amount=Number(prompt("مبلغ الإيداع")),description=String(prompt("وصف/مرجع الإيداع")||"").trim();
-    if(amount>0&&description)return submitCashDepositFromUi({amount,date:todayISO(),description,identity:[amount,todayISO(),description].join(":")});
-  }
-  if(action==="expense"){
-    const amount=Number(prompt("مبلغ المصروف")),reason=String(prompt("سبب المصروف")||"").trim();if(!(amount>0&&reason))return;
-    const command=role==="manager"?"executeExpense":"requestExpense",payload={amountFils:fils(amount),reason,monthKey:getCanonicalMonthKey(S.year,S.month)};
-    if(command==="executeExpense")payload.account=String(prompt("الحساب: company / revenue / deduction","revenue")||"");
-    return runUiFinancialCommand({command,identity:[amount,reason,todayISO()].join(":"),payload,successMessage:command==="executeExpense"?"✓ سُجّل المصروف":"✓ أُرسل المصروف للاعتماد"});
-  }
-  if(action==="custody"){
-    const recipients=(S.loginUsers||[]).filter(x=>x.userKey!==S.user),to=chooseCanonical("اختر مستلم العهدة",recipients.map(x=>({id:x.userKey,name:x.name})));
-    const amount=Number(prompt("مبلغ نقل العهدة"));if(amount>0)return submitCustodyTransferFromUi({to:to.id,amount,identity:[to.id,amount,todayISO()].join(":")});
-  }
-  if(action==="reserve"){
-    const amount=Number(prompt("المبلغ المحول إلى احتياطي الأقساط")),reason=String(prompt("سبب التحويل")||"").trim();if(amount>0&&reason)return runUiFinancialCommand({command:"createInstallmentReserveTransfer",identity:[amount,reason,todayISO()].join(":"),payload:{amountFils:fils(amount),reason,effectiveDate:todayISO()},successMessage:"✓ تم التحويل إلى احتياطي الأقساط"});
-  }
-  if(action==="installment"){
-    const amount=Number(prompt("مبلغ القسط البنكي")),reference=String(prompt("مرجع القسط")||"").trim();if(amount>0&&reference)return runUiFinancialCommand({command:"createBankInstallmentPayment",identity:[amount,reference,todayISO()].join(":"),payload:{amountFils:fils(amount),reference,effectiveDate:todayISO()},successMessage:"✓ سُجّل القسط البنكي"});
-  }
-  if(action==="refund"){
-    const allocationId=String(prompt("معرف التخصيص القانوني")||"").trim(),amount=Number(prompt("مبلغ الاسترداد"));if(allocationId&&amount>0)return runUiFinancialCommand({command:"refundPayment",identity:[allocationId,amount].join(":"),payload:{allocationId,amountFils:fils(amount)},successMessage:"✓ سُجّل الاسترداد التعويضي"});
-  }
-  if(action==="reverse"){
-    const paymentId=String(prompt("معرف الدفعة المطلوب عكسها")||"").trim(),reason=String(prompt("سبب العكس")||"").trim();if(paymentId&&reason)return runUiFinancialCommand({command:"cancelPayment",identity:[paymentId,reason].join(":"),payload:{paymentId,reason},successMessage:"✓ سُجّل العكس المرتبط"});
-  }
-}
-
-function renderCanonicalOperationalActions(){
-  const manager=String(S.canonicalReadModel?.role||"")==="manager";
-  const actions=[["deposit","إيداع نقدي"],["bank","تحصيل بنكي"],["expense","مصروف تشغيلي"],["custody","نقل عهدة"]];
-  if(manager)actions.push(["reserve","تحويل لاحتياطي الأقساط"],["installment","دفع قسط بنكي"],["refund","استرداد"],["reverse","تصحيح/عكس دفعة"]);
-  return h("div",{},[monthNav(),h("div",{class:"card",style:{padding:"14px",marginBottom:"12px"}},[h("div",{style:{fontWeight:"900",marginBottom:"9px"}},["العمليات القانونية"]),h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"10px"}},["كل زر ينشئ أمراً قانونياً مدققاً؛ الاعتمادات والصلاحيات تُطبق في الخادم."]),h("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"8px"}},actions.map(([action,label])=>h("button",{class:"btn",style:{padding:"12px",borderRadius:"9px",background:"#13231a",border:"1px solid #166534",color:"#bbf7d0"},onClick:()=>canonicalOperationalPrompt(action).catch(e=>showMsg("⚠ "+backendErrorMessage(e)))},[label])))])]);
-}
-
-function renderCanonicalTransactions(){
-  const manager=String(S.canonicalReadModel?.role||"")==="manager",events=S.canonicalReadModel?.externalRevenues||[];
-  if(!S.showAddTx)return h("div",{},[monthNav(),manager?h("button",{class:"btn",style:{padding:"10px",marginBottom:"12px"},onClick:()=>set({showAddTx:true})},["+ إيداع"]):null,...events.map(x=>h("div",{class:"card",style:{padding:"12px",marginBottom:"8px"}},["إيراد من مصدر آخر · "+(Number(x.amountFils||0)/100).toLocaleString()+" د.إ · "+(x.source||"")]))]);
-  let type="external_revenue",amount="",source="",desc="";
-  const select=h("select",{},[h("option",{value:"external_revenue"},["إيراد من مصدر آخر"])]);select.addEventListener("change",e=>type=e.target.value);
-  const field=(placeholder,setter)=>{const input=h("input",{placeholder});input.addEventListener("input",e=>setter(e.target.value));return input;};
-  return h("div",{},[monthNav(),h("div",{class:"card",style:{padding:"14px"}},[select,field("المبلغ",v=>amount=v),field("مصدر الإيراد الآخر (إلزامي)",v=>source=v),field("الوصف",v=>desc=v),h("button",{class:"btn",onClick:()=>{if(type==="external_revenue")runUiFinancialCommand({command:"recordExternalRevenue",identity:[amount,source,desc,todayISO()].join(":"),payload:{amountFils:fils(amount),date:todayISO(),source,reason:desc},successMessage:"✓ سُجّل الإيراد الآخر في حساب الإيرادات"}).then(()=>set({showAddTx:false}));}},["حفظ"])])]);
-}
-
-function renderCanonicalRequests(){
-  const rows=S.canonicalReadModel?.requests||[];
-  return h("div",{},[monthNav(),...(rows.length?rows.map(x=>h("div",{class:"card",style:{padding:"12px",marginBottom:"8px"}},[(x.type||x.command||"طلب")+" · "+(x.status||"—")+" · "+(x.id||"")])):[h("div",{class:"card",style:{padding:"18px",textAlign:"center",color:"#888"}},["لا توجد طلبات قانونية لهذا الشهر."])])]);
-}
-
-function renderLegacyEvidenceView(){
-  const legacy=getMonthData(S.year,S.month)||{};
-  const summary={month:getMonthKey(S.year,S.month),units:Array.isArray(legacy.units)?legacy.units.length:0,fullUnits:Array.isArray(legacy.full)?legacy.full.length:0,transactions:Array.isArray(legacy.transactions)?legacy.transactions.length:0,expenses:Array.isArray(legacy.expenses)?legacy.expenses.length:0};
-  const exceptions=(S.canonicalReadModel?.reconstructionPlans||[]).flatMap(plan=>(plan.reviewedObligations||[]).filter(x=>x.historicalException?.status==="HISTORICAL_EXCEPTION").map(x=>({...x.historicalException,planMonth:plan.monthKey})).concat((plan.historicalFinancialCandidates||[]).filter(x=>x.historicalException?.status==="HISTORICAL_EXCEPTION").map(x=>({...x.historicalException,planMonth:plan.monthKey}))));
-  return h("div",{},[monthNav(),h("div",{class:"card",style:{padding:"14px",border:"1px solid #7c2d12",background:"#1c0f08"}},[h("div",{style:{fontWeight:"900",color:"#fdba74"}},["أدلة Legacy التاريخية — قراءة فقط"]),h("div",{style:{fontSize:"12px",color:"#c2410c",margin:"7px 0"}},["هذه البيانات لا تساهم في التشغيل أو الحسابات القانونية ولا تتضمن أي زر تعديل أو تحصيل."]),h("pre",{style:{whiteSpace:"pre-wrap",fontSize:"12px",color:"#aaa"}},[JSON.stringify(summary,null,2)])]),h("div",{class:"card",style:{padding:"14px",marginTop:"10px",border:"1px solid #78350f"}},[h("div",{style:{fontWeight:"900",color:"#fbbf24",marginBottom:"7px"}},["الاستثناءات التاريخية المستبعدة من الإسقاط — قراءة فقط"]),...(exceptions.length?exceptions.map(x=>h("div",{style:{padding:"8px 0",borderTop:"1px solid #292017",fontSize:"12px",color:"#bbb"}},[`${x.itemType==="obligation"?"التزام":"مرشح مالي"}: ${x.itemId} · السبب: ${x.reason} · القرار: ${x.decidedBy} · ${x.decidedAt}`])):[h("div",{style:{fontSize:"12px",color:"#777"}},["لا توجد استثناءات تاريخية مصنفة."])])])]);
-}
-
-function renderCanonicalOperationalShell(){
-  const isOwner=USERS[S.user]?.role==="owner",nm=USERS[S.user]?.name||S.user||"المستخدم";
-  const tabs=isOwner?["overview","units","operations","transactions","requests","evidence"]:["emphome","units","operations","requests","evidence"];
-  const labels={overview:"الرئيسية",emphome:"🏠 الرئيسية",units:"الوحدات",operations:"العمليات",transactions:"الإيداعات",requests:"الطلبات",evidence:"الأدلة التاريخية"};
-  const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[h("div",{},[h("div",{style:{fontSize:"14px",color:"#333"}},["قمة الرواسي"]),h("div",{style:{fontSize:"16px",fontWeight:"700"}},["لوحة "+nm])]),h("div",{style:{display:"flex",gap:"8px"}},[h("button",{class:"btn",onClick:()=>loadCanonicalReadModel().then(()=>R())},["تحديث"]),h("button",{class:"btn",onClick:()=>doSignOut()},["خروج"])])]),h("div",{style:{display:"flex",gap:"4px",overflowX:"auto"}},tabs.map(tab=>h("button",{class:"btn",style:{padding:"8px 14px",borderRadius:"8px",flexShrink:"0",background:S.tab===tab?"#fff":"#222",color:S.tab===tab?"#000":"#ccc"},onClick:()=>set({tab,selUnit:null,editPart:null})},[labels[tab]])))]);
-  const current=canonicalReadModelMatchesSelectedMonth();let content=h("div",{class:"card",style:{padding:"18px",textAlign:"center"}},["جاري تحميل السجل القانوني..."]);
-  if(current){if(S.tab==="units")content=renderCanonicalReconstructionUnits("active");else if(S.tab==="operations")content=renderCanonicalOperationalActions();else if(S.tab==="transactions")content=renderCanonicalTransactions();else if(S.tab==="requests")content=renderCanonicalRequests();else if(S.tab==="evidence")content=renderLegacyEvidenceView();else content=renderCanonicalOperationalOverview();}
-  return h("div",{},[hdr,h("div",{style:{background:"#052e16",borderBottom:"1px solid #166534",padding:"9px 14px",color:"#bbf7d0",fontSize:"12px",fontWeight:"700"}},["النظام القانوني التشغيلي فعال — Legacy أدلة تاريخية منفصلة فقط"]),h("div",{style:{padding:"14px 14px 48px"}},[current?renderCanonicalAdminControls():null,content])]);
-}
-
-function renderCanonicalReconstructionShell(){
-  const isOwner=USERS[S.user]?.role==="owner",nm=USERS[S.user]?.name||S.user||"المستخدم";
-  const tabs=isOwner?["overview","units"]:["emphome","units"];
-  const labels={overview:"الرئيسية",emphome:"🏠 الرئيسية",units:"الوحدات"};
-  const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
-    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
-      h("div",{style:{display:"flex",gap:"8px"}},[
-        h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:()=>loadCanonicalReadModel().then(()=>R())},["تحديث"]),
-        h("button",{class:"btn",style:{background:"#1a1a1a",border:"1px solid #222",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",color:"#666"},onClick:()=>doSignOut()},["خروج"])
-      ])
-    ]),
-    h("div",{style:{display:"flex",gap:"4px"}},tabs.map(tab=>h("button",{class:"btn",style:{padding:"8px 14px",borderRadius:"8px",fontSize:"16px",background:S.tab===tab?"#fff":"#222",color:S.tab===tab?"#000":"#ccc"},onClick:()=>set({tab,selUnit:null,editPart:null})},[labels[tab]])))
-  ]);
-  const canonicalCurrent=canonicalReadModelMatchesSelectedMonth();
-  const content=!canonicalCurrent
-    ?h("div",{class:"card",style:{padding:"18px",textAlign:"center",color:"#888"}},["جاري تحميل مساحة إعادة البناء القانونية..."])
-    :(S.tab==="units"?renderCanonicalReconstructionUnits():renderCanonicalReconstructionOverview());
-  const strip=h("div",{style:{background:"#172554",borderBottom:"1px solid #2563eb",padding:"9px 14px",color:"#bfdbfe",fontSize:"12px",fontWeight:"700"}},["وضع إعادة البناء المراقب فعال — العرض التشغيلي قانوني فقط، وLegacy أدلة تاريخية منفصلة"]);
-  return h("div",{},[hdr,strip,h("div",{style:{padding:"14px 14px 48px"}},[canonicalCurrent?renderStructuralPreparationPanel():null,content])]);
 }
 
 function renderApp(){
@@ -3351,17 +3084,12 @@ function renderApp(){
     return {blocked:true,until:latest,count:bookings.length};
   };
   const nm=USERS[S.user].name;
+  const data=getCurData();
   if(S.loading){
     return h("div",{style:{background:"#0a0a0a",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"16px"}},[
       h("div",{style:{width:"32px",height:"32px",border:"3px solid #222",borderTop:"3px solid #fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}),
       h("div",{style:{fontSize:"15px",color:"#555"}},["جاري تحميل البيانات..."])]);
   }
-  // Hard routing boundary: while reconstruction is allowed, never read or
-  // construct the Legacy operational workspace. Missing/stale canonical
-  // context renders a canonical empty/loading state and cannot fall back.
-  if(canonicalReconstructionWorkspaceActive())return renderCanonicalReconstructionShell();
-  if(canonicalOperationalWorkspaceActive())return renderCanonicalOperationalShell();
-  const data=getCurData();
   const units=data.units, full=data.full;
   const lateList=units.flatMap(u=>u.partitions.filter(p=>displayStatus(p)==="late" || isPartialPaid(p)).map(p=>u.name+"/"+p.id+(isPartialPaid(p)?" (جزئي، متبقي "+moneyText(remainingValue(p))+" د.إ)":"")));
   const vacantList=units.flatMap(u=>u.partitions.filter(p=>displayStatus(p)==="vacant").map(p=>u.name+"/"+p.id));
@@ -4072,7 +3800,7 @@ function renderApp(){
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الدفع"]),
               (()=>{const s=h("select",{},[["false","كامل"],["true","جزئي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(p.partial)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateP("partial",e.target.value==="true"));return s;})()]),
-            CANONICAL_BACKEND_REQUIRED?h("div",{style:{fontSize:"12px",color:"#777"}},["السجل التاريخي للقراءة فقط"]):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
+            CANONICAL_BACKEND_REQUIRED?canonicalCashCollectionControl({unitId:unit.id,partId:p.id,defaultAmount:Math.max(0,Number(p.rent||0)-Number(p.paid_amount||0))}):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
               (()=>{const inp=h("input",{type:"number",placeholder:"0",value:p.paid_amount||0});inp.addEventListener("input",e=>updateP("paid_amount",Number(e.target.value),true));inp.addEventListener("change",e=>updateP("paid_amount",Number(e.target.value)));return inp;})()])]),
           // ===== طريقة التحصيل + الدفعات البنكية =====
           (()=>{
@@ -4344,7 +4072,7 @@ function renderApp(){
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الدفع"]),
               (()=>{const s=h("select",{},[["false","كامل"],["true","جزئي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(u.partial)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{updateFull("partial",e.target.value==="true");});return s;})()]),
-            CANONICAL_BACKEND_REQUIRED?h("div",{style:{fontSize:"12px",color:"#777"}},["السجل التاريخي للقراءة فقط"]):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
+            CANONICAL_BACKEND_REQUIRED?canonicalCashCollectionControl({unitId:u.id,partId:null,defaultAmount:Math.max(0,Number(u.rent||0)-Number(u.paid_amount||0))}):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
               (()=>{const inp=h("input",{type:"number",placeholder:"0",value:u.paid_amount||0});inp.addEventListener("input",e=>updateFull("paid_amount",Number(e.target.value),true));inp.addEventListener("change",e=>updateFull("paid_amount",Number(e.target.value)));return inp;})()])]),
           h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المستأجر"]),
             (()=>{const inp=h("input",{type:"text",placeholder:"اسم المستأجر...",value:u.tenant||""});inp.addEventListener("input",e=>updateFull("tenant",e.target.value,true));inp.addEventListener("change",e=>updateFull("tenant",e.target.value));return inp;})()]),
@@ -5415,28 +5143,9 @@ function renderApp(){
     const canonicalReady=S.canonicalReadMonth===getCanonicalMonthKey(S.year,S.month);
     const canonicalDeposits=canonicalReady?(S.canonicalReadModel?.deposits||[]):[];
     const canonicalExternal=canonicalReady?(S.canonicalReadModel?.externalRevenues||[]):[];
-    // ملغي/معكوس يُعرض مطموساً ولا يدخل الإيداعات النشطة
-    const depCancelled=(x)=>["cancelled","reversed"].includes(String(x.status||""));
-    const depStatusLabel=(x)=>({approved:"معتمد",pending:"معلّق",cancelled:"ملغي",reversed:"ملغي",rejected:"مرفوض",withdrawn:"مسحوب"})[String(x.status||"pending")]||String(x.status);
-    const txCards=canonicalReady?[...canonicalDeposits.map(dep=>h("div",{class:"card",style:{padding:"12px",marginBottom:"8px",opacity:depCancelled(dep)?"0.55":"1",border:depCancelled(dep)?"1px solid #7f1d1d":undefined}},[
-      h("div",{style:{display:"flex",justifyContent:"space-between"}},[
-        h("strong",{style:{textDecoration:depCancelled(dep)?"line-through":"none"}},["إيداع إيجار / عهدة"]),
-        h("span",{style:{color:depCancelled(dep)?"#f87171":dep.status==="approved"?"#4ade80":"#fbbf24",textDecoration:depCancelled(dep)?"line-through":"none"}},[(Number(dep.requestedAmountFils||0)/100).toLocaleString()+" د.إ"])]),
-      h("div",{style:{fontSize:"12px",color:"#888",marginTop:"5px"}},["الحالة: "+depStatusLabel(dep)+" · التخصيصات: "+String((dep.allocations||[]).length)]),
-      depCancelled(dep)?h("div",{style:{fontSize:"11px",color:"#f87171",marginTop:"5px"}},[
-        "ملغي — "+(dep.cancellationReason||"بلا سبب مسجّل")+(dep.cancelledAt?" · "+String(dep.cancelledAt).slice(0,10):"")+" · محفوظ في سجل التدقيق"]):null,
-      // حذف الإيداع — للمدير فقط، بسبب وتأكيد إلزاميين. داخلياً إلغاء/عكس موثق لا حذف فعلي.
-      (isOwner&&!depCancelled(dep)&&["approved","pending"].includes(String(dep.status||"")))?h("button",{class:"btn",
-        style:{marginTop:"9px",width:"100%",background:"#3f1111",color:"#fca5a5",border:"1px solid #7f1d1d",borderRadius:"7px",padding:"8px",fontSize:"13px",fontWeight:"700"},
-        onClick:()=>{
-          const amount=(Number(dep.requestedAmountFils||0)/100).toLocaleString();
-          if(!window.confirm("حذف الإيداع "+amount+" د.إ؟\n\nلن يُحذف السجل فعلياً — سيُسجَّل إلغاء موثق يعكس أثره المالي بالكامل ويبقى في سجل التدقيق."))return;
-          const reason=window.prompt("سبب الحذف (إلزامي):");
-          if(!reason||!reason.trim())return showMsg("⚠ السبب إلزامي");
-          runUiFinancialCommand({command:"cancelDeposit",identity:dep.id,
-            payload:{depositRequestId:dep.id,reason:reason.trim()},
-            successMessage:"✓ أُلغي الإيداع وعُكس أثره المالي"});
-        }},["حذف الإيداع"]):null
+    const txCards=canonicalReady?[...canonicalDeposits.map(dep=>h("div",{class:"card",style:{padding:"12px",marginBottom:"8px"}},[
+      h("div",{style:{display:"flex",justifyContent:"space-between"}},[h("strong",{},["إيداع إيجار / عهدة"]),h("span",{style:{color:dep.status==="approved"?"#4ade80":"#fbbf24"}},[(Number(dep.requestedAmountFils||0)/100).toLocaleString()+" د.إ"])]),
+      h("div",{style:{fontSize:"12px",color:"#888",marginTop:"5px"}},["الحالة: "+String(dep.status||"pending")+" · التخصيصات: "+String((dep.allocations||[]).length)])
     ])),...canonicalExternal.map(event=>h("div",{class:"card",style:{padding:"12px",marginBottom:"8px",border:"1px solid #14532d"}},[
       h("div",{style:{display:"flex",justifyContent:"space-between"}},[h("strong",{},["إيراد من مصدر آخر"]),h("span",{style:{color:event.status==="active"?"#4ade80":"#888"}},[(Number(event.amountFils||0)/100).toLocaleString()+" د.إ"])]),
       h("div",{style:{fontSize:"12px",color:"#888",marginTop:"5px"}},[(event.source||"—")+" · "+(event.reason||"—")+" · "+(event.date||"—")]),
