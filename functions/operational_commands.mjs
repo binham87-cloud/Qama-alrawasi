@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { applyOperationalPatch } from "./domain/operational_commands.mjs";
-import { operationalWriteAllowed } from "./domain/canonical_control.mjs";
 
 const hash = (value) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const OP_ID = /^[A-Za-z0-9:_-]{8,160}$/;
@@ -27,13 +26,11 @@ export function buildOperationalCommand(db) {
         const userRef = db.collection("users").doc(request.auth.uid);
         const opRef = db.collection("operationalOperations").doc(operationId);
         const monthRef = db.collection("months").doc(String(payload.monthId || ""));
-        const controlRef = db.collection("config").doc("canonicalControl");
-        const [userSnap, opSnap, monthSnap, controlSnap] = await Promise.all([tx.get(userRef), tx.get(opRef), tx.get(monthRef), tx.get(controlRef)]);
+        const [userSnap, opSnap, monthSnap] = await Promise.all([tx.get(userRef), tx.get(opRef), tx.get(monthRef)]);
         if (!userSnap.exists) throw new Error("PROFILE_MISSING");
         const profile = userSnap.data() || {};
         if (profile.active === false) throw new Error("PROFILE_DISABLED");
         if (profile.role === "finance") throw new Error("FINANCE_ROLE_UNMAPPED");
-        if (!operationalWriteAllowed(controlSnap.exists ? controlSnap.data() : null)) throw new Error("CANONICAL_WRITES_DENIED");
         if (opSnap.exists) {
           const existing = opSnap.data() || {};
           if (existing.payloadHash !== payloadHash) throw new Error("IDEMPOTENCY_PAYLOAD_MISMATCH");

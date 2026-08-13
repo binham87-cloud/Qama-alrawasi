@@ -19,17 +19,18 @@ const COMMANDS = new Set([
   "adjustInstallmentObligation", "createLegacyFinancialCorrection",
   "adjustBalance", "reverseAdjustment", "payInstallment", "reverseInstallment",
   "createBankInstallmentPayment", "reverseBankInstallmentPayment",
-  "createReconstructionPlan", "addReconstructionObligation", "cancelReconstructionObligation", "linkReconstructionObligationStructure", "confirmReconstructionStructure", "classifyHistoricalException", "removeHistoricalException", "materializeReconstructionCycles", "activateReconstructionPlan", "cancelReconstructionPlan", "abandonReconstructionAndActivate",
   "closeMonth", "forceCloseMonth", "reopenMonth",
+  "setSpaceRental", "correctCycleDueDate", "cancelDeposit",
 ]);
 
+const OP_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const payloadHash = (command, payload) => crypto.createHash("sha256").update(JSON.stringify({ command, payload })).digest("hex");
 
 function publicError(error) {
   const code = String(error?.message || "COMMAND_FAILED");
   if (/REQUIRED|DENIED|STAFF_REQUIRED|MANAGER_REQUIRED|GATE_CLOSED|REVIEW_WRITE/.test(code)) return new HttpsError("permission-denied", code);
   if (/NOT_FOUND|MISSING/.test(code)) return new HttpsError("not-found", code);
-  if (/STALE|OVERPAYMENT|INSUFFICIENT|CLOSED|PENDING|MISMATCH|IN_PROGRESS/.test(code)) return new HttpsError("failed-precondition", code);
+  if (/STALE|OVERPAYMENT|INSUFFICIENT|CLOSED|PENDING|MISMATCH|IN_PROGRESS|SETTLEMENT_OVER_REVERSAL|DEPOSIT_ALREADY/.test(code)) return new HttpsError("failed-precondition", code);
   return new HttpsError("invalid-argument", code);
 }
 
@@ -40,6 +41,7 @@ export function buildFinancialCommand(db) {
     const operationId = String(request.data?.operationId || "");
     const payload = request.data?.payload || {};
     if (!COMMANDS.has(command)) throw new HttpsError("invalid-argument", "UNKNOWN_COMMAND");
+    if (!OP_ID.test(operationId)) throw new HttpsError("invalid-argument", "OPERATION_ID_INVALID");
     const pHash = payloadHash(command, payload);
     try {
       return await db.runTransaction(async (tx) => {

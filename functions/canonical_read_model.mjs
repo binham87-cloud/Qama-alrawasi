@@ -110,6 +110,20 @@ async function loadCanonicalState(db, monthKey, profile, uid) {
     state.ownerProfitDistributions = [];
     state.legacyFinancialCorrections = [];
   }
+  const relatedOperationIds = [...new Set([
+    ...(state.cycles || []).map((x) => x.operationId),
+    ...(state.paymentIntents || []).map((x) => x.operationId),
+    ...(state.collectionEvents || []).map((x) => x.operationId),
+    ...(state.depositRequests || []).flatMap((x) => [x.operationId, x.cancellationOperationId].filter(Boolean)),
+    ...(state.expenses || []).map((x) => x.operationId),
+    ...(state.cashMovements || []).map((x) => x.sourceOperationId),
+    ...(state.balanceTransfers || []).map((x) => x.operationId),
+    ...(state.adjustments || []).map((x) => x.operationId),
+    ...(state.installments || []).map((x) => x.operationId),
+  ].filter(Boolean))];
+  state.audit = manager && relatedOperationIds.length
+    ? await related(db, COLLECTIONS.audit, "operationId", relatedOperationIds)
+    : [];
   return { state, manager };
 }
 
@@ -143,6 +157,7 @@ export function buildCanonicalReadModel(db) {
       auditEvents: manager ? (state.audit || []).slice(-400) : [],
       dailyBookings: state.dailyBookings || [],
       deposits: state.depositRequests,
+      custodyTransfers: state.custodyTransfers || [],
       bankPayments: state.paymentIntents.filter((x) => x.method === "bank"),
       externalRevenues: manager ? state.externalRevenues : [],
       ownerProfitDistributions: manager ? state.ownerProfitDistributions : [],

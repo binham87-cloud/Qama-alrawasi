@@ -9,7 +9,7 @@ function browserHarness({ failFirstRefresh = false } = {}) {
   code = code.replace(/^import\s+.*?;$/gm, "").replace(/await import\([^)]*\)/g, "({})");
   const calls = []; const economicEffects = new Set(); let readCount = 0;
   const model = {
-    monthKey: "2026_7", role: "manager", canonicalControl: { state: "CANONICAL_ACTIVE", valid: true }, balances: { company: 10000, revenue: 500000, deduction: 20000 },
+    monthKey: "2026_08", role: "manager", balances: { company: 10000, revenue: 500000, deduction: 20000 },
     requests: [], projection: {
       cards: { targetFils: 300000, collectedFils: 100000, depositedFils: 100000, receivedNotDepositedFils: 0, arrearsFils: 200000, notYetDueFils: 0, uncollectedAtEvictionFils: 0 },
       details: { target: [{ cycleId: "c1", targetFils: 300000, remainingFils: 200000 }], collected: [{ cycleId: "c1", amountFils: 100000 }], deposited: [{ amountFils: 100000 }], receivedNotDeposited: [], arrears: [{ remainingFils: 200000 }], notYetDue: [], uncollectedAtEviction: [] },
@@ -28,7 +28,7 @@ function browserHarness({ failFirstRefresh = false } = {}) {
         economicEffects.add(payload.operationId);
         return { data: { operationId: payload.operationId, replay: calls.filter((x) => x.name === name && x.payload.operationId === payload.operationId).length > 1 } };
       }
-      if (name === "canonicalReadModel") {
+      if (name === "operationalReadModel" || name === "canonicalReadModel") {
         readCount++;
         if (failFirstRefresh && readCount === 1) throw new Error("READ_NETWORK_FAILURE");
         return { data: structuredClone(model) };
@@ -40,13 +40,13 @@ function browserHarness({ failFirstRefresh = false } = {}) {
   };
   ctx.globalThis = ctx; vm.createContext(ctx); vm.runInContext(code, ctx);
   vm.runInContext("loadRequests=async()=>{}", ctx);
-  vm.runInContext('S.user="manager";S.uid="uid-manager";S.userKey="manager";S.role="owner";S.screen="home";S.year=2026;S.month=7;S.canonicalControlState="CANONICAL_ACTIVE";USERS.manager={name:"Manager",role:"owner"};', ctx);
+  vm.runInContext('S.user="manager";S.uid="uid-manager";S.userKey="manager";S.role="owner";S.screen="home";S.year=2026;S.month=7;USERS.manager={name:"Manager",role:"owner"};', ctx);
   return { ctx, calls, economicEffects, model };
 }
 
-test("canonical financial value wins while operational legacy data remains readable", async () => {
+test("operational financial value wins while month occupancy data remains readable", async () => {
   const { ctx } = browserHarness();
-  await vm.runInContext("loadCanonicalReadModel()", ctx);
+  await vm.runInContext("loadOperationalReadModel()", ctx);
   const result = vm.runInContext('({target:CALC.target({units:[{partitions:[{rent:9999,status:"late"}]}]}),collected:CALC.actualCollected({transactions:[{amount:7777}]}),legacyOperational:{name:"Tenant Legacy",phone:"050"}})', ctx);
   assert.equal(result.target, 3000);
   assert.equal(result.collected, 1000);
@@ -59,12 +59,18 @@ test("command success plus refresh failure never becomes a second economic effec
   assert.equal(first.refreshPending, true);
   assert.equal(economicEffects.size, 1);
   const firstOperationId = calls.find((x) => x.name === "financialCommand").payload.operationId;
-  // A mistaken repeat of the same visible action reuses the exact operationId;
-  // the server returns the idempotent result and the second refresh succeeds.
   await vm.runInContext('runUiFinancialCommand({command:"recordExternalRevenue",identity:"form-1",payload:{amountFils:500000,source:"other",reason:"documented"}})', ctx);
   const commandCalls = calls.filter((x) => x.name === "financialCommand");
   assert.equal(commandCalls.length, 2);
   assert.equal(commandCalls[1].payload.operationId, firstOperationId);
   assert.equal(economicEffects.size, 1);
-  assert.equal(vm.runInContext("S.canonicalReadModel.projection.cards.collectedFils", ctx), 100000);
+  assert.equal(vm.runInContext("S.operationalReadModel.projection.cards.collectedFils", ctx), 100000);
+});
+
+test("QAMA loads the operational read model without a Canonical control state", async () => {
+  const { ctx, calls } = browserHarness();
+  await vm.runInContext("loadOperationalReadModel()", ctx);
+  assert.equal(vm.runInContext("window.QAMA_READY", ctx), true);
+  assert.equal(vm.runInContext("S.canonicalControlState", ctx), undefined);
+  assert.equal(calls.some((x) => x.name === "operationalReadModel"), true);
 });

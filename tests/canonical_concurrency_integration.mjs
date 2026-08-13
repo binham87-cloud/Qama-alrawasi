@@ -12,7 +12,6 @@ const projectId = "qama-test";
 const admin = adminInit({ projectId }, `concurrency-admin-${Date.now()}`);
 const db = getAdminFirestore(admin); const authAdmin = getAdminAuth(admin);
 await db.collection("config").doc("system").set({ financialTruthVersion: 3, buildId: "qama-phase3c-canonical-events-2026-08-11.4" });
-await db.collection("config").doc("canonicalControl").set({ state: "CANONICAL_ACTIVE", version: 1 });
 
 async function callable(uid, role, key) {
   try { await authAdmin.createUser({ uid }); } catch {}

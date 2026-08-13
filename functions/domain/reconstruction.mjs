@@ -26,22 +26,12 @@ function payloadMonth(payload){
   return date?monthOf(String(date)):payload.monthKey||payload.effectiveMonth||null;
 }
 
-export function prepareReconstructionCommand(state,command,ctx){
-  if(["createReconstructionPlan","addReconstructionObligation","cancelReconstructionObligation","linkReconstructionObligationStructure","confirmReconstructionStructure","classifyHistoricalException","removeHistoricalException","materializeReconstructionCycles","activateReconstructionPlan","cancelReconstructionPlan","abandonReconstructionAndActivate","createRentalCycle"].includes(command))return null;
-  const monthKey=payloadMonth(ctx.payload||{});
-  const origin=referencedEntity(state,command,ctx.payload||{});
-  const planId=ctx.payload?.reconstructionPlanId?String(ctx.payload.reconstructionPlanId):origin?.reconstructionPlanId||null;
-  const boundaryPlan=monthKey?reconstructionPlanForMonth(state,monthKey):null;
-  if(boundaryPlan&&ORIGIN_COMMANDS.has(command)&&!planId)throw new Error("RECONSTRUCTION_PLAN_REQUIRED");
-  if(!planId)return null;
-  const plan=(state.reconstructionPlans||[]).find(x=>x.id===planId);
-  if(!plan)throw new Error("RECONSTRUCTION_PLAN_NOT_FOUND");
-  if(plan.status!=="DRAFT")throw new Error("RECONSTRUCTION_PLAN_NOT_EDITABLE");
-  if(monthKey&&monthKey!==plan.monthKey)throw new Error("RECONSTRUCTION_EFFECTIVE_MONTH_MISMATCH");
-  if(ORIGIN_COMMANDS.has(command)&&!String(ctx.payload.reconstructionSourceReference||"").trim())throw new Error("RECONSTRUCTION_SOURCE_REFERENCE_REQUIRED");
-  const cycleId=String(ctx.payload?.cycleId||origin?.cycleId||"");
-  if(cycleId){const obligation=(plan.reviewedObligations||[]).find(x=>String(x.cycleId||x.obligationId)===cycleId);if(!obligation||obligation.structuralStatus!=="READY_FOR_RECONSTRUCTION")throw new Error("OBLIGATION_STRUCTURAL_CONFIRMATION_REQUIRED");}
-  return {planId,monthKey:plan.monthKey,sourceReference:String(ctx.payload.reconstructionSourceReference||origin?.reconstructionSourceReference||"").trim()||null,effectiveDate:ctx.payload.paymentDate||ctx.payload.depositDate||ctx.payload.effectiveDate||ctx.payload.date||origin?.originalEffectiveDate||null};
+export function prepareReconstructionCommand(_state, _command, ctx) {
+  const payload = ctx?.payload || {};
+  if (payload.reconstructionPlanId || payload.reconstruction === true || payload.reconstructionSourceReference) {
+    throw new Error("RECONSTRUCTION_DISABLED");
+  }
+  return null;
 }
 
 export function attachReconstructionLineage(state,beforeLengths,ctx,meta){

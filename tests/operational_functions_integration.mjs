@@ -16,7 +16,6 @@ for (const [uid, userKey, role] of [["op_owner", "saeed_op", "owner"], ["op_empl
   try { await authAdmin.createUser({ uid }); } catch {}
 }
 await db.collection("months").doc("2026_7").set({ _rev: 4, data: { units: [{ id: "u1", name: "شقة 101", partitions: [{ id: 8, note: "old", phone: "050", operationalVersion: 0, rent: 3000, paid_amount: 0 }] }], full: [], transactions: [] } });
-await db.collection("config").doc("canonicalControl").set({ state: "CANONICAL_ACTIVE", version: 1 });
 
 async function command(uid, name) {
   const app = initializeApp({ projectId, apiKey: "fake", appId: name }, name);

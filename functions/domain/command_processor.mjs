@@ -20,6 +20,7 @@ export function blankState() {
     dailyBookings: [], cycleCorrections: [],
     balances: { company: 0, revenue: 0, deduction: 0 }, ledger: [], audit: [],
     monthStates: [], operations: [], requests: [], reconstructionPlans: [], monthAuthorities: [],
+    rentableSpaces: [], tenants: [], tenancies: [],
     canonicalControl: null, systemConfig: {}, financialTruthVersion: 2, cleanStartInventory: null,
   };
 }
@@ -1030,9 +1031,12 @@ function cancelDeposit(state, ctx) {
       reversalOf: request.id, at: nowIso(ctx) });
     const alloc = state.allocations.find((x) => x.paymentId === lot.originPaymentId);
     if (alloc) {
-      alloc.settledAmountFils = Math.max(0, Number(alloc.settledAmountFils || 0) - line.amountFils);
-      alloc.settlementStatus = alloc.settledAmountFils === 0 ? "unsettled"
-        : alloc.settledAmountFils === alloc.amountFils ? "settled" : "partially_settled";
+      const settledBefore = Number(alloc.settledAmountFils || 0);
+      const nextSettled = settledBefore - line.amountFils;
+      if (nextSettled < 0) throw new Error("SETTLEMENT_OVER_REVERSAL");
+      alloc.settledAmountFils = nextSettled;
+      alloc.settlementStatus = nextSettled === 0 ? "unsettled"
+        : nextSettled === alloc.amountFils ? "settled" : "partially_settled";
     }
     totalFils += line.amountFils;
   }

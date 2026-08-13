@@ -100,11 +100,11 @@ test("تبويبة المالية ظاهرة مباشرة بعد الرئيسي�
   assert.match(html, /const tabs=isOwner\?\["overview","financial","transactions","requests"/);
 });
 
-test("الملخص المالي يفضّل Canonical Collected/Deposited ولا يخلط العهدة", () => {
+test("الملخص المالي يفضّل الإسقاط التشغيلي Collected/Deposited ولا يخلط العهدة", () => {
   assert.match(html, /function actualCollected\(d\)\{ const value=card\("collectedFils"\); return value!==null\?value:netDepositedForKPI\(d\); \}/);
   assert.match(html, /const value=card\("depositedFils"\)/);
   assert.match(html, /const value=card\("receivedNotDepositedFils"\)/);
-  assert.match(html, /canonicalReadModelCall=httpsCallable/);
+  assert.match(html, /operationalReadModelCall=httpsCallable/);
 });
 
 test("المستهدف التعاقدي لا يعتمد على حالة دفع الوحدة", () => {

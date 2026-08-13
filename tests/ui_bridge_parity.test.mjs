@@ -4,72 +4,14 @@ import fs from "node:fs";
 import { executeCommand } from "../functions/domain/command_processor.mjs";
 import { blankState } from "../functions/domain/command_processor.mjs";
 
-const FILES = ["index.html", "public/index.html"];
-const A = fs.readFileSync("tests/fixtures/file_a_reference.txt", "utf8");
-
-for (const file of FILES) {
+for (const file of ["index.html", "public/index.html"]) {
   const html = fs.readFileSync(file, "utf8");
-  const shell = html.slice(
-    html.indexOf("function renderCanonicalOperationalShell()"),
-    html.indexOf("function _cAed(v){")
-  );
-
-  test(`${file} — CANONICAL_ACTIVE يعرض 11 تبويباً بترتيب FILE A`, () => {
-    assert.match(shell, /const tabs=isOwner\?\["overview","financial","transactions","requests","units","daily","occupancy","maintenance","expenses","audit","permissions"\]/);
-    assert.match(shell, /\["emphome","units","daily","maintenance","expenses"\]\.concat\(hasCapability\("deposits"\)\?\["transactions"\]:\[\]\)\.concat\(\["myrequests"\]\)/);
-  });
-
-  test(`${file} — أسماء التبويبات مطابقة حرفياً لـ FILE A`, () => {
-    const want = A.match(/const tabLbl=\{[^}]+\};/)[0];
-    assert.ok(shell.includes(want), "tabLbl يختلف عن FILE A");
-  });
-
-  test(`${file} — الهيدر مطابق لـ FILE A (شعار/لوحة/تحديث/خروج/شارة الطلبات)`, () => {
-    for (const marker of ["قمة الرواسي", 'h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])', '["تحديث"]', '["خروج"]', "S.notifCount>0"]) {
-      assert.ok(shell.includes(marker), marker);
-    }
-    assert.match(shell, /overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"/);
-  });
-
-  test(`${file} — لا يوجد أي placeholder أو تبويب غير موصول`, () => {
-    assert.doesNotMatch(html, /renderCanonicalPendingBridge/);
-    assert.doesNotMatch(html, /قيد الربط/);
-    for (const tab of ["financial", "daily", "occupancy", "maintenance", "expenses", "audit", "permissions"]) {
-      assert.match(shell, new RegExp(`S\\.tab==="${tab}"\\)content=renderCanonical`), tab);
-    }
-  });
-
-  test(`${file} — القوقعة القانونية لا تقرأ Legacy إطلاقاً`, () => {
-    assert.doesNotMatch(shell, /getCurData\(|displayStatus\(|paid_amount|data\.units|data\.full|CALC\./);
-  });
-
-  test(`${file} — تبويبات الجسر تقرأ من canonicalReadModel فقط`, () => {
-    const bridge = html.slice(html.indexOf("function _cAed(v){"), html.indexOf("function renderCanonicalReconstructionShell()"));
-    assert.doesNotMatch(bridge, /getCurData\(|saveCurData\(|getMonthData\(|localStorage|CALC\.|displayStatus\(/);
-    assert.match(bridge, /S\.canonicalReadModel/);
-  });
-
-  test(`${file} — كل كتابة مالية في الجسر تمر عبر runUiFinancialCommand`, () => {
-    const bridge = html.slice(html.indexOf("function _cAed(v){"), html.indexOf("function renderCanonicalReconstructionShell()"));
-    assert.doesNotMatch(bridge, /setDoc\(|updateDoc\(|deleteDoc\(/);
-    for (const cmd of ["requestExpense", "approveExpense", "executeExpense", "reverseExpense", "createDailyBooking", "refundDailyBooking"]) {
-      assert.match(bridge, new RegExp(`command:"${cmd}"`), cmd);
-    }
-  });
-
-  test(`${file} — الصيانة شاشة مستقلة بفئتين متمايزتين`, () => {
-    const bridge = html.slice(html.indexOf("function renderCanonicalMaintenanceTab"), html.indexOf("function renderCanonicalAuditTab"));
-    assert.match(bridge, /🏠 صيانة الوحدات/);
-    assert.match(bridge, /🔧 صيانة المرافق/);
-    assert.match(bridge, /category:"unitMaintenance"|"unitMaintenance"/);
-    assert.match(bridge, /"facilityMaintenance"/);
-    assert.doesNotMatch(bridge, /مصروف/);
-  });
-
-  test(`${file} — لا PIN ثابت ولا هوية محلية`, () => {
+  test(`${file} — لا PIN ثابت ولا هوية محلية، والشاشات المعتادة هي مسار التشغيل`, () => {
     assert.doesNotMatch(html, /\bpin\s*:\s*["']\d{4}["']/);
     assert.match(html, /signInWithCustomToken/);
     assert.match(html, /httpsCallable\(functions,"pinLogin"\)/);
+    assert.doesNotMatch(html, /renderCanonicalOperationalShell|renderCanonicalReconstructionShell/);
+    assert.match(html, /function renderApp\(\)/);
   });
 }
 

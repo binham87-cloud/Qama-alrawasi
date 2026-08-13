@@ -57,7 +57,7 @@ export function monthlyOperationalProjection(state, monthKey, asOfDate) {
   const custody = custodyProjection(state);
   const liveCashDetails = (state.cashLots || []).map((lot) => {
     const out = (state.cashMovements || []).filter((m) => m.cashLotId === lot.id && m.status === "active" && ["deposit", "refund", "transfer_out"].includes(m.type)).reduce((s, m) => s + m.amountFils, 0);
-    const restored = (state.cashMovements || []).filter((m) => m.cashLotId === lot.id && m.status === "active" && m.type === "reversal").reduce((s, m) => s + m.amountFils, 0);
+    const restored = (state.cashMovements || []).filter((m) => m.cashLotId === lot.id && m.status === "active" && ["reversal", "deposit_reversal"].includes(m.type)).reduce((s, m) => s + m.amountFils, 0);
     return { cashLotId: lot.id, paymentId: lot.originPaymentId, currentHolder: lot.currentHolder, paymentDate: lot.paymentDate, amountFils: lot.originalAmountFils - out + restored };
   }).filter((x) => x.amountFils > 0);
   const cashDetails = [

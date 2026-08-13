@@ -3,6 +3,7 @@ import puppeteer from "puppeteer-core";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { createPinRecord } from "../functions/pin_crypto.mjs";
+import { chromePath } from "./chrome_path.mjs";
 
 process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
 process.env.FIREBASE_AUTH_EMULATOR_HOST ||= "127.0.0.1:9099";
@@ -16,10 +17,8 @@ await db.collection("users").doc("uid_browser_owner").set({userKey:"browser_owne
 await db.collection("authPins").doc("browser_owner").set({uid:"uid_browser_owner",name:"مدير المتصفح",active:true,sortOrder:1,...createPinRecord("4826",100000)});
 await db.collection("months").doc(monthKey).set({data:{units:[],full:[],transactions:[],expenses:[],dailyBookings:[],handovers:[],logs:[]},_rev:1});
 for(const account of ["company","revenue","deduction"])await db.collection("accountBalances").doc(account).set({account,amountFils:0,version:0,schemaVersion:2});
-await db.collection("config").doc("canonicalControl").set({state:"CANONICAL_ACTIVE",version:1});
 
-const chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const browser=await puppeteer.launch({executablePath:chrome,headless:true,args:["--no-sandbox"]});
+const browser=await puppeteer.launch({executablePath:chromePath(),headless:true,args:["--no-sandbox"]});
 const page=await browser.newPage();
 const pageErrors=[]; page.on("pageerror",e=>pageErrors.push(String(e?.message||e)));
 page.on("console",m=>{if(m.type()==="error")console.error("BROWSER_CONSOLE",m.text());});
@@ -36,7 +35,7 @@ try{
   await clickText("مدير المتصفح");
   for(const digit of "4826")await clickText(digit);
   await page.waitForFunction(()=>document.body.innerText.includes("لوحة مدير المتصفح"),{timeout:60000});
-  await page.waitForFunction(()=>window.QAMA_CONTROL_STATE==="CANONICAL_ACTIVE",{timeout:30000});
+  await page.waitForFunction(()=>window.QAMA_READY===true,{timeout:30000});
   console.log("BROWSER_STEP:transactions_a");
   await clickText("الإيداعات");
   await clickText("+ إيداع");
@@ -63,12 +62,12 @@ try{
   const clickB=async text=>pageB.evaluate(w=>{const e=[...document.querySelectorAll("button")].find(x=>x.innerText.includes(w));e?.click();return !!e;},text);
   assert.equal(await clickB("مدير المتصفح"),true); for(const d of "4826")assert.equal(await clickB(d),true);
   await pageB.waitForFunction(()=>document.body.innerText.includes("لوحة مدير المتصفح"),{timeout:60000});
-  await pageB.waitForFunction(()=>window.QAMA_CONTROL_STATE==="CANONICAL_ACTIVE",{timeout:30000});
+  await pageB.waitForFunction(()=>window.QAMA_READY===true,{timeout:30000});
   console.log("BROWSER_STEP:transactions_b");
   assert.equal(await clickB("الإيداعات"),true);
   await pageB.waitForFunction(()=>document.body.innerText.includes("إيراد من مصدر آخر")&&document.body.innerText.includes("5,000"),{timeout:20000});
   await contextB.close();
   assert.deepEqual(pageErrors,[]);
-  console.log(JSON.stringify({tests:8,pass:8,fail:0,journeys:["pin_login","external_revenue_button","backend_command","canonical_refresh","same_screen_result","tenant_metrics_unchanged","second_session_read","no_page_errors"]}));
+  console.log(JSON.stringify({tests:8,pass:8,fail:0,journeys:["pin_login","external_revenue_button","backend_command","operational_refresh","same_screen_result","tenant_metrics_unchanged","second_session_read","no_page_errors"]}));
 }finally{await Promise.race([browser.close(),new Promise(resolve=>setTimeout(resolve,5000))]);}
 process.exit(0);

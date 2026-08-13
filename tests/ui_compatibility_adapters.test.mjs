@@ -4,11 +4,11 @@ import fs from "node:fs";
 
 const html=fs.readFileSync("public/index.html","utf8");
 
-test("UI adapter has stable operation identity, backend error mapping and canonical refresh",()=>{
+test("UI adapter has stable operation identity, backend error mapping and operational refresh",()=>{
   assert.match(html,/function stableUiOperationId/);
   assert.match(html,/UI_COMMAND_IN_FLIGHT/);
   assert.match(html,/sendFinancialCommand\(command,operationId,payload/);
-  assert.match(html,/refreshCanonicalUi\(result\)/);
+  assert.match(html,/refreshOperationalUi\(result\)/);
   for(const code of ["STALE_OPERATIONAL_ENTITY","STALE_CASH_ALLOCATION","STALE_EVICTION_REQUEST","OVERPAYMENT","INSUFFICIENT_BALANCE","INSUFFICIENT_CUSTODY","ALREADY_PROCESSED","PERMISSION_DENIED","MONTH_CLOSED","INVALID_STATE"]){
     assert.match(html,new RegExp(code));
   }
@@ -33,26 +33,23 @@ test("adapter does not perform local financial projection",()=>{
   }
 });
 
-test("canonical read callable is the financial refresh authority",()=>{
-  assert.match(html,/canonicalReadModelCall=httpsCallable\(functions,"canonicalReadModel"\)/);
-  assert.match(html,/await loadCanonicalReadModel\(\)/);
+test("operational read callable is the financial refresh authority",()=>{
+  assert.match(html,/operationalReadModelCall=httpsCallable\(functions,"operationalReadModel"\)/);
+  assert.match(html,/await loadOperationalReadModel\(\)/);
   assert.match(html,/تم تنفيذ العملية، لكن تعذر تحديث العرض/);
-  assert.match(html,/S\.canonicalReadModel=model/);
-  assert.doesNotMatch(html,/refreshCanonicalUi[\s\S]{0,900}loadBalances\(/);
+  assert.match(html,/S\.operationalReadModel=model/);
+  assert.doesNotMatch(html,/refreshOperationalUi[\s\S]{0,900}loadBalances\(/);
 });
 
-test("tenant cash controls and financial headlines use canonical commands/projections",()=>{
-  assert.match(html,/function canonicalCashCollectionControl/);
-  assert.match(html,/if\(!cycleId\)throw new Error\("CANONICAL_CYCLE_REQUIRED"\)/);
+test("tenant cash and financial headlines use server commands and operational projections",()=>{
   assert.match(html,/submitTenantCashCollectionFromUi\(\{cycleId:String\(cycleId\),amount,paymentDate:todayISO\(\),identity:draftIdentity/);
   assert.match(html,/command:"createCashReceipt"/);
-  assert.match(html,/canonicalCashCollectionControl\(\{cycleId:cycle\.id/);
-  assert.doesNotMatch(html,/canonicalCashCollectionControl\(\{unitId:/);
-  assert.match(html,/_canonicalFinancial\.headlines\?\.incomeFils/);
-  assert.match(html,/_canonicalFinancial\.headlines\?\.netFils/);
+  assert.match(html,/_operationalFinancial\.headlines\?\.incomeFils/);
+  assert.match(html,/_operationalFinancial\.headlines\?\.netFils/);
+  assert.doesNotMatch(html,/CANONICAL_CYCLE_REQUIRED/);
 });
 
-test("installment reserve UI uses the explicit canonical internal-transfer command",()=>{
+test("installment reserve UI uses the explicit internal-transfer command",()=>{
   assert.match(html,/createInstallmentReserveTransfer/);
   assert.match(html,/createBankInstallmentPayment/);
   assert.match(html,/reverseBankInstallmentPayment/);

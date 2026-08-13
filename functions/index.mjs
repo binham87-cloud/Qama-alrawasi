@@ -13,7 +13,8 @@ const db = getFirestore();
 
 export const financialCommand = buildFinancialCommand(db);
 export const operationalCommand = buildOperationalCommand(db);
-export const canonicalReadModel = buildCanonicalReadModel(db);
+export const operationalReadModel = buildCanonicalReadModel(db);
+export const canonicalReadModel = operationalReadModel;
 export const structuralCommand = buildStructuralCommand(db);
 
 const MAX_FAILURES = 5;

@@ -15,7 +15,6 @@ const adb = getAdminFirestore(admin); const aauth = getAdminAuth(admin);
 await adb.collection("users").doc("uid_yahia_v2").set({ userKey: "yahia_v2", role: "employee", active: true });
 await adb.collection("users").doc("uid_saeed_v2").set({ userKey: "saeed_v2", role: "owner", active: true });
 await adb.collection("config").doc("system").set({ financialTruthVersion: 3, buildId: "qama-phase3c-canonical-events-2026-08-11.4" });
-await adb.collection("config").doc("canonicalControl").set({ state: "CANONICAL_ACTIVE", version: 1 });
 await adb.collection("rentalCycles").doc("cycle:integration:1").set({ id: "cycle:integration:1", tenancyId: "integration", baseAmountFils: 300000, reportingMonth: "2026_07", dueDate: "2026-08-10", status: "open_not_due", schemaVersion: 2 });
 for (const account of ["company", "revenue", "deduction"]) await adb.collection("accountBalances").doc(account).set({ account, amountFils: account === "company" ? 1000000 : 0, version: 0, schemaVersion: 3 });
 
@@ -25,7 +24,7 @@ async function client(uid, name) {
   const auth = getAuth(app); connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   await signInWithCustomToken(auth, await aauth.createCustomToken(uid));
   const functions = getFunctions(app); connectFunctionsEmulator(functions, "127.0.0.1", 5001);
-  return { command: httpsCallable(functions, "financialCommand"), read: httpsCallable(functions, "canonicalReadModel") };
+  return { command: httpsCallable(functions, "financialCommand"), read: httpsCallable(functions, "operationalReadModel") };
 }
 
 const employeeClient = await client("uid_yahia_v2", "canonical-employee");

@@ -11,6 +11,7 @@ export const ENTITY_COLLECTIONS = Object.freeze({
   allocations: "paymentAllocations",
   paymentIntents: "payments",
   collectionEvents: "collectionEvents",
+  // collectionReversals: reserved schema — live reversals use refunds + deposit_reversal cashMovements
   collectionReversals: "collectionReversals",
   unallocatedPayments: "unallocatedPayments",
   cashLots: "cashLots",
@@ -207,6 +208,31 @@ async function loadCommandState(tx, db, command, payload) {
     case "closeMonth":
     case "forceCloseMonth": { const ms = await getDoc(tx, db, "monthStates", payload.monthKey, false); if (ms) state.monthStates.push(ms); state.depositRequests.push(...await getWhere(tx, db, "depositRequests", "monthKey", payload.monthKey)); state.paymentIntents.push(...await getWhere(tx, db, "paymentIntents", "collectionMonth", payload.monthKey)); state.custodyTransfers.push(...await getWhere(tx, db, "custodyTransfers", "monthKey", payload.monthKey)); state.requests.push(...await getWhere(tx, db, "requests", "monthKey", payload.monthKey)); break; }
     case "reopenMonth": state.monthStates.push(await getDoc(tx, db, "monthStates", payload.monthKey)); break;
+    case "setSpaceRental": {
+      const spaceId = String(payload.spaceId || "");
+      const monthKey = String(payload.reportingMonth || "");
+      const space = await loadStructuralDoc(tx, db, "rentableSpaces", spaceId);
+      state.rentableSpaces.push(space);
+      const cycleId = `cycle:${spaceId}:${monthKey}`;
+      const cycle = await getDoc(tx, db, "cycles", cycleId, false);
+      if (cycle) state.cycles.push(cycle);
+      const tenancy = await loadStructuralDoc(tx, db, "tenancies", `tenancy:${spaceId}`, false);
+      if (tenancy) state.tenancies.push(tenancy);
+      const tenant = await loadStructuralDoc(tx, db, "tenants", `tenant:${spaceId}`, false);
+      if (tenant) state.tenants.push(tenant);
+      break;
+    }
+    case "correctCycleDueDate":
+      await loadCycleScope(tx, db, state, payload.cycleId);
+      break;
+    case "cancelDeposit": {
+      const dep = await getDoc(tx, db, "depositRequests", payload.depositRequestId);
+      state.depositRequests.push(dep);
+      for (const line of dep.allocations || []) await loadLotScope(tx, db, state, line.cashLotId);
+      if (dep.status === "approved") accounts.add("revenue");
+      break;
+    }
+
     default: throw new Error("UNKNOWN_COMMAND");
   }
   let reconstructionPlanId=payload.reconstructionPlanId||null;
@@ -215,6 +241,35 @@ async function loadCommandState(tx, db, command, payload) {
   const loaded = await loadBalances(tx, db, accounts);
   state.balances = loaded.balances;
   return { state, accounts, balanceVersions: loaded.versions };
+}
+
+
+const STRUCTURAL_SIDE_COLLECTIONS = Object.freeze({
+  rentableSpaces: "rentableSpaces",
+  tenants: "tenants",
+  tenancies: "tenancies",
+});
+
+async function loadStructuralDoc(tx, db, collection, id, required = true) {
+  const snap = await tx.get(db.collection(collection).doc(String(id)));
+  if (!snap.exists) {
+    if (required) throw new Error(`${collection.toUpperCase()}_NOT_FOUND`);
+    return null;
+  }
+  return { id: snap.id, ...snap.data() };
+}
+
+function persistStructuralSideDiff(tx, db, before, after) {
+  for (const [key, collection] of Object.entries(STRUCTURAL_SIDE_COLLECTIONS)) {
+    const oldMap = indexById(before[key] || []);
+    for (const entity of after[key] || []) {
+      const prior = oldMap.get(entity.id);
+      if (prior && same(prior, entity)) continue;
+      const ref = db.collection(collection).doc(String(entity.id));
+      if (!prior) tx.create(ref, { ...clone(entity), schemaVersion: SCHEMA_VERSION });
+      else tx.set(ref, { ...clone(entity), schemaVersion: SCHEMA_VERSION }, { merge: false });
+    }
+  }
 }
 
 function indexById(items) { return new Map((items || []).map((x) => [x.id, x])); }
@@ -248,9 +303,6 @@ export async function executeRepositoryCommand({ db, tx, command, operationId, p
   const before = clone(loaded.state);
   const executed = executeCommand(loaded.state, command, { operationId, payloadHash, payload, actor, now });
   persistDiff(tx, db, before, executed.state, loaded.accounts, loaded.balanceVersions, operationId);
-  if(command==="abandonReconstructionAndActivate"){
-    tx.set(db.collection("config").doc("system"),{...loaded.state.systemConfig,financialTruthVersion:executed.state.financialTruthVersion,buildId:String(payload.expectedBuildId),updatedByOperationId:operationId,updatedAt:FieldValue.serverTimestamp()},{merge:false});
-    tx.set(db.collection("config").doc("canonicalControl"),{...executed.state.canonicalControl,updatedAt:FieldValue.serverTimestamp()},{merge:false});
-  }
+  persistStructuralSideDiff(tx, db, before, executed.state);
   return executed.result;
 }
