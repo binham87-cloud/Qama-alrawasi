@@ -1,0 +1,58 @@
+[
+  {
+    "function": "financialCommand",
+    "updateTime": "2026-08-13T19:33:04.662484926Z",
+    "revision": "financialcommand-00011-zah",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "financialCommand/function-source.zip",
+    "generation": "1786649575346483"
+  },
+  {
+    "function": "operationalReadModel",
+    "updateTime": "2026-08-13T19:33:04.135509764Z",
+    "revision": "operationalreadmodel-00003-keq",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "operationalReadModel/function-source.zip",
+    "generation": "1786649575278219"
+  },
+  {
+    "function": "canonicalReadModel",
+    "updateTime": "2026-08-13T19:33:00.631086646Z",
+    "revision": "canonicalreadmodel-00014-xet",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "canonicalReadModel/function-source.zip",
+    "generation": "1786649515929875"
+  },
+  {
+    "function": "listPinUsers",
+    "updateTime": "2026-08-13T19:33:04.326064782Z",
+    "revision": "listpinusers-00011-qeb",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "listPinUsers/function-source.zip",
+    "generation": "1786649575341621"
+  },
+  {
+    "function": "pinLogin",
+    "updateTime": "2026-08-13T19:33:05.984363075Z",
+    "revision": "pinlogin-00011-lec",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "pinLogin/function-source.zip",
+    "generation": "1786649575350158"
+  },
+  {
+    "function": "structuralCommand",
+    "updateTime": "2026-08-12T22:14:54.023522096Z",
+    "revision": "structuralcommand-00007-yop",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "structuralCommand/function-source.zip",
+    "generation": "1786572885122723"
+  },
+  {
+    "function": "operationalCommand",
+    "updateTime": "2026-08-13T20:35:04.935549154Z",
+    "revision": "operationalcommand-00011-jik",
+    "bucket": "gcf-v2-sources-717899519677-us-central1",
+    "object": "operationalCommand/function-source.zip",
+    "generation": "1786653189018259"
+  }
+]
