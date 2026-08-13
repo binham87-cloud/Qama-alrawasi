@@ -6,7 +6,6 @@ import { verifyPin } from "./pin_crypto.mjs";
 import { buildFinancialCommand } from "./financial_commands.mjs";
 import { buildOperationalCommand } from "./operational_commands.mjs";
 import { buildCanonicalReadModel } from "./canonical_read_model.mjs";
-import { buildStructuralCommand } from "./structural_commands.mjs";
 
 initializeApp();
 const db = getFirestore();
@@ -15,7 +14,6 @@ export const financialCommand = buildFinancialCommand(db);
 export const operationalCommand = buildOperationalCommand(db);
 export const operationalReadModel = buildCanonicalReadModel(db);
 export const canonicalReadModel = operationalReadModel;
-export const structuralCommand = buildStructuralCommand(db);
 
 const MAX_FAILURES = 5;
 const LOCK_MINUTES = 15;

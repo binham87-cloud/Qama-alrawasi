@@ -10,7 +10,7 @@ test("build identity is explicit and both local hosting sources are identical", 
   const a = fs.readFileSync("index.html", "utf8");
   const b = fs.readFileSync("public/index.html", "utf8");
   assert.equal(a, b);
-  assert.match(a, /qama-build-id" content="qama-unified-rc-2026-08-13\.1"/);
+  assert.match(a, /qama-build-id" content="qama-unified-final-2026-08-13\.2"/);
   assert.equal(sha("index.html"), sha("public/index.html"));
 });
 

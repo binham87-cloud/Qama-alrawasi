@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="qama-build-id" content="qama-unified-rc-2026-08-13.1"/>
+<meta name="qama-build-id" content="qama-unified-final-2026-08-13.2"/>
 <title>قمة الرواسي v11 PIN Safe</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
@@ -40,7 +40,7 @@ const firebaseConfig = {
   appId: "1:717899519677:web:b61329cd6e4dda0314c9d4",
   measurementId: "G-EZCBZWFVWM"
 };
-const BUILD_ID="qama-unified-rc-2026-08-13.1";
+const BUILD_ID="qama-unified-final-2026-08-13.2";
 console.log("QAMA BUILD:",BUILD_ID);
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
@@ -58,7 +58,6 @@ if(LOCAL_EMULATOR_MODE){
 }
 const financialCommandCall=httpsCallable(functions,"financialCommand");
 const operationalCommandCall=httpsCallable(functions,"operationalCommand");
-const structuralCommandCall=httpsCallable(functions,"structuralCommand");
 const operationalReadModelCall=httpsCallable(functions,"operationalReadModel");
 async function sendFinancialCommand(command,operationId,payload={}){
   if(!operationId)throw new Error("OPERATION_ID_REQUIRED");
@@ -69,11 +68,6 @@ async function sendOperationalPatch(monthId,target,patch,baseVersion){
   const operationId="operational:"+(crypto.randomUUID?crypto.randomUUID():Date.now()+":"+Math.random().toString(16).slice(2));
   const response=await operationalCommandCall({operationId,payload:{monthId,target,patch,baseVersion}});
   return response.data;
-}
-async function sendStructuralCommand(command,payload={}){
-  const operationId="structural:"+(crypto.randomUUID?crypto.randomUUID():Date.now()+":"+Math.random().toString(16).slice(2));
-  const result=(await structuralCommandCall({command,operationId,payload})).data;
-  await loadOperationalReadModel(); return result;
 }
 function newEntityId(prefix){return prefix+":"+(crypto.randomUUID?crypto.randomUUID():Date.now()+":"+Math.random().toString(16).slice(2));}
 function chooseEntity(label,items){if(!items?.length)throw new Error(label+"_NOT_FOUND");const answer=prompt(label+"\n"+items.map((x,i)=>(i+1)+". "+(x.name||x.displayName||x.id)).join("\n"));const selected=items[Number(answer)-1];if(!selected)throw new Error(label+"_REQUIRED");return selected;}
@@ -121,6 +115,8 @@ const BACKEND_ERROR_MESSAGES=Object.freeze({
   DEPOSIT_NOT_FOUND:"الإيداع غير موجود.",
   MANAGER_REQUIRED:"هذه العملية للمدير فقط.",
   STAFF_REQUIRED:"غير مصرّح لك بهذه العملية.",
+  REQUEST_NOT_FOUND:"الطلب غير موجود.",
+  REQUEST_NOT_PENDING:"الطلب لم يعد معلّقاً.",
   STALE_OPERATIONAL_ENTITY:"تغيرت البيانات التشغيلية من جهاز آخر. أعد فتح العنصر وراجع التعديل.",
   STALE_CASH_ALLOCATION:"تغيرت العهدة. حدّث تخصيص النقد وراجعه قبل الإرسال.",
   STALE_EVICTION_REQUEST:"تغيرت الحالة المالية بعد إنشاء طلب الإخلاء. يلزم مراجعته من جديد.",
@@ -1870,25 +1866,28 @@ async function correctApprovedFinancial(req, newAmount, newDesc, srcPick){
 // ثم تسجيل عملية صحيحة جديدة، فيبقى الأثر موثقاً في الدفتر بقيدين.
 
 async function rejectRequest(req){
-  return blockLegacyFinancialWrite("rejectRequest");
-  if(S.approving){showMsg("⏳ جاري المعالجة...");return;}
-  S.approving=true;
-  try{
-    await runTransaction(db, async (tx)=>{
-      const reqRef=doc(db,"requests",req.id);
-      const snap=await tx.get(reqRef);
-      if(!snap.exists()) throw new Error("REQ_MISSING");
-      if((snap.data()||{}).status!=="pending") throw new Error("ALREADY_PROCESSED");
-      tx.set(reqRef,{status:"rejected",rejectedAt:new Date().toISOString(),rejectedBy:S.user},{merge:true});
-    });
-    showMsg("✓ تم رفض الطلب");
-    await loadRequests();
-  }catch(e){
-    const m=String(e&&e.message||"");
-    showMsg(m==="ALREADY_PROCESSED"?"⚠ الطلب تمت معالجته مسبقاً":"⚠ تعذر الرفض — لم يتغير شيء");
-    try{await loadRequests();}catch(e2){}
-  }
-  finally{S.approving=false;}
+  const requestId=String(req?.id||"");
+  if(!requestId){showMsg("⚠ الطلب غير معروف");return false;}
+  const key="rejectRequest:"+requestId;
+  if(UI_COMMAND_IN_FLIGHT.has(key))return UI_COMMAND_IN_FLIGHT.get(key);
+  const operationId=stableUiOperationId("rejectRequest",requestId);
+  const pending=(async()=>{
+    try{
+      const response=await operationalCommandCall({operationId,payload:{command:"rejectRequest",requestId}});
+      const result=response.data||{};
+      try{await loadRequests();}catch(e2){}
+      showMsg(result.replay?BACKEND_ERROR_MESSAGES.ALREADY_PROCESSED:"✓ تم رفض الطلب");
+      R();
+      return result;
+    }catch(error){
+      showMsg(backendErrorMessage(error));
+      try{await loadRequests();}catch(e2){}
+      R();
+      throw error;
+    }finally{UI_COMMAND_IN_FLIGHT.delete(key);}
+  })();
+  UI_COMMAND_IN_FLIGHT.set(key,pending);
+  return pending;
 }
 
 

@@ -62,6 +62,15 @@ for (const file of FILES) {
     assert.match(html, /command:"createBankPayment"/);
     assert.doesNotMatch(html, /reconstructionPayloadForUi/);
     assert.doesNotMatch(html, /CANONICAL_WRITES_DENIED/);
+    assert.doesNotMatch(html, /structuralCommandCall|sendStructuralCommand|httpsCallable\(functions,"structuralCommand"\)/);
+  });
+
+  test(`${file} rejects pending requests through the operational server path`, () => {
+    assert.match(html, /async function rejectRequest\(req\)\{/);
+    assert.doesNotMatch(html, /blockLegacyFinancialWrite\("rejectRequest"\)/);
+    assert.match(html, /payload:\{command:"rejectRequest",requestId\}/);
+    assert.match(html, /operationalCommandCall\(\{operationId,payload:\{command:"rejectRequest",requestId\}\}\)/);
+    assert.match(html, /onClick:\(\)=>rejectRequest\(req\)\},\["✗ رفض"\]/);
   });
 
   test(`${file} loads pending handovers from custodyTransfers`, () => {

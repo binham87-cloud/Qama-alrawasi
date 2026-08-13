@@ -17,6 +17,12 @@ await db.collection("users").doc("uid_browser_owner").set({userKey:"browser_owne
 await db.collection("authPins").doc("browser_owner").set({uid:"uid_browser_owner",name:"مدير المتصفح",active:true,sortOrder:1,...createPinRecord("4826",100000)});
 await db.collection("months").doc(monthKey).set({data:{units:[],full:[],transactions:[],expenses:[],dailyBookings:[],handovers:[],logs:[]},_rev:1});
 for(const account of ["company","revenue","deduction"])await db.collection("accountBalances").doc(account).set({account,amountFils:0,version:0,schemaVersion:2});
+await db.collection("requests").doc("req_browser_reject_1").set({
+  id:"req_browser_reject_1", type:"update_partition", desc:"تصحيح رقم الهاتف للاختبار",
+  payload:{unitId:"u1",partId:1,fields:{phone:"0501111111"}},
+  by:"browser_employee", byName:"موظف الاختبار", month:7, year:2026, status:"pending",
+  createdAt:"2026-08-01T00:00:00.000Z",
+});
 
 const browser=await puppeteer.launch({executablePath:chromePath(),headless:true,args:["--no-sandbox"]});
 const page=await browser.newPage();
@@ -67,7 +73,26 @@ try{
   assert.equal(await clickB("الإيداعات"),true);
   await pageB.waitForFunction(()=>document.body.innerText.includes("إيراد من مصدر آخر")&&document.body.innerText.includes("5,000"),{timeout:20000});
   await contextB.close();
+
+  console.log("BROWSER_STEP:requests_reject");
+  const ledgerBeforeReject=(await db.collection("financialLedger").get()).size;
+  await clickText("الطلبات");
+  await page.waitForFunction(()=>document.body.innerText.includes("تصحيح رقم الهاتف للاختبار"),{timeout:20000});
+  const rejectClicked=await page.evaluate(()=>{
+    const btn=[...document.querySelectorAll("button")].find(x=>x.innerText.includes("✗ رفض"));
+    if(!btn)return false;
+    btn.click();
+    btn.click();
+    return true;
+  });
+  assert.equal(rejectClicked,true,"REJECT_BUTTON_NOT_FOUND");
+  await page.waitForFunction(()=>document.body.innerText.includes("مرفوض")||document.body.innerText.includes("تم رفض الطلب"),{timeout:20000});
+  const rejected=await db.collection("requests").doc("req_browser_reject_1").get();
+  assert.equal(rejected.data().status,"rejected");
+  assert.equal((await db.collection("accountBalances").doc("revenue").get()).data().amountFils,500000);
+  assert.equal((await db.collection("accountBalances").doc("company").get()).data().amountFils,0);
+  assert.equal((await db.collection("financialLedger").get()).size,ledgerBeforeReject);
   assert.deepEqual(pageErrors,[]);
-  console.log(JSON.stringify({tests:8,pass:8,fail:0,journeys:["pin_login","external_revenue_button","backend_command","operational_refresh","same_screen_result","tenant_metrics_unchanged","second_session_read","no_page_errors"]}));
+  console.log(JSON.stringify({tests:11,pass:11,fail:0,journeys:["pin_login","external_revenue_button","backend_command","operational_refresh","same_screen_result","tenant_metrics_unchanged","second_session_read","no_page_errors","reject_button","reject_zero_financial_effect","reject_double_click"]}));
 }finally{await Promise.race([browser.close(),new Promise(resolve=>setTimeout(resolve,5000))]);}
 process.exit(0);
