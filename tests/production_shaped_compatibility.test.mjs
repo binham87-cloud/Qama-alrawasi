@@ -136,7 +136,7 @@ test("on-demand cycle materialization is deterministic and invents zero payments
   assert.equal(b.state.cashLots.length, 0);
 });
 
-test("legacy collected opening blocks re-collection without fabricating receipts", () => {
+test("legacy collected status alone does not invent opening reserved fils", () => {
   const shape = prodShape();
   const state = blankState();
   state.financialTruthVersion = 3;
@@ -150,6 +150,30 @@ test("legacy collected opening blocks re-collection without fabricating receipts
       legacyUnitId: "101", partitionId: "3", reportingMonth: "2026_08",
       contractualAmountFils: 100000, dueDate: "2026-08-01",
       tenantName: "X", legacyStatus: "collected",
+    },
+    actor, now: "2026-08-13T00:00:00.000Z",
+  });
+  const cycle = ensured.state.cycles[0];
+  const view = cycleProjection(cycle, ensured.state);
+  assert.equal(view.legacyOpeningReservedFils, 0);
+  assert.equal(view.remainingCollectibleFils, 100000);
+});
+
+test("explicit legacyOpeningReservedFils blocks re-collection without fabricating receipts", () => {
+  const shape = prodShape();
+  const state = blankState();
+  state.financialTruthVersion = 3;
+  state.units = shape.units;
+  state.rentableSpaces = shape.spaces;
+  state.tenancies = shape.tenancies;
+  const actor = { id: "yahia", role: "employee", active: true };
+  const ensured = executeCommand(state, "ensureCompatibleCycle", {
+    operationId: "op:ens:collected:paid",
+    payload: {
+      legacyUnitId: "101", partitionId: "3", reportingMonth: "2026_08",
+      contractualAmountFils: 100000, dueDate: "2026-08-01",
+      tenantName: "X", legacyStatus: "collected",
+      legacyOpeningReservedFils: 100000,
     },
     actor, now: "2026-08-13T00:00:00.000Z",
   });

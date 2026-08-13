@@ -11,7 +11,8 @@ const RENTAL_FIELDS = Object.freeze(new Set([
 ]));
 
 // Display/lifecycle occupancy — NOT a financial collection event.
-const OCCUPANCY_STATUSES = Object.freeze(new Set(["vacant", "staff", "late", "pending", "expired"]));
+// "collected" (محصّل) is an operational/display status only; it must never mint money.
+const OCCUPANCY_STATUSES = Object.freeze(new Set(["vacant", "staff", "late", "pending", "expired", "collected"]));
 
 const FORBIDDEN_FINANCIAL = Object.freeze(new Set([
   "paid_amount", "partial", "collectionMethod", "collectedBy", "collectedAt",
@@ -87,7 +88,8 @@ function validateRentalPatch(patch) {
     const value = patch[key];
     if (key === "status") {
       const st = String(value || "");
-      if (st === "collected" || st === "partial") throw new Error("COLLECTION_REQUIRES_FINANCIAL_COMMAND");
+      // "partial" is not a familiar occupancy control; money partials use financial commands.
+      if (st === "partial") throw new Error("COLLECTION_REQUIRES_FINANCIAL_COMMAND");
       if (!OCCUPANCY_STATUSES.has(st)) throw new Error("OCCUPANCY_STATUS_INVALID");
       out[key] = st;
     } else if (key === "rent" || key === "deposit" || key === "elec_amount") {

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="qama-build-id" content="qama-unified-final-2026-08-13.6"/>
+<meta name="qama-build-id" content="qama-unified-final-2026-08-14.1"/>
 <title>قمة الرواسي v11 PIN Safe</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
@@ -44,7 +44,7 @@ const firebaseConfig = {
   appId: "1:717899519677:web:b61329cd6e4dda0314c9d4",
   measurementId: "G-EZCBZWFVWM"
 };
-const BUILD_ID="qama-unified-final-2026-08-13.6";
+const BUILD_ID="qama-unified-final-2026-08-14.1";
 console.log("QAMA BUILD:",BUILD_ID);
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
@@ -83,9 +83,9 @@ function legacyCollectionPayload(item,unitId,partId){
   const rent=Number(item?.rent||0);
   const paid=Number(item?.paid_amount||0);
   const status=String(item?.status||"");
+  // Opening reserved fils only from payment evidence — never from status alone.
   let legacyOpeningReservedFils=0;
-  if(status==="collected") legacyOpeningReservedFils=Math.round(rent*100);
-  else if(status==="partial"||paid>0) legacyOpeningReservedFils=Math.round(Math.max(0,Math.min(paid,rent))*100);
+  if(paid>0) legacyOpeningReservedFils=Math.round(Math.max(0,Math.min(paid,rent||paid))*100);
   return {
     legacyUnitId:String(unitId),
     partitionId:partId==null?null:String(partId),
@@ -356,13 +356,15 @@ function sanitizeBusinessRequestPayload(type, payload){
   const deny=new Set(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"]);
   if(out.fields&&typeof out.fields==="object"){
     for(const k of Object.keys(out.fields)){ if(deny.has(k)) delete out.fields[k]; }
-    if(out.fields.status==="collected"||out.fields.status==="partial"){
+    // Operational محصّل is allowed as status only; money fields already stripped.
+    if(out.fields.status==="partial"){
       throw new Error("COLLECTION_REQUIRES_FINANCIAL_COMMAND");
     }
   }
   if(type==="transfer_tenant"){
     out.moveFields=(out.moveFields||[]).filter(k=>!deny.has(k)&&k!=="paid_amount");
     if(out.fields){
+      // Transfer must not invent collected money on the destination.
       if(out.fields.status==="collected"||out.fields.status==="partial") out.fields.status="late";
       for(const k of [...deny]) delete out.fields[k];
     }
@@ -2237,12 +2239,11 @@ function operationalTenantFinancial(x){
 function paidValue(x){
   const operational=operationalTenantFinancial(x);
   if(operational)return Number(operational.reservedFils||operational.tenantReceivedReservedFils||0)/100;
-  // Legacy display compatibility only — not proof of a new financial event.
+  // Paid is financial evidence only — operational محصّل status must not invent paid rent.
   const rent=Number(x?.rent||0), paid=Number(x?.paid_amount||0);
   if(x?.status==="staff"||x?.status==="vacant")return 0;
-  if(x?.partial)return Math.max(0,Math.min(paid,rent||paid));
-  if(x?.status==="collected")return rent || paid;
-  return Math.max(0,paid);
+  if(paid>0)return Math.max(0,Math.min(paid,rent||paid));
+  return 0;
 }
 function remainingValue(x){
   const operational=operationalTenantFinancial(x);
@@ -3955,14 +3956,12 @@ function renderApp(){
         if(isEd) _snapFor("p-"+unit.id+"-"+p.id, p);
         const updateP=(field,val,quiet=false)=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
-          // When marking collected, clear partial flag
-          if(field==="status"&&val==="collected"){p.partial=false;p.collectedBy=S.user;p.collectedAt=new Date().toISOString();}
+          // Operational محصّل: local display metadata only — never invent paid_amount.
+          if(field==="status"&&val==="collected"){p.partial=false;}
           if(field==="paid_amount"&&Number(val)>0){p.collectedBy=S.user;p.collectedAt=new Date().toISOString();}
           if(!isOwner){
             // Employee: just update local copy, will send on "إرسال" button
             p[field]=val;
-            if(field==="status"&&val==="collected"){p.collectedBy=S.user;}
-            if(field==="paid_amount"&&Number(val)>0){p.collectedBy=S.user;}
             return;
           }
           const old=p[field];
@@ -3980,8 +3979,9 @@ function renderApp(){
               .catch(async e=>{console.error(e);S.syncMsg="⚠ لم يُحفظ على السيرفر";showMsg(String(e?.message||"").includes("STALE")?"⚠ تغيرت البيانات من جهاز آخر — أعد المحاولة":"⚠ رفض الخادم التعديل");memClear(getMonthKey(S.year,S.month));await loadMonthOnline(S.year,S.month);});
             return;
           }
-          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&(val==="collected"||val==="partial"))){
-            showMsg("⚠ التحصيل يتم عبر التحصيل النقدي أو البنكي الآمن فقط");
+          // Money fields stay blocked on the operational path; status محصّل is occupancy-only.
+          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&val==="partial")){
+            showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");
             p[field]=old;
             return;
           }
@@ -4007,18 +4007,17 @@ function renderApp(){
         const form=isEd?h("div",{style:{padding:"0 14px 14px",borderTop:"1px solid "+cfg.border+"33",paddingTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
-              (()=>{const occ=["late","vacant","staff"];const sel=h("select",{},occ.map(v=>{
-                const o=h("option",{value:v},[SC[v].label]);if((p.status==="collected"||p.status==="partial")?v==="late":p.status===v)o.selected=true;return o;}));
+              (()=>{const occ=["collected","late","vacant","staff"];const sel=h("select",{},occ.map(v=>{
+                const o=h("option",{value:v},[SC[v].label]);if(p.status===v)o.selected=true;return o;}));
                 sel.addEventListener("change",e=>{
                   const blk=dailyBlockInfo(unit.id,p.id);
                   if(blk&&e.target.value!=="vacant"&&e.target.value!=="staff"){
                     showMsg("⛔ محجوز يومياً حتى "+blk.until+" — لا يمكن التأجير الشهري قبلها");
-                    e.target.value=(p.status==="collected"||p.status==="partial")?"late":p.status;
+                    e.target.value=p.status;
                     return;
                   }
                   updateP("status",e.target.value);
-                });return sel;})(),
-              h("div",{style:{fontSize:"12px",color:"#777",marginTop:"4px"}},["التحصيل («محصّل») عبر النقد/البنك الآمن فقط — الحالة هنا للإشغال"])]),
+                });return sel;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار"]),
               (()=>{const inp=h("input",{type:"number",value:p.rent});inp.addEventListener("input",e=>updateP("rent",Number(e.target.value),true));return inp;})()]),
           ]),
@@ -4269,12 +4268,11 @@ function renderApp(){
         const elecCfg=u.elec_paid?{bg:"#052e16",border:"#166534",text:"#4ade80"}:{bg:"#1c1917",border:"#333",text:"#a8a29e"};
         const updateFull=(field,val,quiet=false)=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
-          if(field==="status"&&val==="collected"){u.partial=false;u.collectedBy=S.user;u.collectedAt=new Date().toISOString();}
+          if(field==="status"&&val==="collected"){u.partial=false;}
           if(field==="paid_amount"&&Number(val)>0){u.collectedBy=S.user;u.collectedAt=new Date().toISOString();}
           if(!isOwner){
             // Employee: just update local copy, will send on "إرسال" button
             u[field]=val;
-            if((field==="status"&&val==="collected")||(field==="paid_amount"&&Number(val)>0))u.collectedBy=S.user;
             return;
           }
           const old=u[field], operationalBase=Number(u.operationalVersion??u.version??0);u[field]=val;
@@ -4290,8 +4288,8 @@ function renderApp(){
               .catch(async e=>{console.error(e);S.syncMsg="⚠ لم يُحفظ على السيرفر";showMsg(String(e?.message||"").includes("STALE")?"⚠ تغيرت البيانات من جهاز آخر — أعد المحاولة":"⚠ رفض الخادم التعديل");memClear(getMonthKey(S.year,S.month));await loadMonthOnline(S.year,S.month);});
             return;
           }
-          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&(val==="collected"||val==="partial"))){
-            showMsg("⚠ التحصيل يتم عبر التحصيل النقدي أو البنكي الآمن فقط");
+          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&val==="partial")){
+            showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");
             u[field]=old;
             return;
           }
@@ -4320,8 +4318,7 @@ function renderApp(){
         const form=isEd?h("div",{style:{padding:"0 12px 12px",borderTop:"1px solid #2a2a2a",paddingTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
-              (()=>{const s=h("select",{},[["late","متأخر"],["vacant","فارغ"],["staff","موظفين"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if((u.status==="collected"||u.status==="partial")?o[0]==="late":u.status===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("status",e.target.value));return s;})(),
-              h("div",{style:{fontSize:"12px",color:"#777",marginTop:"4px"}},["التحصيل عبر النقد/البنك الآمن فقط"])]),
+              (()=>{const s=h("select",{},[["collected","محصّل"],["late","متأخر"],["vacant","فارغ"],["staff","موظفين"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(u.status===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("status",e.target.value));return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار / شهر"]),
               (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[

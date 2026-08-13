@@ -48,12 +48,11 @@ export function legacyInTarget(x, year, monthIndex0) {
 }
 
 function received(x) {
+  // Actual Collected must come from payment evidence (paid_amount / financial path),
+  // never from operational status alone (e.g. status === "collected").
   const paid = num(x.paid_amount);
   const rent = num(x.rent);
-  if (x.partial && paid > 0 && paid < rent) return paid;
-  if (x.status === "collected") return rent;
-  if (x.status === "partial") return paid;
-  if (paid > 0) return Math.min(paid, rent);
+  if (paid > 0) return Math.min(paid, rent || paid);
   return 0;
 }
 

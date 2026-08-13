@@ -58,7 +58,10 @@ for (const file of FILES) {
     assert.match(html, /command:"reverseExpense"/);
     assert.match(html, /command:"cancelDeposit"/);
     assert.match(html, /command:"createCashReceipt"/);
-    assert.match(html, /command:"setSpaceRental"/);
+    // setSpaceRental remains a server command, but familiar UI must not route unit edits through it
+    // (Prod .6 deliberately keeps month operational updates separate from cycle setSpaceRental).
+    assert.match(html, /Do not hijack into setSpaceRental/);
+    assert.doesNotMatch(html, /command:"setSpaceRental"/);
     assert.match(html, /command:"createBankPayment"/);
     assert.doesNotMatch(html, /reconstructionPayloadForUi/);
     assert.doesNotMatch(html, /CANONICAL_WRITES_DENIED/);

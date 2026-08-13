@@ -131,9 +131,8 @@ function ensureCompatibleCycle(state, ctx) {
   }
 
   // Acknowledge proven month paid_amount without fabricating payment entities.
+  // Operational status "collected" alone must NEVER invent reserved/collected fils.
   let legacyOpeningReservedFils = requireNonNegative(Number(p.legacyOpeningReservedFils || 0));
-  const legacyStatus = String(p.legacyStatus || "").trim();
-  if (!legacyOpeningReservedFils && legacyStatus === "collected") legacyOpeningReservedFils = amountFils;
   if (legacyOpeningReservedFils > amountFils) legacyOpeningReservedFils = amountFils;
 
   const cycle = {
