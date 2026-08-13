@@ -42,8 +42,10 @@ test("operational read callable is the financial refresh authority",()=>{
 });
 
 test("tenant cash and financial headlines use server commands and operational projections",()=>{
-  assert.match(html,/submitTenantCashCollectionFromUi\(\{cycleId:String\(cycleId\),amount,paymentDate:todayISO\(\),identity:draftIdentity/);
   assert.match(html,/command:"createCashReceipt"/);
+  assert.match(html,/cashCollectionControl\(/);
+  assert.match(html,/legacyCollectionPayload/);
+  assert.match(html,/ensureCompatibleCycle/);
   assert.match(html,/_operationalFinancial\.headlines\?\.incomeFils/);
   assert.match(html,/_operationalFinancial\.headlines\?\.netFils/);
   assert.doesNotMatch(html,/CANONICAL_CYCLE_REQUIRED/);

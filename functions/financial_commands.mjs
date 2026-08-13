@@ -20,7 +20,7 @@ const COMMANDS = new Set([
   "adjustBalance", "reverseAdjustment", "payInstallment", "reverseInstallment",
   "createBankInstallmentPayment", "reverseBankInstallmentPayment",
   "closeMonth", "forceCloseMonth", "reopenMonth",
-  "setSpaceRental", "correctCycleDueDate", "cancelDeposit",
+  "setSpaceRental", "ensureCompatibleCycle", "correctCycleDueDate", "cancelDeposit",
 ]);
 
 const OP_ID = /^[A-Za-z0-9:_-]{8,160}$/;

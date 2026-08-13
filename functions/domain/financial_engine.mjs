@@ -72,10 +72,19 @@ export function cycleProjection(cycle, state) {
   const targetFils = effectiveTarget(cycle, state.discounts || []);
   const reservedFils = reservedForCycle(cycle.id, state.allocations || [], state.refunds || []);
   const collectedFils = settledForCycle(cycle.id, state.allocations || [], state.refunds || []);
-  if (reservedFils > targetFils) throw new Error("CYCLE_OVERPAYMENT");
+  // Proven month paid_amount/status may be acknowledged as opening reserved without fabricating payment entities.
+  const legacyOpeningReservedFils = requireNonNegative(Number(cycle.legacyOpeningReservedFils || 0));
+  const effectiveReservedFils = reservedFils + legacyOpeningReservedFils;
+  if (effectiveReservedFils > targetFils) throw new Error("CYCLE_OVERPAYMENT");
   if (collectedFils > reservedFils) throw new Error("SETTLED_EXCEEDS_RESERVED");
-  const remainingCollectibleFils = targetFils - reservedFils;
-  return { targetFils, tenantReceivedReservedFils: reservedFils, remainingCollectibleFils, collectedFils };
+  const remainingCollectibleFils = targetFils - effectiveReservedFils;
+  return {
+    targetFils,
+    tenantReceivedReservedFils: effectiveReservedFils,
+    remainingCollectibleFils,
+    collectedFils,
+    legacyOpeningReservedFils,
+  };
 }
 
 export function cashLotAvailable(lot, movements = []) {

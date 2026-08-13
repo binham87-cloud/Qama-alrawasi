@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import {
   assertEmployeeOrManager, assertManager, assertMonthAllowsOriginLinked, assertOperationIdentity,
-  cashLotAvailable, cycleProjection, monthOf, requireId, requirePositive, stableEntryId,
+  cashLotAvailable, cycleProjection, monthOf, requireId, requirePositive, requireNonNegative, stableEntryId,
   assertStateInvariants,
 } from "./financial_engine.mjs";
 import { assertCashAllocationStillValid, validateConfirmedCashAllocation } from "./cash_allocation.mjs";
 import { attachReconstructionLineage, prepareReconstructionCommand, reconstructionCompletenessAudit } from "./reconstruction.mjs";
+import { toReportingMonthKey } from "./month_keys.mjs";
+import { compatibleCycleId, resolveActiveTenancy, resolveLegacyRentableSpace } from "./legacy_rental_resolver.mjs";
 
 const clone = (x) => structuredClone(x);
 const nowIso = (ctx) => ctx.now || new Date().toISOString();
@@ -20,7 +22,7 @@ export function blankState() {
     dailyBookings: [], cycleCorrections: [],
     balances: { company: 0, revenue: 0, deduction: 0 }, ledger: [], audit: [],
     monthStates: [], operations: [], requests: [], reconstructionPlans: [], monthAuthorities: [],
-    rentableSpaces: [], tenants: [], tenancies: [],
+    rentableSpaces: [], tenants: [], tenancies: [], units: [], properties: [],
     canonicalControl: null, systemConfig: {}, financialTruthVersion: 2, cleanStartInventory: null,
   };
 }
@@ -66,10 +68,105 @@ function monthState(state, monthKey) {
   return state.monthStates.find((x) => x.id === monthKey) || { id: monthKey, status: "open", closeVersion: 0, history: [] };
 }
 
+function ensureCompatibleCycle(state, ctx) {
+  assertEmployeeOrManager(ctx.actor);
+  const p = ctx.payload || {};
+  const reportingMonth = toReportingMonthKey(String(p.reportingMonth || p.monthKey || ""), "auto");
+  const legacyUnitId = String(p.legacyUnitId || p.unitId || "").trim();
+  const partitionId = p.partitionId == null || p.partitionId === "" ? null : String(p.partitionId);
+  const spaceType = partitionId == null ? "full_unit" : "partition";
+  const resolved = resolveLegacyRentableSpace({
+    spaces: state.rentableSpaces || [],
+    units: state.units || [],
+    legacyUnitId,
+    partitionId,
+    spaceType: p.spaceType || spaceType,
+  });
+  if (!resolved.ok) throw new Error(resolved.code);
+  const space = resolved.space;
+  const cycleId = compatibleCycleId(space.id, reportingMonth);
+  const existing = (state.cycles || []).find((x) => x.id === cycleId);
+  if (existing) {
+    if (!String(existing.status || "").startsWith("open") && existing.status !== "open_not_due") {
+      throw new Error("CYCLE_NOT_OPEN");
+    }
+    return { cycleId: existing.id, spaceId: space.id, created: false, tenancyId: existing.tenancyId || null };
+  }
+
+  const amountFils = Number(p.contractualAmountFils ?? p.baseAmountFils ?? p.rentFils);
+  if (!Number.isSafeInteger(amountFils) || amountFils <= 0) throw new Error("CONTRACTUAL_AMOUNT_INVALID");
+  const dueDate = String(p.dueDate || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new Error("DUE_DATE_INVALID");
+  const startDate = String(p.startDate || dueDate).trim();
+  const tenantName = String(p.tenantName || p.tenant || "").trim() || `ساكن غير محدد — ${space.name || space.id}`;
+  const phone = String(p.tenantPhone || p.phone || "").trim();
+
+  let tenancyId = `tenancy:${space.id}`;
+  let tenantId = `tenant:${space.id}`;
+  const tenancyResolve = resolveActiveTenancy({ tenancies: state.tenancies || [], spaceId: space.id, tenantName });
+  if (tenancyResolve.ok) {
+    tenancyId = tenancyResolve.tenancy.id;
+    tenantId = tenancyResolve.tenancy.tenantId || tenantId;
+  } else if (tenancyResolve.code === "AMBIGUOUS_TENANCY") {
+    throw new Error("AMBIGUOUS_TENANCY");
+  } else {
+    state.tenants = state.tenants || [];
+    state.tenancies = state.tenancies || [];
+    if (!state.tenants.some((x) => x.id === tenantId)) {
+      state.tenants.push({
+        id: tenantId, name: tenantName, phone,
+        identityStatus: String(p.tenantName || p.tenant || "").trim() ? "confirmed" : "unresolved",
+        createdBy: ctx.actor.id, createdAt: nowIso(ctx),
+        origin: "legacy_compatibility",
+      });
+    }
+    if (!state.tenancies.some((x) => x.id === tenancyId)) {
+      state.tenancies.push({
+        id: tenancyId, spaceId: space.id, unitId: space.unitId || null, propertyId: space.propertyId || null,
+        tenantId, startDate, status: "active",
+        createdBy: ctx.actor.id, createdAt: nowIso(ctx), origin: "legacy_compatibility",
+      });
+    }
+  }
+
+  // Acknowledge proven month paid_amount without fabricating payment entities.
+  let legacyOpeningReservedFils = requireNonNegative(Number(p.legacyOpeningReservedFils || 0));
+  const legacyStatus = String(p.legacyStatus || "").trim();
+  if (!legacyOpeningReservedFils && legacyStatus === "collected") legacyOpeningReservedFils = amountFils;
+  if (legacyOpeningReservedFils > amountFils) legacyOpeningReservedFils = amountFils;
+
+  const cycle = {
+    id: cycleId, tenancyId, tenantId, tenant: tenantName,
+    propertyId: space.propertyId || null, unitId: space.unitId || null, spaceId: space.id,
+    partitionId: partitionId == null ? (space.partitionId == null ? null : String(space.partitionId)) : partitionId,
+    legacyUnitId, legacyPartitionId: partitionId,
+    baseAmountFils: amountFils, reportingMonth, dueDate,
+    status: "open", financialVersion: 0,
+    origin: "legacy_compatibility",
+    legacyOpeningReservedFils,
+    createdBy: ctx.actor.id, createdAt: nowIso(ctx), operationId: ctx.operationId,
+  };
+  state.cycles.push(cycle);
+  audit(state, ctx, "compatible_cycle_materialized", "rental_cycle", cycleId, null, {
+    spaceId: space.id, reportingMonth, legacyOpeningReservedFils, inventedPayments: 0,
+  });
+  return { cycleId, spaceId: space.id, created: true, tenancyId };
+}
+
+function resolveCycleForCollection(state, ctx) {
+  const p = ctx.payload || {};
+  if (p.cycleId) return String(p.cycleId);
+  if (p.legacyUnitId || (p.unitId && (p.reportingMonth || p.monthKey || p.contractualAmountFils || p.rentFils))) {
+    return ensureCompatibleCycle(state, ctx).cycleId;
+  }
+  throw new Error("CYCLE_NOT_FOUND");
+}
+
 function createCashReceipt(state, ctx) {
   assertEmployeeOrManager(ctx.actor);
   const p = ctx.payload;
-  const cycle = get(state.cycles, p.cycleId, "CYCLE_NOT_FOUND");
+  const cycleId = resolveCycleForCollection(state, ctx);
+  const cycle = get(state.cycles, cycleId, "CYCLE_NOT_FOUND");
   if (!String(cycle.status).startsWith("open")) throw new Error("CYCLE_NOT_OPEN");
   const amountFils = requirePositive(p.amountFils);
   const view = cycleProjection(cycle, state);
@@ -88,17 +185,19 @@ function createCashReceipt(state, ctx) {
   state.cashLots.push({ id: `lot:${ctx.operationId}`, originPaymentId: paymentId, cycleId: cycle.id, tenant: cycle.tenant || null, unitId: cycle.unitId || null, originalAmountFils: amountFils, currentHolder: ctx.actor.id, paymentDate, collectionMonth, status: "held", version: 1 });
   cycle.financialVersion = Number(cycle.financialVersion || 0) + 1;
   audit(state, ctx, "cash_received", "payment", paymentId, null, { amountFils, cycleId: cycle.id, holder: ctx.actor.id });
-  return { paymentId, collectionEventId: eventId, collectedFils: amountFils, reservedFils: allocatedFils, unallocatedFils, remainingCollectibleFils: view.remainingCollectibleFils - allocatedFils };
+  return { paymentId, collectionEventId: eventId, cycleId: cycle.id, collectedFils: amountFils, reservedFils: allocatedFils, unallocatedFils, remainingCollectibleFils: view.remainingCollectibleFils - allocatedFils };
 }
 
 function createBankPayment(state, ctx) {
   assertEmployeeOrManager(ctx.actor);
-  const p = ctx.payload; const cycle = get(state.cycles, p.cycleId, "CYCLE_NOT_FOUND");
+  const p = ctx.payload;
+  const cycleId = resolveCycleForCollection(state, ctx);
+  const cycle = get(state.cycles, cycleId, "CYCLE_NOT_FOUND");
   const amountFils = requirePositive(p.amountFils); const paymentDate = String(p.paymentDate); const collectionMonth = monthOf(paymentDate);
   const paymentId = `pay:${ctx.operationId}`;
-  state.paymentIntents.push({ id: paymentId, cycleId: cycle.id, method: "bank", amountFils, paymentDate, collectionMonth, createdBy: ctx.actor.id, status: "pending", operationId: ctx.operationId, createdAt: nowIso(ctx) });
+  state.paymentIntents.push({ id: paymentId, cycleId: cycle.id, method: "bank", amountFils, paymentDate, collectionMonth, bankReference: String(p.bankReference || ""), createdBy: ctx.actor.id, status: "pending", operationId: ctx.operationId, createdAt: nowIso(ctx) });
   audit(state, ctx, "bank_payment_submitted", "payment", paymentId, null, { amountFils, cycleId: cycle.id });
-  return { paymentId, status: "pending" };
+  return { paymentId, cycleId: cycle.id, status: "pending" };
 }
 
 function approveBankPayment(state, ctx) {
@@ -1060,7 +1159,7 @@ function cancelDeposit(state, ctx) {
 const HANDLERS = {
   createCashReceipt, createBankPayment, approveBankPayment, cancelPayment, correctPayment,
   createDepositRequest, editDepositRequest, rejectDeposit, withdrawDeposit, approveDeposit, cancelDeposit,
-  setSpaceRental, correctCycleDueDate,
+  ensureCompatibleCycle, setSpaceRental, correctCycleDueDate,
   createCustodyTransfer, confirmCustodyTransfer, rejectCustodyTransfer, reverseCustodyTransfer,
   requestDiscount, approveDiscountRequest, approveDiscount, reverseDiscount,
   createDailyBooking, refundDailyBooking,

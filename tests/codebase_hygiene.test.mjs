@@ -27,10 +27,12 @@ test("CH02 Firebase runtime entry points resolve and Hosting sources remain iden
   assert.equal(fs.readFileSync("index.html", "utf8"), fs.readFileSync("public/index.html", "utf8"));
 });
 
-test("CH03 rentalCycles is the sole client Firestore cycle collection", () => {
+test("CH03 cycle identity resolves via financialCommand, never a client cycles collection", () => {
   const html = fs.readFileSync("public/index.html", "utf8");
-  assert.match(html, /collection\(db,"rentalCycles"\)/);
+  assert.match(html, /ensureCompatibleCycle/);
+  assert.match(html, /legacyCollectionPayload/);
   assert.doesNotMatch(html, /collection\(db,\s*"cycles"\)/);
+  assert.doesNotMatch(html, /collection\(db,"rentalCycles"\)/);
 });
 
 test("CH04 removed migration/import commands cannot return through package scripts", () => {

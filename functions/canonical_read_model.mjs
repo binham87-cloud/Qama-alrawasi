@@ -96,13 +96,38 @@ async function loadCanonicalState(db, monthKey, profile, uid) {
     ]);
   }
   if (manager) {
-    const balances = await db.collection("accountBalances").get();
-    state.balances = { company: 0, revenue: 0, deduction: 0 };
-    for (const doc of balances.docs) state.balances[doc.id] = Number(doc.data().amountFils || 0);
+    const balancesSnap = await db.collection("accountBalances").get();
+    const fromAccounts = { company: null, revenue: null, deduction: null };
+    let accountDocs = 0;
+    for (const doc of balancesSnap.docs) {
+      accountDocs += 1;
+      fromAccounts[doc.id] = Number(doc.data().amountFils || 0);
+    }
+    const configSnap = await db.collection("config").doc("balances").get();
+    const config = configSnap.exists ? (configSnap.data() || {}) : {};
+    const fromConfig = {
+      company: Math.round(Number(config.companyBalance ?? 0) * 100),
+      revenue: Math.round(Number(config.revenueBalance ?? 0) * 100),
+      deduction: Math.round(Number(config.installmentBalance ?? 0) * 100),
+    };
+    // Compatibility rule: when accountBalances is empty, expose authoritative config/balances.
+    // When accountBalances has docs, they are the engine's live fils balances.
+    if (accountDocs === 0) {
+      state.balances = fromConfig;
+      state.balancesSource = configSnap.exists ? "config/balances" : "empty";
+    } else {
+      state.balances = {
+        company: fromAccounts.company ?? 0,
+        revenue: fromAccounts.revenue ?? 0,
+        deduction: fromAccounts.deduction ?? 0,
+      };
+      state.balancesSource = "accountBalances";
+    }
     const openings = await db.collection(COLLECTIONS.legacyOpeningBalances).where("batchStatus", "==", "ACTIVE").get();
     for (const doc of openings.docs) state.balances[doc.id] = Number(doc.data().amountFils || state.balances[doc.id] || 0);
   } else {
     state.balances = { company: 0, revenue: 0, deduction: 0 };
+    state.balancesSource = "employee_hidden";
     state.balanceTransfers = [];
     state.adjustments = [];
     state.installments = [];
@@ -177,6 +202,7 @@ export function buildCanonicalReadModel(db) {
       },
       monthAuthority: state.monthAuthorities.find(x=>x.monthKey===monthKey)||null,
       balances: manager ? state.balances : undefined,
+      balancesSource: manager ? state.balancesSource : undefined,
       generatedAt: new Date().toISOString(),
     };
   });

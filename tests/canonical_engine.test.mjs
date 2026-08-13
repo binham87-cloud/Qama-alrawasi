@@ -13,11 +13,11 @@ const seeded = () => ({ ...blankState(), cycles: [{ id: "cycle:tenant-a:1", tena
 test("critical cash reservation then deposit does not reduce remaining twice", () => {
   let state = seeded();
   ({ state } = executeCommand(state, "createCashReceipt", ctx("op:cash:0001", employee, { cycleId: "cycle:tenant-a:1", amountFils: money(1000), paymentDate: "2026-07-30" })));
-  assert.deepEqual(cycleProjection(state.cycles[0], state), { targetFils: money(3000), tenantReceivedReservedFils: money(1000), remainingCollectibleFils: money(2000), collectedFils: 0 });
+  assert.deepEqual(cycleProjection(state.cycles[0], state), { targetFils: money(3000), tenantReceivedReservedFils: money(1000), remainingCollectibleFils: money(2000), collectedFils: 0, legacyOpeningReservedFils: 0 });
   assert.equal(custodyProjection(state).totalFils, money(1000));
   ({ state } = executeCommand(state, "createDepositRequest", ctx("op:dep:req:1", employee, { allocations: [{ cashLotId: "lot:op:cash:0001", amountFils: money(1000) }], depositDate: "2026-08-02" })));
   ({ state } = executeCommand(state, "approveDeposit", ctx("op:dep:approve:1", manager, { depositRequestId: "dep:op:dep:req:1" }, "2026-08-02T10:00:00.000Z")));
-  assert.deepEqual(cycleProjection(state.cycles[0], state), { targetFils: money(3000), tenantReceivedReservedFils: money(1000), remainingCollectibleFils: money(2000), collectedFils: money(1000) });
+  assert.deepEqual(cycleProjection(state.cycles[0], state), { targetFils: money(3000), tenantReceivedReservedFils: money(1000), remainingCollectibleFils: money(2000), collectedFils: money(1000), legacyOpeningReservedFils: 0 });
   assert.equal(custodyProjection(state).totalFils, 0);
   assert.equal(state.balances.revenue, money(1000));
   assert.equal(cardProjection(state, "2026_07").collectedFils, money(1000));

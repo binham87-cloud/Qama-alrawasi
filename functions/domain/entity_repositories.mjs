@@ -2,6 +2,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import { blankState, executeCommand } from "./command_processor.mjs";
 import { SCHEMA_VERSION } from "./financial_engine.mjs";
 import { assertCanonicalCommandAllowed } from "./canonical_control.mjs";
+import { toReportingMonthKey } from "./month_keys.mjs";
+import { compatibleCycleId, resolveLegacyRentableSpace } from "./legacy_rental_resolver.mjs";
 
 // One Firestore document per entity/event. No financial array is stored in an
 // aggregate document. Collection names are deliberately explicit so Rules,
@@ -83,12 +85,55 @@ async function validateReconstructionStructureLink(tx,db,payload){
 async function loadBalances(tx, db, accounts) {
   const balances = { company: 0, revenue: 0, deduction: 0 };
   const versions = {};
+  const configSnap = await tx.get(db.collection("config").doc("balances"));
+  const config = configSnap.exists ? (configSnap.data() || {}) : {};
+  const configFils = {
+    company: Math.round(Number(config.companyBalance ?? 0) * 100),
+    revenue: Math.round(Number(config.revenueBalance ?? 0) * 100),
+    deduction: Math.round(Number(config.installmentBalance ?? 0) * 100),
+  };
   for (const account of accounts) {
     const snap = await tx.get(db.collection("accountBalances").doc(account));
-    balances[account] = snap.exists ? Number(snap.data().amountFils || 0) : 0;
-    versions[account] = snap.exists ? Number(snap.data().version || 0) : 0;
+    if (snap.exists) {
+      balances[account] = Number(snap.data().amountFils || 0);
+      versions[account] = Number(snap.data().version || 0);
+    } else {
+      // Compatibility: seed in-transaction from authoritative config/balances when accountBalances is empty.
+      balances[account] = Number.isSafeInteger(configFils[account]) ? configFils[account] : 0;
+      versions[account] = 0;
+    }
   }
-  return { balances, versions };
+  return { balances, versions, configBalancesPresent: configSnap.exists };
+}
+
+async function loadLegacyResolutionScope(tx, db, state, payload) {
+  state.rentableSpaces = await collectionRows(tx, db, "rentableSpaces");
+  state.units = await collectionRows(tx, db, "units");
+  state.tenancies = await collectionRows(tx, db, "tenancies");
+  state.tenants = await collectionRows(tx, db, "tenants");
+  const reportingMonth = String(payload.reportingMonth || payload.monthKey || "");
+  if (!reportingMonth || !(payload.legacyUnitId || payload.unitId)) return;
+  let monthKey;
+  try { monthKey = toReportingMonthKey(reportingMonth, "auto"); } catch { return; }
+  const resolved = resolveLegacyRentableSpace({
+    spaces: state.rentableSpaces,
+    units: state.units,
+    legacyUnitId: payload.legacyUnitId || payload.unitId,
+    partitionId: payload.partitionId,
+    spaceType: payload.spaceType,
+  });
+  if (!resolved.ok) return;
+  const cycleId = compatibleCycleId(resolved.space.id, monthKey);
+  const cycle = await getDoc(tx, db, "cycles", cycleId, false);
+  if (cycle) {
+    if (!state.cycles.some((x) => x.id === cycle.id)) state.cycles.push(cycle);
+    state.allocations.push(...await getWhere(tx, db, "allocations", "cycleId", cycleId));
+    state.collectionEvents.push(...await getWhere(tx, db, "collectionEvents", "cycleId", cycleId));
+    state.discounts.push(...await getWhere(tx, db, "discounts", "cycleId", cycleId));
+  } else {
+    // Touch the deterministic doc so concurrent first-collections collide and retry.
+    await tx.get(db.collection("rentalCycles").doc(cycleId));
+  }
 }
 
 async function loadCycleScope(tx, db, state, cycleId) {
@@ -161,10 +206,16 @@ async function loadCommandState(tx, db, command, payload) {
     case "refundDailyBooking": { const booking = await getDoc(tx, db, "dailyBookings", payload.bookingId); state.dailyBookings.push(booking); await loadCycleScope(tx, db, state, booking.cycleId); const payments = await getWhere(tx, db, "paymentIntents", "cycleId", booking.cycleId); state.paymentIntents.push(...payments); for (const payment of payments) { const allocations = await getWhere(tx, db, "allocations", "paymentId", payment.id); state.allocations.push(...allocations); for (const alloc of allocations) state.refunds.push(...await getWhere(tx, db, "refunds", "allocationId", alloc.id)); if (payment.method === "cash") await loadLotScope(tx, db, state, `lot:${payment.operationId}`); } accounts.add("revenue"); break; }
     case "createCashReceipt":
     case "createBankPayment":
+    case "ensureCompatibleCycle":
     case "approveDiscount":
     case "approveEviction":
-      await loadCycleScope(tx, db, state, payload.cycleId);
-      if (command === "createCashReceipt" || command === "createBankPayment") { const key = String(payload.paymentDate || "").slice(0, 7).replace("-", "_"); const ms = await getDoc(tx, db, "monthStates", key, false); if (ms) state.monthStates.push(ms); }
+      if (payload.cycleId) await loadCycleScope(tx, db, state, payload.cycleId);
+      else await loadLegacyResolutionScope(tx, db, state, payload);
+      if (command === "createCashReceipt" || command === "createBankPayment") {
+        const key = String(payload.paymentDate || "").slice(0, 7).replace("-", "_");
+        const ms = await getDoc(tx, db, "monthStates", key, false);
+        if (ms) state.monthStates.push(ms);
+      }
       break;
     case "approveBankPayment": { const payment = await getDoc(tx, db, "paymentIntents", payload.paymentId); state.paymentIntents.push(payment); await loadCycleScope(tx, db, state, payment.cycleId); const ms = await getDoc(tx, db, "monthStates", payment.collectionMonth, false); if (ms) state.monthStates.push(ms); accounts.add("revenue"); break; }
     case "cancelPayment": { const payment = await getDoc(tx, db, "paymentIntents", payload.paymentId); state.paymentIntents.push(payment); const allocations = await getWhere(tx, db, "allocations", "paymentId", payment.id); state.allocations.push(...allocations); for (const alloc of allocations) { state.refunds.push(...await getWhere(tx, db, "refunds", "allocationId", alloc.id)); await loadCycleScope(tx, db, state, alloc.cycleId); } if (payment.method === "cash") await loadLotScope(tx, db, state, `lot:${payment.operationId}`); accounts.add("revenue"); break; }
@@ -288,12 +339,24 @@ function persistDiff(tx, db, before, after, accounts, balanceVersions, operation
       }
     }
   }
+  let mirrored = false;
   for (const account of accounts) {
     if (before.balances[account] === after.balances[account]) continue;
     tx.set(db.collection("accountBalances").doc(account), {
       account, amountFils: after.balances[account], version: (balanceVersions[account] || 0) + 1,
       updatedByOperationId: operationId, updatedAt: FieldValue.serverTimestamp(), schemaVersion: SCHEMA_VERSION,
     }, { merge: false });
+    mirrored = true;
+  }
+  // Keep familiar config/balances in sync when the engine mutates money (AED fields).
+  if (mirrored) {
+    tx.set(db.collection("config").doc("balances"), {
+      companyBalance: (after.balances.company || 0) / 100,
+      revenueBalance: (after.balances.revenue || 0) / 100,
+      installmentBalance: (after.balances.deduction || 0) / 100,
+      updatedByOperationId: operationId,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
   }
 }
 
