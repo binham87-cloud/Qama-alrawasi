@@ -3402,17 +3402,21 @@ function renderApp(){
     };
     const _confirmRenewH=async(item)=>{if(S.renewing)return; S.renewing=true;setTimeout(()=>{S.renewing=false;},800);
       const next=JSON.parse(JSON.stringify(item.x));if(!renewCycle(next)){showMsg("⚠ تم التجديد مسبقاً");S.renewing=false;R();return;}next.lastRenewedKey=_k;
-      const fields={start_date:next.start_date,due_date:next.due_date,contract_end:next.contract_end,cycle_anchor:next.cycle_anchor,cycle_i:next.cycle_i,lastRenewedKey:_k,status:next.status};
+      const fields={start_date:next.start_date,due_date:next.due_date,contract_end:next.contract_end,cycle_anchor:next.cycle_anchor,cycle_i:next.cycle_i,lastRenewedKey:_k,status:next.status==="collected"?"late":next.status};
       if(!isOwner){await _requestUnitFields(item,fields,"تأكيد استمرار "+item.label);return;}
-      Object.assign(item.x,fields);addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});
-      if(await saveCurData(data))showMsg("✓ تم تسجيل الاستمرار");};
+      try{
+        await saveOwnerRentalFields({entityType:item.partId==null?"full":"partition",unitId:item.unitId,entityId:item.partId==null?item.unitId:item.partId},fields,Number(item.x.operationalVersion??item.x.version??0));
+        showMsg("✓ تم تسجيل الاستمرار");
+      }catch(e){showMsg(backendErrorMessage(e));}
+    };
     const _confirmLeaveH=async(item)=>{
       const _t=item.x.tenant||"—";
-      const fields={status:"vacant",collectedBy:"",paid_amount:0,partial:false,start_date:"",due_date:"",contract_end:"",lastRenewedKey:_k};
-      if(!isOwner){await _requestUnitFields(item,fields,"تسجيل مغادرة "+_t+" من "+item.label);return;}
-      addLog(data,(USERS[S.user]?.name||S.user)+" سجّل مغادرة "+_t+" من "+item.label+(Number(item.x.deposit||0)>0?" (تأمين "+Number(item.x.deposit).toLocaleString()+" د.إ بحاجة تسوية)":""),{target:item.label,field:"تأكيد شهري",oldVal:_t,newVal:"غادر → فارغ"});
-      Object.assign(item.x,fields);
-      if(await saveCurData(data))showMsg(Number(item.x.deposit||0)>0?"✓ سُجلت المغادرة — التأمين ينتظر التسوية":"✓ سُجلت المغادرة");
+      const fields={status:"vacant",start_date:"",due_date:"",contract_end:"",lastRenewedKey:_k,tenant:"",note:item.x.note||""};
+      if(!isOwner){await _requestUnitFields(item,{...fields,collectedBy:"",paid_amount:0,partial:false},"تسجيل مغادرة "+_t+" من "+item.label);return;}
+      try{
+        await saveOwnerRentalFields({entityType:item.partId==null?"full":"partition",unitId:item.unitId,entityId:item.partId==null?item.unitId:item.partId},fields,Number(item.x.operationalVersion??item.x.version??0));
+        showMsg(Number(item.x.deposit||0)>0?"✓ سُجلت المغادرة — التأمين ينتظر التسوية":"✓ سُجلت المغادرة");
+      }catch(e){showMsg(backendErrorMessage(e));}
     };
     const _secHdr=(icon,title,count,color,amt)=>h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",paddingBottom:"6px",borderBottom:"1px solid #1a1a1a"}},[
       h("div",{style:{fontSize:"14px",fontWeight:"700",color}},[icon+" "+title+" ("+count+")"]),
@@ -3894,14 +3898,14 @@ function renderApp(){
           ]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الإيجار"]),
-              (()=>{const s=h("select",{},[["monthly","شهري"],["daily","يومي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(rentType(p)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=rentType(p);return;}p.rent_type=e.target.value;if(e.target.value==="monthly"){p.end_date="";p.due_date=p.start_date?addMonthsISO(p.start_date,1):"";}if(isOwner){saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return s;})()]),
+              (()=>{const s=h("select",{},[["monthly","شهري"],["daily","يومي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(rentType(p)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=rentType(p);return;}p.rent_type=e.target.value;if(e.target.value==="monthly"){p.end_date="";p.due_date=p.start_date?addMonthsISO(p.start_date,1):"";}if(isOwner){saveOwnerRentalFields({entityType:"partition",unitId:unit.id,entityId:p.id},{rent_type:p.rent_type,due_date:p.due_date,end_date:p.end_date},Number(p.operationalVersion??p.version??0)).then(()=>set({editPart:unit.id+"-"+p.id})).catch(e=>showMsg(backendErrorMessage(e)));}});return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},[rentType(p)==="daily"?"تاريخ الدخول":"بداية من"]),
               (()=>{const inp=h("input",{type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.start_date||"";return;}p.start_date=e.target.value;if(rentType(p)==="monthly"){p.cycle_anchor=e.target.value;p.cycle_i=0;p.contract_end=addMonthsISO(e.target.value,1);p.due_date=p.contract_end;}if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ "+unit.name+" بارتشن "+p.id);updateP("start_date",p.start_date);}});return inp;})()]),
             rentType(p)==="monthly"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نهاية الدورة"]),
-              (()=>{const inp=h("input",{type:"date",value:p.contract_end||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.contract_end||"";return;}const _o=p.contract_end||"";p.contract_end=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل نهاية دورة "+unit.name+" بارتشن "+p.id,{target:unit.name+" #"+p.id,field:"نهاية الدورة",oldVal:_o,newVal:e.target.value});saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()]):null
+              (()=>{const inp=h("input",{type:"date",value:p.contract_end||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.contract_end||"";return;}const _o=p.contract_end||"";p.contract_end=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل نهاية دورة "+unit.name+" بارتشن "+p.id,{target:unit.name+" #"+p.id,field:"نهاية الدورة",oldVal:_o,newVal:e.target.value});saveOwnerRentalFields({entityType:"partition",unitId:unit.id,entityId:p.id},{contract_end:p.contract_end,end_date:p.end_date},Number(p.operationalVersion??p.version??0)).then(()=>set({editPart:unit.id+"-"+p.id})).catch(e=>showMsg(backendErrorMessage(e)));}});return inp;})()]):null
           ]),
           rentType(p)==="daily"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الخروج"]),
-            (()=>{const inp=h("input",{type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.end_date||"";return;}p.end_date=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ خروج "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});}});return inp;})()
+            (()=>{const inp=h("input",{type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=p.end_date||"";return;}p.end_date=e.target.value;if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ خروج "+unit.name+" بارتشن "+p.id);saveOwnerRentalFields({entityType:"partition",unitId:unit.id,entityId:p.id},{contract_end:p.contract_end,end_date:p.end_date},Number(p.operationalVersion??p.version??0)).then(()=>set({editPart:unit.id+"-"+p.id})).catch(e=>showMsg(backendErrorMessage(e)));}});return inp;})()
           ]):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق التلقائي"]),
             h("input",{type:"date",value:(p.contract_end||dueDateOf(p)||""),disabled:"true"})
           ]),
@@ -4017,7 +4021,13 @@ function renderApp(){
                   p.status="vacant";
                   _mv.forEach(f=>{if(f!=="status")p[f]=(f==="paid_amount"||f==="deposit"||f==="elec_amount")?0:(f==="partial"||f==="elec_paid")?false:"";});
                   p.version=(Number(p.version)||0)+1;
-                  if(await saveCurData(data)){showMsg("✓ تم التحويل إلى "+tgtLabel+" بنجاح");set({transferPart:null,editPart:null});}
+                  try{
+                    await applyOwnerBusinessMutation("transfer_tenant",{
+                      fromUnitId:unit.id, fromPartId:p.id, toUnitId:_vacants.find(v=>v.label===tgtLabel)?.vui, toPartId:_vacants.find(v=>v.label===tgtLabel)?.vpi,
+                      fields:{tenant:p.tenant,phone:p.phone,deposit:p.deposit,note:p.note,start_date:p.start_date,due_date:p.due_date,contract_end:p.contract_end,status:p.status,rent:p.rent,elec_paid:p.elec_paid,elec_amount:p.elec_amount,lastRenewedKey:p.lastRenewedKey}
+                    });
+                    showMsg("✓ تم التحويل إلى "+tgtLabel+" بنجاح");set({transferPart:null,editPart:null});
+                  }catch(e){showMsg(backendErrorMessage(e));}
                 }},["تأكيد التحويل"])])]);
           })(),
           canEdit()?h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},[
@@ -4105,7 +4115,7 @@ function renderApp(){
                 removeCustomUnit(unit.id,false,S.year,S.month);
                 propagateRemoveUnit(unit.id,false,S.year,S.month);
                 addLog&&addLog(data,"مدير حذف "+unit.name);
-                saveCurData(data).then(ok=>{if(ok){set({selUnit:null,editPart:null});showMsg("✓ تم حذف الشقة");}});}
+                applyOwnerBusinessMutation("delete_unit",{unitId:unit.id}).then(()=>{set({selUnit:null,editPart:null});showMsg("✓ تم حذف الشقة");}).catch(e=>showMsg(backendErrorMessage(e)));}
             }},["حذف الشقة"]):null
           ]):null
         ]),
@@ -4181,7 +4191,7 @@ function renderApp(){
             removeCustomUnit(u.id,true,S.year,S.month);
             propagateRemoveUnit(u.id,true,S.year,S.month);
             addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" حذف شقة كاملة "+removed.id);
-            saveCurData(data).then(ok=>{if(ok){set({editPart:null});showMsg("✓ تم حذف الشقة");}});}
+            applyOwnerBusinessMutation("delete_full",{unitId:u.id}).then(()=>{set({editPart:null});showMsg("✓ تم حذف الشقة");}).catch(e=>showMsg(backendErrorMessage(e)));}
         };
         const isEd=S.editPart==="full-"+u.id;
         const form=isEd?h("div",{style:{padding:"0 12px 12px",borderTop:"1px solid #2a2a2a",paddingTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
@@ -4192,7 +4202,7 @@ function renderApp(){
               (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["بداية العقد"]),
-              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=u.start_date||"";return;}u.start_date=e.target.value;u.cycle_anchor=e.target.value;u.cycle_i=0;u.contract_end=addMonthsISO(e.target.value,1);u.due_date=u.contract_end;if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveCurData(data);set({editPart:"full-"+u.id});}});return inp;})()]),
+              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{if(!canEdit()){showMsg("🔒 شهر مقفل");e.target.value=u.start_date||"";return;}u.start_date=e.target.value;u.cycle_anchor=e.target.value;u.cycle_i=0;u.contract_end=addMonthsISO(e.target.value,1);u.due_date=u.contract_end;if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveOwnerRentalFields({entityType:"full",entityId:u.id},{start_date:u.start_date,cycle_anchor:u.cycle_anchor,cycle_i:u.cycle_i,contract_end:u.contract_end,due_date:u.due_date},Number(u.operationalVersion??u.version??0)).then(()=>set({editPart:"full-"+u.id})).catch(e=>showMsg(backendErrorMessage(e)));}});return inp;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق (تلقائي)"]),
               h("input",{type:"date",value:(u.contract_end||dueDateOf(u)||""),disabled:"true"}),
               !dueDateOf(u)?h("div",{style:{fontSize:"11px",color:"#a16207",marginTop:"3px"}},["↑ سجّل \"بداية العقد\" ويُحسب تلقائياً"]):null])]),
@@ -4293,11 +4303,10 @@ function renderApp(){
                 const nu={id:"u_"+Date.now(),name:uname,type:utype,color:ucolor,
                   partitions:parts.map(p=>({...p,status:"vacant",tenant:"",note:"فارغ",rent_type:p.rent_type||"monthly",start_date:"",end_date:"",due_date:"",partial:false,paid_amount:0}))};
                 if(isOwner){
-                  data.units.push(nu);
                   registerCustomUnit(nu,false,S.year,S.month);
                   propagateNewUnit(nu,S.year,S.month);
                   addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف "+uname);
-                  saveCurData(data).then(ok=>{if(ok){set({showAddUnit:false});showMsg("✓ تم إضافة "+uname);}});
+                  applyOwnerBusinessMutation("add_unit",{unit:nu}).then(()=>{set({showAddUnit:false});showMsg("✓ تم إضافة "+uname);}).catch(e=>showMsg(backendErrorMessage(e)));
                 } else {
                   submitRequest("add_unit","إضافة شقة: "+uname,{unit:nu}).then(ok=>{if(ok)set({showAddUnit:false});});
                 }
@@ -4327,11 +4336,10 @@ function renderApp(){
               if(!uid||!urent)return showMsg("أدخل الرقم والإيجار");
               const fu={...initFull({id:uid,rent:urent,tenant:utenant}),start_date:ustart,due_date:ustart?addMonthsISO(ustart,1):""};
               if(isOwner){
-                data.full.push(fu);
                 registerCustomUnit(fu,true,S.year,S.month);
                 propagateNewFullUnit(fu,S.year,S.month);
                 addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف شقة كاملة "+uid);
-                saveCurData(data).then(ok=>{if(ok){set({showAddFullUnit:false});showMsg("✓ تم إضافة شقة "+uid);}});
+                applyOwnerBusinessMutation("add_full_unit",{unit:fu}).then(()=>{set({showAddFullUnit:false});showMsg("✓ تم إضافة شقة "+uid);}).catch(e=>showMsg(backendErrorMessage(e)));
               } else {
                 submitRequest("add_full_unit","إضافة شقة كاملة: "+uid,{unit:fu}).then(ok=>{if(ok)set({showAddFullUnit:false});});
               }
@@ -4370,19 +4378,21 @@ function renderApp(){
         if(S.renewing)return; S.renewing=true; setTimeout(()=>{S.renewing=false;},800);
         const next=JSON.parse(JSON.stringify(item.x));
         if(!renewCycle(next)){showMsg("⚠ تم التجديد مسبقاً");S.renewing=false;R();return;}
-        const fields={start_date:next.start_date,due_date:next.due_date,contract_end:next.contract_end,cycle_anchor:next.cycle_anchor,cycle_i:next.cycle_i,renewStamp:next.renewStamp,lastRenewedKey:_curKey,status:next.status,paid_amount:0,partial:false,collectedBy:"",collectedAt:"",elec_paid:false};
-        if(!isOwner){await _sendConfirmRequest(item,fields,"تأكيد استمرار "+item.label);return;}
-        Object.assign(item.x,fields);
-        addLog(data,(USERS[S.user]?.name||S.user)+" أكد استمرار "+item.label+" ("+(item.x.tenant||"—")+")",{target:item.label,field:"تأكيد شهري",oldVal:"بانتظار",newVal:"مستمر"});
-        if(await saveCurData(data))showMsg("✓ تم تسجيل الاستمرار");
+        const fields={start_date:next.start_date,due_date:next.due_date,contract_end:next.contract_end,cycle_anchor:next.cycle_anchor,cycle_i:next.cycle_i,lastRenewedKey:_curKey,status:next.status==="collected"?"late":(next.status||"late"),elec_paid:false};
+        if(!isOwner){await _sendConfirmRequest(item,{...fields,paid_amount:0,partial:false,collectedBy:"",collectedAt:""},"تأكيد استمرار "+item.label);return;}
+        try{
+          await saveOwnerRentalFields({entityType:item.partId==null?"full":"partition",unitId:item.unitId,entityId:item.partId==null?item.unitId:item.partId},fields,Number(item.x.operationalVersion??item.x.version??0));
+          showMsg("✓ تم تسجيل الاستمرار");
+        }catch(e){showMsg(backendErrorMessage(e));}
       };
       const _confirmLeave=async(item)=>{
         const _t=item.x.tenant||"—";
-        const fields={status:"vacant",collectedBy:"",paid_amount:0,partial:false,start_date:"",due_date:"",contract_end:"",lastRenewedKey:_curKey};
-        if(!isOwner){await _sendConfirmRequest(item,fields,"تسجيل مغادرة "+_t+" من "+item.label);return;}
-        addLog(data,(USERS[S.user]?.name||S.user)+" سجّل مغادرة "+_t+" من "+item.label+(Number(item.x.deposit||0)>0?" (تأمين "+Number(item.x.deposit).toLocaleString()+" د.إ بحاجة تسوية)":""),{target:item.label,field:"تأكيد شهري",oldVal:_t,newVal:"غادر → فارغ"});
-        Object.assign(item.x,fields);
-        if(await saveCurData(data))showMsg(Number(item.x.deposit||0)>0?"✓ سُجلت المغادرة — التأمين ينتظر التسوية":"✓ سُجلت المغادرة");
+        const fields={status:"vacant",start_date:"",due_date:"",contract_end:"",lastRenewedKey:_curKey,tenant:""};
+        if(!isOwner){await _sendConfirmRequest(item,{...fields,collectedBy:"",paid_amount:0,partial:false},"تسجيل مغادرة "+_t+" من "+item.label);return;}
+        try{
+          await saveOwnerRentalFields({entityType:item.partId==null?"full":"partition",unitId:item.unitId,entityId:item.partId==null?item.unitId:item.partId},fields,Number(item.x.operationalVersion??item.x.version??0));
+          showMsg(Number(item.x.deposit||0)>0?"✓ سُجلت المغادرة — التأمين ينتظر التسوية":"✓ سُجلت المغادرة");
+        }catch(e){showMsg(backendErrorMessage(e));}
       };
       const renewCard=(_needConfirm.length>0&&canEdit())?h("div",{class:"card",style:{padding:"12px 14px",marginBottom:"12px",border:"2px solid #0e7490",background:"#062028"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},[

@@ -7,7 +7,7 @@ const ALLOWED = Object.freeze({
 const RENTAL_FIELDS = Object.freeze(new Set([
   "rent", "status", "tenant", "phone", "note", "deposit",
   "start_date", "end_date", "due_date", "contract_end", "cycle_anchor", "cycle_i",
-  "rent_type", "elec_amount", "elec_paid",
+  "rent_type", "elec_amount", "elec_paid", "lastRenewedKey",
 ]));
 
 // Display/lifecycle occupancy — NOT a financial collection event.
@@ -21,7 +21,7 @@ const FORBIDDEN_FINANCIAL = Object.freeze(new Set([
 
 const BUSINESS_REQUEST_TYPES = Object.freeze(new Set([
   "update_partition", "update_full", "transfer_tenant",
-  "add_partition", "delete_partition", "add_unit", "delete_unit", "delete_full",
+  "add_partition", "delete_partition", "add_unit", "delete_unit", "delete_full", "add_full_unit",
 ]));
 
 function cleanString(value, max) {
@@ -173,6 +173,14 @@ function applyBusinessPayloadToMonth(data, type, payload) {
     if (data.units.some((u) => String(u.id) === String(unit.id))) throw new Error("UNIT_EXISTS");
     data.units.push(unit);
     return { target: { entityType: "unit", entityId: unit.id } };
+  }
+  if (type === "add_full_unit") {
+    const unit = payload.unit;
+    if (!unit || unit.id == null) throw new Error("OPERATIONAL_VALUE_INVALID");
+    data.full = data.full || [];
+    if (data.full.some((u) => String(u.id) === String(unit.id))) throw new Error("UNIT_EXISTS");
+    data.full.push(unit);
+    return { target: { entityType: "full", entityId: unit.id } };
   }
   if (type === "delete_unit") {
     const idx = (data.units || []).findIndex((u) => String(u.id) === String(payload.unitId));
