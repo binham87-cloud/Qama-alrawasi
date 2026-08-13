@@ -56,8 +56,28 @@ function received(x) {
   return 0;
 }
 
-function displayLate(x) {
-  return String(x.status || "") === "late";
+/**
+ * Arrears = unpaid remaining due, not raw status===late.
+ * status=collected alone must NOT remove unpaid remaining from arrears.
+ */
+function unpaidRemaining(x) {
+  const rent = num(x.rent);
+  if (!(rent > 0)) return 0;
+  return Math.max(0, rent - received(x));
+}
+
+function inArrears(x) {
+  const rem = unpaidRemaining(x);
+  if (!(rem > 0)) return false;
+  const st = String(x.status || "");
+  if (st === "vacant" || st === "staff") return false;
+  if (st === "pending") return false;
+  // late / expired / stale collected / partial / missing → arrears when remaining > 0
+  return true;
+}
+
+function vacatedCollectedAed(data) {
+  return r2((data?.vacatedCollected || []).reduce((s, row) => s + num(row.amount), 0));
 }
 
 /**
@@ -79,7 +99,7 @@ export function projectLegacyMonthFinance(data, year, monthIndex0) {
     targetAed += rent;
     const got = received(x);
     collectedAed += got;
-    if (displayLate(x)) arrearsAed += Math.max(0, rent - got);
+    if (inArrears(x)) arrearsAed += unpaidRemaining(x);
     targetDetails.push({
       cycleId: null,
       unitId: x.unitId || null,
@@ -91,6 +111,8 @@ export function projectLegacyMonthFinance(data, year, monthIndex0) {
       source: "legacy_month",
     });
   }
+  // Proven paid_amount preserved on vacate (no collectionEvents) still counts as Actual Collected.
+  collectedAed = r2(collectedAed + vacatedCollectedAed(data));
   targetAed = r2(targetAed + daily);
   collectedAed = r2(collectedAed + daily);
 

@@ -10,9 +10,9 @@ const RENTAL_FIELDS = Object.freeze(new Set([
   "rent_type", "elec_amount", "elec_paid", "lastRenewedKey",
 ]));
 
-// Display/lifecycle occupancy — NOT a financial collection event.
-// "collected" (محصّل) is an operational/display status only; it must never mint money.
-const OCCUPANCY_STATUSES = Object.freeze(new Set(["vacant", "staff", "late", "pending", "expired", "collected"]));
+// Writable occupancy lifecycle only. "collected" / "partial" are financial outcomes —
+// never set by operational status alone (that would mint visible محصّل without money).
+const OCCUPANCY_STATUSES = Object.freeze(new Set(["vacant", "staff", "late", "pending", "expired"]));
 
 const FORBIDDEN_FINANCIAL = Object.freeze(new Set([
   "paid_amount", "partial", "collectionMethod", "collectedBy", "collectedAt",
@@ -32,6 +32,28 @@ function clearCollectionResidue(entity) {
   });
 }
 
+/**
+ * Preserve proven month paid_amount into a month-level bucket before clearing residue.
+ * Prevents legacy KPI Actual Collected from vanishing on vacate when collectionEvents
+ * do not exist. Never invents amounts — only copies existing paid_amount evidence.
+ */
+function preserveVacatedPaidEvidence(data, entity, fields) {
+  if (!data || !entity || !fields) return;
+  if (fields.status !== "vacant" && fields.status !== "staff") return;
+  const paid = Number(entity.paid_amount || 0);
+  if (!(paid > 0)) return;
+  const amountFils = Math.round(paid * 100);
+  if (!Number.isSafeInteger(amountFils) || amountFils <= 0) return;
+  data.vacatedCollected = Array.isArray(data.vacatedCollected) ? data.vacatedCollected : [];
+  data.vacatedCollected.push({
+    amount: paid,
+    amountFils,
+    tenant: entity.tenant || "",
+    preservedFrom: "paid_amount",
+    at: new Date().toISOString(),
+  });
+}
+
 /** Occupancy-only status for transfers (never collected/partial). */
 function normalizeTransferOccupancyStatus(status) {
   const st = String(status || "");
@@ -40,8 +62,9 @@ function normalizeTransferOccupancyStatus(status) {
   return "late";
 }
 
-function applyVacateResidueIfNeeded(entity, fields) {
+function applyVacateResidueIfNeeded(data, entity, fields) {
   if (!fields || (fields.status !== "vacant" && fields.status !== "staff")) return;
+  preserveVacatedPaidEvidence(data, entity, fields);
   clearCollectionResidue(entity);
 }
 
@@ -88,8 +111,8 @@ function validateRentalPatch(patch) {
     const value = patch[key];
     if (key === "status") {
       const st = String(value || "");
-      // "partial" is not a familiar occupancy control; money partials use financial commands.
-      if (st === "partial") throw new Error("COLLECTION_REQUIRES_FINANCIAL_COMMAND");
+      // Visible محصّل / جزئي require financial evidence — never operational status alone.
+      if (st === "collected" || st === "partial") throw new Error("COLLECTION_REQUIRES_FINANCIAL_COMMAND");
       if (!OCCUPANCY_STATUSES.has(st)) throw new Error("OCCUPANCY_STATUS_INVALID");
       out[key] = st;
     } else if (key === "rent" || key === "deposit" || key === "elec_amount") {
@@ -155,8 +178,21 @@ export function applyOwnerRentalPatch(monthDocument, payload, actor) {
     operationalVersion: currentVersion + 1,
     version: Number(entity.version || 0) + 1,
   });
-  applyVacateResidueIfNeeded(entity, patch);
+  applyVacateResidueIfNeeded(data, entity, patch);
   return { data, before, after: patch, version: currentVersion + 1, target: { ...target, entityType }, financialEffectFils: 0 };
+}
+
+/** Drop UI/ephemeral keys; still hard-deny financial mint fields. */
+function rentalFieldsFromRequest(fields) {
+  const raw = fields && typeof fields === "object" && !Array.isArray(fields) ? fields : {};
+  const cleaned = {};
+  for (const key of Object.keys(raw)) {
+    if (FORBIDDEN_FINANCIAL.has(key)) throw new Error("OPERATIONAL_FIELD_DENIED");
+    if (key.startsWith("_")) continue;
+    if (!RENTAL_FIELDS.has(key)) continue;
+    cleaned[key] = raw[key];
+  }
+  return cleaned;
 }
 
 function applyBusinessPayloadToMonth(data, type, payload) {
@@ -165,17 +201,17 @@ function applyBusinessPayloadToMonth(data, type, payload) {
     if (!unit) throw new Error("OPERATIONAL_ENTITY_NOT_FOUND");
     const part = (unit.partitions || []).find((p) => String(p.id) === String(payload.partId));
     if (!part) throw new Error("OPERATIONAL_ENTITY_NOT_FOUND");
-    const fields = validateRentalPatch(payload.fields || {});
+    const fields = validateRentalPatch(rentalFieldsFromRequest(payload.fields || {}));
     Object.assign(part, fields, { version: Number(part.version || 0) + 1, operationalVersion: Number(part.operationalVersion || 0) + 1 });
-    applyVacateResidueIfNeeded(part, fields);
+    applyVacateResidueIfNeeded(data, part, fields);
     return { target: { entityType: "partition", unitId: unit.id, entityId: part.id } };
   }
   if (type === "update_full") {
     const unit = (data.full || []).find((u) => String(u.id) === String(payload.unitId));
     if (!unit) throw new Error("OPERATIONAL_ENTITY_NOT_FOUND");
-    const fields = validateRentalPatch(payload.fields || {});
+    const fields = validateRentalPatch(rentalFieldsFromRequest(payload.fields || {}));
     Object.assign(unit, fields, { version: Number(unit.version || 0) + 1, operationalVersion: Number(unit.operationalVersion || 0) + 1 });
-    applyVacateResidueIfNeeded(unit, fields);
+    applyVacateResidueIfNeeded(data, unit, fields);
     return { target: { entityType: "full", entityId: unit.id } };
   }
   if (type === "add_partition") {
@@ -251,6 +287,8 @@ function applyBusinessPayloadToMonth(data, type, payload) {
     }
     dst.status = normalizeTransferOccupancyStatus(dst.status);
     clearCollectionResidue(dst);
+    // Preserve proven source paid_amount for month KPI before vacating source residue.
+    preserveVacatedPaidEvidence(data, src, { status: "vacant" });
     Object.assign(src, { tenant: "", phone: "", status: "vacant", note: "" });
     clearCollectionResidue(src);
     return { target: { entityType: "partition", unitId: dstUnit.id, entityId: dst.id } };

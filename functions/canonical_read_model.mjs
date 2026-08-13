@@ -210,10 +210,16 @@ export function buildCanonicalReadModel(db) {
       : [...(state.expenses || []).filter((x) => x.requestedByUid === request.auth.uid), ...legacyExpenseRows];
     return {
       monthKey: reportingKey, asOfDate, role: manager ? "manager" : "employee", projection, canonicalControl: { state: canonicalControl.state, valid: canonicalControl.valid, structuralPreparation: canonicalControl.structuralPreparation },
-      tenantFinancials: operational.details.target.map((target) => ({
-        ...target,
-        payments: operational.details.collected.filter((x) => x.cycleId === target.cycleId),
-      })),
+      tenantFinancials: operational.details.target.map((target) => {
+        const cycle = (state.cycles || []).find((c) => c.id === target.cycleId) || {};
+        return {
+          ...target,
+          spaceId: cycle.spaceId || target.spaceId || null,
+          legacyUnitId: cycle.legacyUnitId || null,
+          partitionId: cycle.partitionId != null ? cycle.partitionId : (cycle.legacyPartitionId != null ? cycle.legacyPartitionId : null),
+          payments: operational.details.collected.filter((x) => x.cycleId === target.cycleId),
+        };
+      }),
       requests: state.requests,
       expenseRecords,
       auditEvents: manager ? (state.audit || []).slice(-400) : [],

@@ -105,6 +105,45 @@ export function monthlyOperationalProjection(state, monthKey, asOfDate) {
     };
     compatibilitySource = "legacy_month";
     state.legacyExpenseRows = legacy.expenseRows;
+  } else if (state.legacyMonthData && liveCycleTarget > 0) {
+    // Hybrid month: live cycles must not erase proven legacy paid_amount /
+    // vacatedCollected for spaces that are not themselves covered by a cycle.
+    const legacy = projectLegacyMonthFinance(state.legacyMonthData, state.legacyMonthYear, state.legacyMonthIndex0);
+    const covered = new Set(
+      eligible.map((c) => {
+        const lu = String(c.legacyUnitId || "");
+        const part = c.partitionId == null && c.legacyPartitionId == null
+          ? ""
+          : String(c.partitionId ?? c.legacyPartitionId);
+        return `${lu}|${part}`;
+      })
+    );
+    const residual = structuredClone(state.legacyMonthData);
+    for (const u of residual.units || []) {
+      for (const p of u.partitions || []) {
+        if (covered.has(`${String(u.id)}|${String(p.id)}`)) {
+          p.status = "vacant";
+          p.paid_amount = 0;
+        }
+      }
+    }
+    for (const f of residual.full || []) {
+      if (covered.has(`${String(f.id)}|`)) {
+        f.status = "vacant";
+        f.paid_amount = 0;
+      }
+    }
+    const residualProj = projectLegacyMonthFinance(residual, state.legacyMonthYear, state.legacyMonthIndex0);
+    cards = {
+      ...cards,
+      targetFils: legacy.cards.targetFils,
+      collectedFils: sum(collectedDetails, "amountFils") + residualProj.cards.collectedFils,
+      depositedFils: Math.max(cards.depositedFils, legacy.cards.depositedFils),
+      arrearsFils: sum(arrearsDetails, "remainingFils") + residualProj.cards.arrearsFils,
+      receivedNotDepositedFils: cards.receivedNotDepositedFils,
+    };
+    compatibilitySource = "legacy_month_hybrid";
+    state.legacyExpenseRows = legacy.expenseRows;
   }
   return { monthKey, asOfDate: date, cards, details, custodyByEmployee: custody.byHolder, openingState: opening ? { bootstrapBatchId: opening.bootstrapBatchId, classification: opening.classification, attributionStatus: opening.attributionStatus || null } : null, compatibilitySource };
 }

@@ -6,7 +6,7 @@ function _diffFields(cur, snap){
   const fields={}, originalFields={};
   const keys=new Set([...Object.keys(cur||{}), ...Object.keys(snap||{})]);
   keys.forEach(k=>{
-    if(k==="partitions"||k==="version") return;
+    if(k==="partitions"||k==="version"||k.startsWith("_")) return;
     const a=cur?cur[k]:undefined, b=snap?snap[k]:undefined;
     const na=(a===undefined||a===null)?"":a, nb=(b===undefined||b===null)?"":b;
     if(typeof na==="object"||typeof nb==="object"){ if(JSON.stringify(na)!==JSON.stringify(nb)){fields[k]=a;originalFields[k]=b;} return; }

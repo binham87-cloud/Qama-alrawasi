@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="qama-build-id" content="qama-unified-final-2026-08-14.1"/>
+<meta name="qama-build-id" content="qama-unified-final-2026-08-14.3"/>
 <title>قمة الرواسي v11 PIN Safe</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
@@ -44,7 +44,7 @@ const firebaseConfig = {
   appId: "1:717899519677:web:b61329cd6e4dda0314c9d4",
   measurementId: "G-EZCBZWFVWM"
 };
-const BUILD_ID="qama-unified-final-2026-08-14.1";
+const BUILD_ID="qama-unified-final-2026-08-14.3";
 console.log("QAMA BUILD:",BUILD_ID);
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
@@ -354,19 +354,26 @@ async function resolveOperationalCycleForUi(opts){
 function sanitizeBusinessRequestPayload(type, payload){
   const out=payload?JSON.parse(JSON.stringify(payload)):{};
   const deny=new Set(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"]);
+  // Must match server RENTAL_FIELDS — never ship UI ephemeral keys (_bankUnitRef, _legacyUnitId, …).
+  const rentalAllow=new Set(["rent","status","tenant","phone","note","deposit","start_date","end_date","due_date","contract_end","cycle_anchor","cycle_i","rent_type","elec_amount","elec_paid","lastRenewedKey"]);
   if(out.fields&&typeof out.fields==="object"){
-    for(const k of Object.keys(out.fields)){ if(deny.has(k)) delete out.fields[k]; }
-    // Operational محصّل is allowed as status only; money fields already stripped.
-    if(out.fields.status==="partial"){
+    for(const k of Object.keys(out.fields)){
+      if(deny.has(k) || k.startsWith("_") || !rentalAllow.has(k)) delete out.fields[k];
+    }
+    // Visible محصّل / جزئي require financial commands — never operational status alone.
+    // Transfer remaps collected→late below (occupancy move only).
+    if(type!=="transfer_tenant" && (out.fields.status==="partial"||out.fields.status==="collected")){
       throw new Error("COLLECTION_REQUIRES_FINANCIAL_COMMAND");
     }
   }
   if(type==="transfer_tenant"){
-    out.moveFields=(out.moveFields||[]).filter(k=>!deny.has(k)&&k!=="paid_amount");
+    out.moveFields=(out.moveFields||[]).filter(k=>rentalAllow.has(k)&&!deny.has(k));
     if(out.fields){
       // Transfer must not invent collected money on the destination.
       if(out.fields.status==="collected"||out.fields.status==="partial") out.fields.status="late";
-      for(const k of [...deny]) delete out.fields[k];
+      for(const k of Object.keys(out.fields)){
+        if(deny.has(k) || k.startsWith("_") || !rentalAllow.has(k)) delete out.fields[k];
+      }
     }
   }
   return out;
@@ -2231,9 +2238,38 @@ function needsAction(x){
 
 function operationalTenantFinancial(x){
   if(!x||S.operationalReadMonth!==getReportingMonthKey(S.year,S.month))return null;
-  const id=x._spaceId||x.spaceId||x.unitId||x.unitId;
-  if(!id)return null;
-  return (S.operationalReadModel?.tenantFinancials||[]).find(row=>String(row.unitId)===String(id))||null;
+  const fins=S.operationalReadModel?.tenantFinancials||[];
+  if(!fins.length)return null;
+  const id=x._spaceId||x.spaceId||x.unitId||null;
+  if(id){
+    const byId=fins.find(row=>String(row.unitId)===String(id)||String(row.spaceId)===String(id)||String(row.cycleId)===String(id));
+    if(byId)return byId;
+  }
+  // Legacy month partitions/full: match by legacy unit + partition identity from the cycle.
+  const legacyUnit=x._legacyUnitId!=null?String(x._legacyUnitId):(x.legacyUnitId!=null?String(x.legacyUnitId):"");
+  const partKey=x._partitionId!=null?String(x._partitionId):(x.partitionId!=null?String(x.partitionId):(x.id!=null&&x._legacyUnitId!=null?String(x.id):""));
+  if(legacyUnit){
+    const byLegacy=fins.find(row=>{
+      if(String(row.legacyUnitId||"")!==legacyUnit)return false;
+      const rowPart=row.partitionId==null||row.partitionId===""?null:String(row.partitionId);
+      const wantPart=partKey===""?null:partKey;
+      // Full-unit rows have null partition; partition rows must match id.
+      if(wantPart==null||x._spaceType==="full_unit")return rowPart==null;
+      return rowPart===wantPart;
+    });
+    if(byLegacy)return byLegacy;
+  }
+  return null;
+}
+
+function withLegacyFinancialIdentity(entity, legacyUnitId, opts={}){
+  if(!entity||typeof entity!=="object")return entity;
+  return {
+    ...entity,
+    _legacyUnitId: legacyUnitId,
+    _partitionId: opts.partitionId!=null?opts.partitionId:(opts.full?null:entity.id),
+    _spaceType: opts.full?"full_unit":"partition",
+  };
 }
 
 function paidValue(x){
@@ -2253,7 +2289,7 @@ function remainingValue(x){
 // التسليم بين الموظفين يُحتسب فقط بعد تأكيد المستلم.
 // السجلات القديمة بدون حقل status تُعتبر مؤكدة (توافق رجعي).
 function hvConfirmed(x){return (x&&(x.status||"confirmed"))==="confirmed";}
-function isPartialPaid(x){return !!x?.partial && (Number(x?.rent||0)>0 || Number(x?.paid_amount||0)>0) && remainingValue(x)>0;}
+function isPartialPaid(x){return paidValue(x)>0 && remainingValue(x)>0;}
 function moneyText(n){return Number(n||0).toLocaleString();}
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function addMonthsISO(dateStr, months=1){
@@ -2343,6 +2379,8 @@ function syncCashReceipt(){
 function displayStatus(x){
   const operational=operationalTenantFinancial(x);
   if(operational){
+    const stOcc=x?.status || "late";
+    if(stOcc==="vacant"||stOcc==="staff")return stOcc;
     if(Number(operational.remainingFils||0)<=0)return "collected";
     if(Number(operational.reservedFils||0)>0)return "partial";
     return operational.dueDate&&!isDatePast(operational.dueDate)?"pending":"late";
@@ -2350,12 +2388,13 @@ function displayStatus(x){
   const st=x?.status || "late";
   // فارغ/موظفين لهما الأولوية المطلقة
   if(st==="vacant"||st==="staff")return st;
-  // دفعة جزئية حقيقية (مبلغ مسجّل فعلاً ومتبقٍ > 0) تتقدّم على وسم "محصّل" اليدوي
-  // حتى لا يختفي المتبقي من شاشات المتابعة.
-  // شرط paid>0 يحمي البيانات القديمة المتناقضة (محصّل + partial بدون مبلغ) من التغيّر.
+  const paid=paidValue(x);
+  const rem=remainingValue(x);
+  const rent=Number(x?.rent||0);
+  // Visible محصّل / جزئي come from financial evidence only — never unpaid status=collected.
+  if(rent>0 && paid>0 && rem<=0)return "collected";
+  if(paid>0 && rem>0)return "partial";
   if(isPartialPaid(x) && Number(x?.paid_amount||0)>0)return "partial";
-  if(st==="collected")return "collected";
-  if(isPartialPaid(x))return "partial";
   // انتهت الدورة ولم يُتخذ إجراء — لا متأخر ولا لم يحل عليه
   if(needsAction(x))return "expired";
   // تلقائي حسب تاريخ الاستحقاق: لم يصل الموعد = "لم يحل عليه"، تجاوزه = "متأخر"
@@ -2386,7 +2425,8 @@ function _diffFields(cur, snap){
   };
   const keys=new Set([...Object.keys(cur||{}), ...Object.keys(snap||{})]);
   keys.forEach(k=>{
-    if(k==="partitions"||k==="version") return;
+    // Skip structural + UI ephemeral keys stamped during render (e.g. _bankUnitRef).
+    if(k==="partitions"||k==="version"||k.startsWith("_")) return;
     const a=cur?cur[k]:undefined, b=snap?snap[k]:undefined;
     const na=(a===undefined||a===null)?"":a, nb=(b===undefined||b===null)?"":b;
     if(typeof na==="object"||typeof nb==="object"){ if(JSON.stringify(na)!==JSON.stringify(nb)){fields[k]=storable(a,b);originalFields[k]=storable(b,a);} return; }
@@ -2433,13 +2473,10 @@ const CALC = (function(){
     ...((d&&d.units)||[]).flatMap(u=>(u.partitions||[]).map(p=>p)),
     ...(((d&&d.full)||[]).map(u=>u))
   ];
-  // المبلغ المقبوض فعلياً على وحدة واحدة
+  // المبلغ المقبوض فعلياً على وحدة — من دليل مالي فقط، لا من وسم الحالة.
   function received(x){
-    const ds = displayStatus(x);
     const paid = num(x.paid_amount), rent = num(x.rent);
-    if(x.partial && paid>0 && paid<rent) return paid;
-    if(ds==="collected") return rent;
-    if(ds==="partial")   return paid;
+    if(paid>0) return Math.min(paid, rent || paid);
     return 0;
   }
   // المستهدف تعاقدي، وليس حالة تحصيل. لا نستخدم displayStatus هنا إطلاقاً:
@@ -3354,6 +3391,9 @@ function renderApp(){
   }
   const data=getCurData();
   const units=data.units, full=data.full;
+  // Bind legacy partition/full identity so Paid/Remaining/محصّل read from operational financial truth.
+  (units||[]).forEach(u=>(u.partitions||[]).forEach(p=>{p._legacyUnitId=u.id;p._partitionId=p.id;p._spaceType="partition";}));
+  (full||[]).forEach(u=>{u._legacyUnitId=u.id;u._partitionId=null;u._spaceType="full_unit";});
   const lateList=units.flatMap(u=>u.partitions.filter(p=>displayStatus(p)==="late" || isPartialPaid(p)).map(p=>u.name+"/"+p.id+(isPartialPaid(p)?" (جزئي، متبقي "+moneyText(remainingValue(p))+" د.إ)":"")));
   const vacantList=units.flatMap(u=>u.partitions.filter(p=>displayStatus(p)==="vacant").map(p=>u.name+"/"+p.id));
   // Ensure late card shows if there are any problem items
@@ -3923,14 +3963,14 @@ function renderApp(){
         (()=>{
           const alerts=[];
           units.forEach(u=>u.partitions.forEach(p=>{
-            if(displayStatus(p)==="late") alerts.push({label:u.name+" #"+p.id,type:"late",tenant:p.tenant||"",remaining:Number(p.rent)||0});
-            else if(displayStatus(p)==="partial"){const remA=Math.max(0,(Number(p.rent)||0)-Number(p.paid_amount||0));if(remA>0)alerts.push({label:u.name+" #"+p.id,type:"partial",tenant:p.tenant||"",remaining:remA,paid:Number(p.paid_amount||0),rent:Number(p.rent)||0});}
+            if(displayStatus(p)==="late") alerts.push({label:u.name+" #"+p.id,type:"late",tenant:p.tenant||"",remaining:remainingValue(p)||Number(p.rent)||0});
+            else if(displayStatus(p)==="partial"){const remA=remainingValue(p);if(remA>0)alerts.push({label:u.name+" #"+p.id,type:"partial",tenant:p.tenant||"",remaining:remA,paid:paidValue(p),rent:Number(p.rent)||0});}
           }));
           full.forEach(u=>{
-            if(displayStatus(u)==="late") alerts.push({label:"شقة "+u.id,type:"late",tenant:u.tenant||"",remaining:Number(u.rent)||0});
+            if(displayStatus(u)==="late") alerts.push({label:"شقة "+u.id,type:"late",tenant:u.tenant||"",remaining:remainingValue(u)||Number(u.rent)||0});
             else if(displayStatus(u)==="partial"){
-              const remF=Math.max(0,(Number(u.rent)||0)-Number(u.paid_amount||0));
-              if(remF>0) alerts.push({label:"شقة "+u.id,type:"partial",tenant:u.tenant||"",remaining:remF,paid:Number(u.paid_amount||0),rent:Number(u.rent)||0});
+              const remF=remainingValue(u);
+              if(remF>0) alerts.push({label:"شقة "+u.id,type:"partial",tenant:u.tenant||"",remaining:remF,paid:paidValue(u),rent:Number(u.rent)||0});
             }
           });
           if(alerts.length===0) return null;
@@ -3956,8 +3996,8 @@ function renderApp(){
         if(isEd) _snapFor("p-"+unit.id+"-"+p.id, p);
         const updateP=(field,val,quiet=false)=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
-          // Operational محصّل: local display metadata only — never invent paid_amount.
-          if(field==="status"&&val==="collected"){p.partial=false;}
+          // Operational محصّل is never writable — cash/bank financial commands only.
+          if(field==="status"&&val==="collected"){showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");return;}
           if(field==="paid_amount"&&Number(val)>0){p.collectedBy=S.user;p.collectedAt=new Date().toISOString();}
           if(!isOwner){
             // Employee: just update local copy, will send on "إرسال" button
@@ -3979,8 +4019,8 @@ function renderApp(){
               .catch(async e=>{console.error(e);S.syncMsg="⚠ لم يُحفظ على السيرفر";showMsg(String(e?.message||"").includes("STALE")?"⚠ تغيرت البيانات من جهاز آخر — أعد المحاولة":"⚠ رفض الخادم التعديل");memClear(getMonthKey(S.year,S.month));await loadMonthOnline(S.year,S.month);});
             return;
           }
-          // Money fields stay blocked on the operational path; status محصّل is occupancy-only.
-          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&val==="partial")){
+          // Money fields stay blocked on the operational path; status محصّل requires financial commands.
+          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&(val==="partial"||val==="collected"))){
             showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");
             p[field]=old;
             return;
@@ -4007,8 +4047,10 @@ function renderApp(){
         const form=isEd?h("div",{style:{padding:"0 14px 14px",borderTop:"1px solid "+cfg.border+"33",paddingTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
-              (()=>{const occ=["collected","late","vacant","staff"];const sel=h("select",{},occ.map(v=>{
-                const o=h("option",{value:v},[SC[v].label]);if(p.status===v)o.selected=true;return o;}));
+              (()=>{const occ=["late","vacant","staff"];const sel=h("select",{},occ.map(v=>{
+                const o=h("option",{value:v},[SC[v].label]);
+                const cur=(p.status==="collected"||p.status==="partial"||displayStatus(p)==="collected"||displayStatus(p)==="partial")?"late":(occ.includes(p.status)?p.status:"late");
+                if(cur===v)o.selected=true;return o;}));
                 sel.addEventListener("change",e=>{
                   const blk=dailyBlockInfo(unit.id,p.id);
                   if(blk&&e.target.value!=="vacant"&&e.target.value!=="staff"){
@@ -4044,7 +4086,7 @@ function renderApp(){
           // ===== طريقة التحصيل + الدفعات البنكية =====
           (()=>{
             const _uref=bankUnitRef(unit,p);
-            p._bankUnitRef=_uref;
+            // Do not stamp ephemeral UI keys onto the entity — they poison employee _diffFields.
             const _due=Number(p.rent)||0;
             const _paidBank=bankPaidTotal(_uref), _pendBank=bankPendingTotal(_uref);
             const _remain=Math.round((_due-_paidBank-_pendBank)*100)/100;
@@ -4268,7 +4310,7 @@ function renderApp(){
         const elecCfg=u.elec_paid?{bg:"#052e16",border:"#166534",text:"#4ade80"}:{bg:"#1c1917",border:"#333",text:"#a8a29e"};
         const updateFull=(field,val,quiet=false)=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
-          if(field==="status"&&val==="collected"){u.partial=false;}
+          if(field==="status"&&val==="collected"){showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");return;}
           if(field==="paid_amount"&&Number(val)>0){u.collectedBy=S.user;u.collectedAt=new Date().toISOString();}
           if(!isOwner){
             // Employee: just update local copy, will send on "إرسال" button
@@ -4288,7 +4330,7 @@ function renderApp(){
               .catch(async e=>{console.error(e);S.syncMsg="⚠ لم يُحفظ على السيرفر";showMsg(String(e?.message||"").includes("STALE")?"⚠ تغيرت البيانات من جهاز آخر — أعد المحاولة":"⚠ رفض الخادم التعديل");memClear(getMonthKey(S.year,S.month));await loadMonthOnline(S.year,S.month);});
             return;
           }
-          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&val==="partial")){
+          if(["paid_amount","partial","collectionMethod","collectedBy","collectedAt"].includes(field) || (field==="status"&&(val==="partial"||val==="collected"))){
             showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");
             u[field]=old;
             return;
@@ -4318,7 +4360,7 @@ function renderApp(){
         const form=isEd?h("div",{style:{padding:"0 12px 12px",borderTop:"1px solid #2a2a2a",paddingTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
-              (()=>{const s=h("select",{},[["collected","محصّل"],["late","متأخر"],["vacant","فارغ"],["staff","موظفين"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(u.status===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("status",e.target.value));return s;})()]),
+              (()=>{const s=h("select",{},[["late","متأخر"],["vacant","فارغ"],["staff","موظفين"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);const cur=(u.status==="collected"||u.status==="partial"||displayStatus(u)==="collected"||displayStatus(u)==="partial")?"late":(["late","vacant","staff"].includes(u.status)?u.status:"late");if(cur===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("status",e.target.value));return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار / شهر"]),
               (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
@@ -4575,6 +4617,18 @@ function renderApp(){
       _bankTotal+=Number(bp.amount)||0;
       _bankPend.push({ref:bp.unitRef,paymentId:bp.paymentId,name:bp.unitLabel||bp.unitRef,
                       tenant:bp.tenant||"—",amt:Number(bp.amount)||0,bankReference:bp.bankReference||"",legacy:false});
+    });
+    // Canonical financialCommand pending bank payments (payments collection).
+    (S.operationalReadModel?.bankPayments||[]).forEach(bp=>{
+      if(String(bp.method||"")!=="bank" || String(bp.status||"")!=="pending") return;
+      if(_bankPend.some(x=>String(x.paymentId)===String(bp.id))) return;
+      const amt=Number(bp.amountFils||0)/100;
+      _bankTotal+=amt;
+      _bankPend.push({
+        ref:bp.id, paymentId:bp.id,
+        name:bp.tenant||bp.cycleId||bp.id,
+        tenant:bp.tenant||"—", amt, bankReference:bp.bankReference||"", legacy:false,
+      });
     });
     const _bankPendTotal=_bankPend.reduce((s,x)=>s+x.amt,0);
     // اعتماد الدفعات — كل دفعة معاملة ذرّية مستقلة
