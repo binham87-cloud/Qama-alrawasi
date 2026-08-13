@@ -68,6 +68,34 @@ test("resolver: ambiguous duplicate partition fails closed", () => {
   assert.equal(r.code, "AMBIGUOUS_SPACE");
 });
 
+test("resolver: partitions/1 does not match partitions/10 via prefix includes", () => {
+  const unitId = "unit:legacy:u202";
+  const spaces = [
+    {
+      id: "space:1", unitId, name: "شقة 202 / 1", spaceType: "partition",
+      metadata: { legacyStructuralId: "1" },
+      sourceReference: "months/2026_7#units/202/partitions/1",
+    },
+    {
+      id: "space:10", unitId, name: "شقة 202 / 10", spaceType: "partition",
+      metadata: { legacyStructuralId: "10" },
+      sourceReference: "months/2026_7#units/202/partitions/10",
+    },
+    {
+      id: "space:11", unitId, name: "شقة 202 / 11", spaceType: "partition",
+      metadata: { legacyStructuralId: "11" },
+      sourceReference: "months/2026_7#units/202/partitions/11",
+    },
+  ];
+  const units = [{ id: unitId, name: "شقة 202", metadata: { legacyStructuralId: "202" } }];
+  const one = resolveLegacyRentableSpace({ spaces, units, legacyUnitId: "202", partitionId: "1", spaceType: "partition" });
+  const ten = resolveLegacyRentableSpace({ spaces, units, legacyUnitId: "202", partitionId: "10", spaceType: "partition" });
+  assert.equal(one.ok, true);
+  assert.equal(one.space.id, "space:1");
+  assert.equal(ten.ok, true);
+  assert.equal(ten.space.id, "space:10");
+});
+
 test("resolver: full-flat unique name resolves", () => {
   const propertyId = "property:1";
   const unitId = "unit:legacy:fullmiz1";

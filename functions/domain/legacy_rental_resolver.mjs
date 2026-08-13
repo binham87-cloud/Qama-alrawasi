@@ -7,6 +7,18 @@
 const normalize = (value) => String(value ?? "").trim().normalize("NFKC");
 const lower = (value) => normalize(value).toLocaleLowerCase("ar");
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Exact path token match so partitions/1 does not match partitions/10. */
+function hasExactPathToken(src, kind, id) {
+  const source = normalize(src);
+  const token = `${normalize(kind)}/${normalize(id)}`;
+  if (!source || !normalize(kind) || !normalize(id)) return false;
+  return new RegExp(`(?:^|[#/])${escapeRegExp(token)}(?=$|[#/?&])`).test(source);
+}
+
 function unitLegacyId(unit) {
   return normalize(unit?.metadata?.legacyStructuralId || unit?.legacyStructuralId || unit?.legacyId || "");
 }
@@ -42,9 +54,9 @@ function partitionMatches(space, partitionId) {
   if (spaceLegacyId(space) === part) return true;
   if (normalize(space.partitionId) === part) return true;
   const name = normalize(space.name);
-  if (name.endsWith(` / ${part}`) || name.endsWith(`/${part}`) || name.endsWith(`#${part}`) || name.endsWith(` ${part}`)) return true;
+  if (name.endsWith(` / ${part}`) || name.endsWith(`/${part}`) || name.endsWith(`#${part}`)) return true;
   const src = normalize(space.sourceReference || space.metadata?.sourceReference || "");
-  if (src.includes(`/partitions/${part}`) || src.endsWith(`/partitions/${part}`)) return true;
+  if (hasExactPathToken(src, "partitions", part)) return true;
   return false;
 }
 
@@ -74,12 +86,12 @@ export function resolveLegacyRentableSpace(input) {
     pool = spaces.filter((s) => {
       const name = lower(s.name);
       const src = normalize(s.sourceReference || s.metadata?.sourceReference || "");
-      return name.includes(lower(legacyUnitId))
-        || name.includes(lower(`شقة ${legacyUnitId}`))
-        || src.includes(`#units/${legacyUnitId}`)
-        || src.includes(`#full/${legacyUnitId}`)
-        || src.includes(`/units/${legacyUnitId}`)
-        || src.includes(`/full/${legacyUnitId}`);
+      return name === lower(`شقة ${legacyUnitId}`)
+        || name.startsWith(lower(`شقة ${legacyUnitId} /`))
+        || name === lower(legacyUnitId)
+        || name.startsWith(lower(`${legacyUnitId} /`))
+        || hasExactPathToken(src, "units", legacyUnitId)
+        || hasExactPathToken(src, "full", legacyUnitId);
     });
   }
 
@@ -105,7 +117,10 @@ export function resolveLegacyRentableSpace(input) {
   // Unique global name "… / partitionId" across all spaces if unit-scoped pool failed
   if (unitHits.length === 0) {
     const global = spaces.filter((s) => partitionMatches(s, partitionId) && (
-      lower(s.name).includes(lower(legacyUnitId)) || normalize(s.sourceReference || "").includes(`/${legacyUnitId}`)
+      lower(s.name) === lower(`شقة ${legacyUnitId} / ${partitionId}`)
+      || lower(s.name).startsWith(lower(`شقة ${legacyUnitId} /`))
+      || hasExactPathToken(s.sourceReference || s.metadata?.sourceReference || "", "units", legacyUnitId)
+      || hasExactPathToken(s.sourceReference || s.metadata?.sourceReference || "", "full", legacyUnitId)
     ));
     if (global.length === 1) return { ok: true, space: global[0] };
     if (global.length > 1) return { ok: false, code: "AMBIGUOUS_SPACE", matches: global.length };
@@ -134,4 +149,4 @@ export function compatibleCycleId(spaceId, reportingMonthKey) {
   return `cycle:${normalize(spaceId)}:${normalize(reportingMonthKey)}`;
 }
 
-export const legacyRentalResolverInternals = Object.freeze({ normalize, unitLegacyId, spaceLegacyId, partitionMatches });
+export const legacyRentalResolverInternals = Object.freeze({ normalize, unitLegacyId, spaceLegacyId, partitionMatches, hasExactPathToken });
