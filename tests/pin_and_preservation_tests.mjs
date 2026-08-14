@@ -66,7 +66,7 @@ test("تشغيل البنك يعتمد على bankPayments فقط", () => {
 });
 
 test("طلب تحديث وحدة قديمة لا يحتوي undefined", () => {
-  const start = html.indexOf("function _diffFields");
+  const start = html.indexOf("function parseMoneyInputRaw");
   const end = html.indexOf("// ===== تحقق الحجوزات اليومية", start);
   const source = html.slice(start, end).trim();
   const diffFields = Function(`${source}; return _diffFields;`)();
@@ -77,6 +77,24 @@ test("طلب تحديث وحدة قديمة لا يحتوي undefined", () => {
   assert.equal(hasUndefined(diff), false);
   assert.equal(diff.originalFields.collectedBy, "");
   assert.equal(diff.originalFields.collectedAt, "");
+});
+
+test("R1.2 phone-only diff must not invent rent:0", () => {
+  const start = html.indexOf("function parseMoneyInputRaw");
+  const end = html.indexOf("// ===== تحقق الحجوزات اليومية", start);
+  const source = html.slice(start, end).trim();
+  const { _diffFields, rentalDiffLooksLikeRentWipe } = Function(`${source}; return { _diffFields, rentalDiffLooksLikeRentWipe };`)();
+  const snap = { id: 1, rent: 1000, status: "late", tenant: "T", phone: "0501111000" };
+  // Simulate empty-input pollution that used to become Number("")===0 on rent.
+  const polluted = { ...snap, phone: "0501111999", rent: 0 };
+  const cleaned = _diffFields(polluted, snap);
+  assert.equal(Object.prototype.hasOwnProperty.call(cleaned.fields, "rent"), false);
+  assert.equal(cleaned.fields.phone, "0501111999");
+  assert.equal(cleaned.count, 1);
+  const phoneOnly = _diffFields({ ...snap, phone: "0502222333" }, snap);
+  assert.deepEqual(Object.keys(phoneOnly.fields).sort(), ["phone"]);
+  assert.equal(rentalDiffLooksLikeRentWipe({ payload: { fields: { rent: 0, phone: "x" }, originalFields: { rent: 1000, phone: "y" } } }), true);
+  assert.equal(rentalDiffLooksLikeRentWipe({ payload: { fields: { phone: "x" }, originalFields: { phone: "y" } } }), false);
 });
 
 test("العهدة لا يعاد اختراعها من حالات الوحدات القديمة أو علامة شهر يدوية", () => {

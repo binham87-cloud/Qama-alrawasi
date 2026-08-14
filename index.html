@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="qama-build-id" content="qama-unified-final-2026-08-14.3"/>
+<meta name="qama-build-id" content="qama-unified-final-2026-08-14.4"/>
 <title>قمة الرواسي v11 PIN Safe</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
@@ -44,7 +44,7 @@ const firebaseConfig = {
   appId: "1:717899519677:web:b61329cd6e4dda0314c9d4",
   measurementId: "G-EZCBZWFVWM"
 };
-const BUILD_ID="qama-unified-final-2026-08-14.3";
+const BUILD_ID="qama-unified-final-2026-08-14.4";
 console.log("QAMA BUILD:",BUILD_ID);
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
@@ -163,6 +163,7 @@ const BACKEND_ERROR_MESSAGES=Object.freeze({
   AMBIGUOUS_SPACE:"تعذر تحديد المساحة بشكل فريد — راجع المدير.",
   AMBIGUOUS_TENANCY:"تعذر تحديد العقد بشكل فريد — راجع المدير.",
   COLLECTION_REQUIRES_FINANCIAL_COMMAND:"التحصيل يتم عبر المسار المالي الآمن فقط.",
+  RENT_ZERO_WIPE_DENIED:"لا يمكن تصفير الإيجار عبر تعديل عادي — الإيجار الموجب يبقى إلا بأمر تشغيلي صريح.",
   REQUEST_TYPE_UNSUPPORTED:"نوع الطلب غير مدعوم على المسار الآمن.",
   MULTIPLE_OPEN_CYCLES:"وُجدت أكثر من دورة مفتوحة لنفس الوحدة."
 });
@@ -720,6 +721,10 @@ async function loadRequests(){
 }
 
 async function approveRequest(req){
+  if(rentalDiffLooksLikeRentWipe(req)){
+    showMsg("⛔ "+(BACKEND_ERROR_MESSAGES.RENT_ZERO_WIPE_DENIED||"رفض مسح الإيجار إلى 0 على عقد قائم"));
+    return false;
+  }
   return dispatchApproveRequest(req);
   if(S.approving){showMsg("⏳ جاري الاعتماد...");return;}
   if((req.year!==NOW_Y||req.month!==NOW_M)&&S.confirmOldReq!==req.id){
@@ -2412,6 +2417,41 @@ function _snapFor(key, obj){
   if(S._snapKey!==key){ S._snapKey=key; try{ S._snap=JSON.parse(JSON.stringify(obj)); }catch(e){ S._snap={...obj}; } }
   return S._snap||{};
 }
+/** Ignore blank number-input transients so Number("") never becomes a rent/deposit edit. */
+function parseMoneyInputRaw(raw){
+  if(raw===null||raw===undefined) return null;
+  const s=String(raw).trim();
+  if(s==="") return null;
+  const n=Number(s);
+  if(!Number.isFinite(n)||n<0) return null;
+  return n;
+}
+/**
+ * Drop accidental rent:0 (and similar) invented by empty inputs / missing keys.
+ * Phone-only edits must never ship rent.
+ */
+function sanitizeRentalDiff(diff){
+  const fields=diff?.fields&&typeof diff.fields==="object"?{...diff.fields}:{};
+  const originalFields=diff?.originalFields&&typeof diff.originalFields==="object"?{...diff.originalFields}:{};
+  for(const k of ["rent","deposit","elec_amount"]){
+    if(!Object.prototype.hasOwnProperty.call(fields,k)) continue;
+    const next=Number(fields[k]);
+    const prev=Number(originalFields[k]);
+    if(k==="rent" && next===0 && prev>0){
+      delete fields[k]; delete originalFields[k];
+      continue;
+    }
+    if(!Number.isFinite(next)){ delete fields[k]; delete originalFields[k]; }
+  }
+  return {fields, originalFields, count:Object.keys(fields).length};
+}
+function rentalDiffLooksLikeRentWipe(req){
+  const fields=req?.payload?.fields||{};
+  const original=req?.payload?.originalFields||{};
+  return Object.prototype.hasOwnProperty.call(fields,"rent")
+    && Number(fields.rent)===0
+    && Number(original.rent)>0;
+}
 function _diffFields(cur, snap){
   const fields={}, originalFields={};
   // Firestore يرفض undefined. الوحدات القديمة قد لا تحتوي حقولاً حديثة مثل
@@ -2423,16 +2463,19 @@ function _diffFields(cur, snap){
     if(typeof other==="boolean")return false;
     return null;
   };
+  const moneyKeys=new Set(["rent","deposit","elec_amount","paid_amount"]);
   const keys=new Set([...Object.keys(cur||{}), ...Object.keys(snap||{})]);
   keys.forEach(k=>{
     // Skip structural + UI ephemeral keys stamped during render (e.g. _bankUnitRef).
     if(k==="partitions"||k==="version"||k.startsWith("_")) return;
     const a=cur?cur[k]:undefined, b=snap?snap[k]:undefined;
+    // Missing money key on current ≠ user set value to 0.
+    if(moneyKeys.has(k) && (a===undefined||a===null)) return;
     const na=(a===undefined||a===null)?"":a, nb=(b===undefined||b===null)?"":b;
     if(typeof na==="object"||typeof nb==="object"){ if(JSON.stringify(na)!==JSON.stringify(nb)){fields[k]=storable(a,b);originalFields[k]=storable(b,a);} return; }
     if(String(na)!==String(nb)){ fields[k]=storable(a,b); originalFields[k]=storable(b,a); }
   });
-  return {fields, originalFields, count:Object.keys(fields).length};
+  return sanitizeRentalDiff({fields, originalFields, count:Object.keys(fields).length});
 }
 
 // ===== تحقق الحجوزات اليومية =====
@@ -3999,6 +4042,14 @@ function renderApp(){
           // Operational محصّل is never writable — cash/bank financial commands only.
           if(field==="status"&&val==="collected"){showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");return;}
           if(field==="paid_amount"&&Number(val)>0){p.collectedBy=S.user;p.collectedAt=new Date().toISOString();}
+          // Never convert blank number-input → 0 into a live rent wipe.
+          if(field==="rent"||field==="deposit"||field==="elec_amount"){
+            if(val===null||val===undefined||(typeof val==="string"&&String(val).trim()==="")) return;
+            const n=Number(val);
+            if(!Number.isFinite(n)||n<0) return;
+            if(field==="rent"&&n===0&&Number(p.rent)>0){showMsg(BACKEND_ERROR_MESSAGES.RENT_ZERO_WIPE_DENIED);return;}
+            val=n;
+          }
           if(!isOwner){
             // Employee: just update local copy, will send on "إرسال" button
             p[field]=val;
@@ -4061,7 +4112,7 @@ function renderApp(){
                   updateP("status",e.target.value);
                 });return sel;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار"]),
-              (()=>{const inp=h("input",{type:"number",value:p.rent});inp.addEventListener("input",e=>updateP("rent",Number(e.target.value),true));return inp;})()]),
+              (()=>{const inp=h("input",{type:"number",value:p.rent});inp.addEventListener("input",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null)return;updateP("rent",n,true);});inp.addEventListener("change",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null){e.target.value=p.rent;return;}updateP("rent",n);});return inp;})()]),
           ]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الإيجار"]),
@@ -4149,7 +4200,7 @@ function renderApp(){
             h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📱 الهاتف"]),
               (()=>{const inp=h("input",{type:"tel",placeholder:"05...",value:p.phone||""});inp.addEventListener("input",e=>updateP("phone",e.target.value,true));inp.addEventListener("change",e=>updateP("phone",e.target.value));return inp;})()]),
             h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["🔐 التأمين"]),
-              (()=>{const inp=h("input",{type:"number",placeholder:"مبلغ التأمين",value:p.deposit||""});inp.addEventListener("input",e=>updateP("deposit",e.target.value,true));inp.addEventListener("change",e=>updateP("deposit",e.target.value));return inp;})()])]),
+              (()=>{const inp=h("input",{type:"number",placeholder:"مبلغ التأمين",value:p.deposit||""});inp.addEventListener("input",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null)return;updateP("deposit",n,true);});inp.addEventListener("change",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null){e.target.value=p.deposit||"";return;}updateP("deposit",n);});return inp;})()])]),
           h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📝 ملاحظات"]),
             (()=>{const inp=h("input",{type:"text",placeholder:"ملاحظات عن المستأجر...",value:p.note||""});inp.addEventListener("input",e=>updateP("note",e.target.value,true));inp.addEventListener("change",e=>updateP("note",e.target.value));return inp;})()]),
           (()=>{
@@ -4312,6 +4363,13 @@ function renderApp(){
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
           if(field==="status"&&val==="collected"){showMsg("⚠ التحصيل المالي يتم عبر التحصيل النقدي أو البنكي الآمن فقط");return;}
           if(field==="paid_amount"&&Number(val)>0){u.collectedBy=S.user;u.collectedAt=new Date().toISOString();}
+          if(field==="rent"||field==="deposit"||field==="elec_amount"){
+            if(val===null||val===undefined||(typeof val==="string"&&String(val).trim()==="")) return;
+            const n=Number(val);
+            if(!Number.isFinite(n)||n<0) return;
+            if(field==="rent"&&n===0&&Number(u.rent)>0){showMsg(BACKEND_ERROR_MESSAGES.RENT_ZERO_WIPE_DENIED);return;}
+            val=n;
+          }
           if(!isOwner){
             // Employee: just update local copy, will send on "إرسال" button
             u[field]=val;
@@ -4362,7 +4420,7 @@ function renderApp(){
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
               (()=>{const s=h("select",{},[["late","متأخر"],["vacant","فارغ"],["staff","موظفين"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);const cur=(u.status==="collected"||u.status==="partial"||displayStatus(u)==="collected"||displayStatus(u)==="partial")?"late":(["late","vacant","staff"].includes(u.status)?u.status:"late");if(cur===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("status",e.target.value));return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار / شهر"]),
-              (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
+              (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null)return;updateFull("rent",n,true);});inp.addEventListener("change",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null){e.target.value=u.rent;return;}updateFull("rent",n);});return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["بداية العقد"]),
               qamaDateInput(u.start_date||"",iso=>{if(!canEdit()){showMsg("🔒 شهر مقفل");iso=u.start_date||"";return;}u.start_date=iso;u.cycle_anchor=iso;u.cycle_i=0;u.contract_end=addMonthsISO(iso,1);u.due_date=u.contract_end;if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveOwnerRentalFields({entityType:"full",entityId:u.id},{start_date:u.start_date,cycle_anchor:u.cycle_anchor,cycle_i:u.cycle_i,contract_end:u.contract_end,due_date:u.due_date},Number(u.operationalVersion??u.version??0)).then(()=>set({editPart:"full-"+u.id})).catch(e=>showMsg(backendErrorMessage(e)));}})]),
@@ -4373,7 +4431,7 @@ function renderApp(){
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الكهرباء"]),
               (()=>{const s=h("select",{},[["false","لم تدفع"],["true","دفعت"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(u.elec_paid)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("elec_paid",e.target.value==="true"));return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["مبلغ الكهرباء"]),
-              (()=>{const inp=h("input",{type:"number",placeholder:"0",value:u.elec_amount||0});inp.addEventListener("input",e=>updateFull("elec_amount",Number(e.target.value),true));return inp;})()])]),
+              (()=>{const inp=h("input",{type:"number",placeholder:"0",value:u.elec_amount||0});inp.addEventListener("input",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null)return;updateFull("elec_amount",n,true);});inp.addEventListener("change",e=>{const n=parseMoneyInputRaw(e.target.value);if(n===null){e.target.value=u.elec_amount||0;return;}updateFull("elec_amount",n);});return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الدفع"]),
               h("div",{style:{fontSize:"12px",color:"#777",padding:"10px 0"}},[u.partial?"جزئي (من السجل الآمن)":"يُحدد من التحصيل الآمن فقط"])]),
@@ -5591,6 +5649,7 @@ function renderApp(){
           h("span",{style:{background:statusBg[req.status],color:statusColor[req.status],borderRadius:"6px",padding:"2px 8px",fontSize:"15px",fontWeight:"600",flexShrink:"0",marginRight:"4px"}},
             [statusLabel[req.status]])]),
         detailRows.length>0?h("div",{style:{background:"#0f0f0f",borderRadius:"8px",padding:"8px 10px",marginBottom:"10px"}},detailRows):null,
+        showActions&&req.status==="pending"&&rentalDiffLooksLikeRentWipe(req)?h("div",{style:{background:"#450a0a",border:"1px solid #7f1d1d",borderRadius:"8px",padding:"8px 10px",marginBottom:"10px",fontSize:"13px",color:"#fca5a5",fontWeight:"700"}},["⛔ "+BACKEND_ERROR_MESSAGES.RENT_ZERO_WIPE_DENIED+" — الاعتماد مرفوض لهذا الطلب."]):null,
         showActions&&req.status==="pending"&&(req.type==="add_expense"||req.type==="add_unit_maintenance"||req.type==="add_facility_maintenance")?h("div",{style:{display:"flex",gap:"6px",alignItems:"center",marginBottom:"8px"}},[
           h("span",{style:{fontSize:"13px",color:"#999",flexShrink:"0"}},["الخصم من:"]),
           h("button",{class:"btn",style:{flex:"1",background:((S.approveSrc||{})[req.id]||"revenue")==="revenue"?"#7c5cff":"#1a1a1a",color:((S.approveSrc||{})[req.id]||"revenue")==="revenue"?"#fff":"#888",border:"1px solid "+(((S.approveSrc||{})[req.id]||"revenue")==="revenue"?"#7c5cff":"#333"),borderRadius:"8px",padding:"6px",fontSize:"13px",fontWeight:"600"},
@@ -5600,8 +5659,8 @@ function renderApp(){
         ]):null,
         req.status==="approved"&&req.paidFrom?h("div",{style:{fontSize:"12px",color:req.paidFrom==="company"?"#3b82f6":"#a78bfa",marginBottom:"8px"}},["💳 خُصم من: "+(req.paidFrom==="company"?"حساب الشركة":"حساب الإيرادات")]):null,
         showActions&&req.status==="pending"?h("div",{style:{display:"flex",gap:"8px"}},[
-          h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"8px",fontSize:"15px",fontWeight:"700"},
-            onClick:()=>approveRequest(req)},["✓ اعتماد"]),
+          h("button",{class:"btn",style:{flex:"1",background:rentalDiffLooksLikeRentWipe(req)?"#333":"#fff",color:rentalDiffLooksLikeRentWipe(req)?"#888":"#000",borderRadius:"8px",padding:"8px",fontSize:"15px",fontWeight:"700",opacity:rentalDiffLooksLikeRentWipe(req)?0.55:1},
+            onClick:()=>approveRequest(req)},[rentalDiffLooksLikeRentWipe(req)?"⛔ اعتماد محظور":"✓ اعتماد"]),
           h("button",{class:"btn",style:{flex:"1",background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"8px",fontSize:"15px"},
             onClick:()=>rejectRequest(req)},["✗ رفض"])]):null,
       showActions&&req.status==="approved"?h("div",{style:{marginTop:"8px"}},[

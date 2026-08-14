@@ -57,7 +57,10 @@ const ui = extractDisplayStatusFn(html);
 
 test("R1.1-01 build + html/public sync; occupancy dropdown has no writable محصّل", () => {
   assert.equal(html, publicHtml);
-  assert.match(html, /qama-unified-final-2026-08-14\.3/);
+  assert.match(html, /qama-unified-final-2026-08-14\.4/);
+  assert.match(html, /RENT_ZERO_WIPE_DENIED/);
+  assert.match(html, /function sanitizeRentalDiff/);
+  assert.match(html, /function rentalDiffLooksLikeRentWipe/);
   assert.match(html, /occ=\["late","vacant","staff"\]/);
   assert.match(html, /\["late","متأخر"\],\["vacant","فارغ"\],\["staff","موظفين"\]/);
   assert.doesNotMatch(html, /occ=\["collected","late","vacant","staff"\]/);

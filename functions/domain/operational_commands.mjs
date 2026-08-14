@@ -101,7 +101,20 @@ function validatePatch(entityType, patch) {
   return out;
 }
 
-function validateRentalPatch(patch) {
+/**
+ * Accidental rent:0 wipe guard.
+ * Legitimate rent:0 exists only for NEW vacant structure (add_partition / add_unit seed),
+ * not as an update_partition/update_full patch on a live positive-rent occupancy.
+ * Familiar vacate clears collection residue only — it does not zero rent.
+ */
+function assertRentPatchSafe(patch, entity) {
+  if (!Object.prototype.hasOwnProperty.call(patch || {}, "rent")) return;
+  const next = Number(patch.rent);
+  const prev = Number(entity?.rent || 0);
+  if (next === 0 && prev > 0) throw new Error("RENT_ZERO_WIPE_DENIED");
+}
+
+function validateRentalPatch(patch, entity = null) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("OPERATIONAL_PATCH_REQUIRED");
   const keys = Object.keys(patch);
   if (!keys.length) throw new Error("OPERATIONAL_PATCH_EMPTY");
@@ -133,6 +146,7 @@ function validateRentalPatch(patch) {
       throw new Error("OPERATIONAL_VALUE_INVALID");
     }
   }
+  assertRentPatchSafe(out, entity);
   return out;
 }
 
@@ -168,9 +182,9 @@ export function applyOwnerRentalPatch(monthDocument, payload, actor) {
   const target = payload?.target || {};
   const entityType = String(target.entityType || "");
   if (!["partition", "full"].includes(entityType)) throw new Error("OPERATIONAL_ENTITY_TYPE_INVALID");
-  const patch = validateRentalPatch(payload?.patch);
   const data = structuredClone(monthDocument?.data || {});
   const entity = locate(data, { ...target, entityType });
+  const patch = validateRentalPatch(payload?.patch, entity);
   const currentVersion = Number(entity.operationalVersion ?? entity.version ?? 0);
   if (payload.baseVersion != null && Number(payload.baseVersion) !== currentVersion) throw new Error("STALE_OPERATIONAL_ENTITY");
   const before = Object.fromEntries(Object.keys(patch).map((key) => [key, entity[key] ?? null]));
@@ -201,7 +215,12 @@ function applyBusinessPayloadToMonth(data, type, payload) {
     if (!unit) throw new Error("OPERATIONAL_ENTITY_NOT_FOUND");
     const part = (unit.partitions || []).find((p) => String(p.id) === String(payload.partId));
     if (!part) throw new Error("OPERATIONAL_ENTITY_NOT_FOUND");
-    const fields = validateRentalPatch(rentalFieldsFromRequest(payload.fields || {}));
+    // Stale guard: employee captured baseVersion at send time; refuse silent overwrite.
+    if (payload.baseVersion != null) {
+      const currentVersion = Number(part.version || 0);
+      if (Number(payload.baseVersion) !== currentVersion) throw new Error("STALE_OPERATIONAL_ENTITY");
+    }
+    const fields = validateRentalPatch(rentalFieldsFromRequest(payload.fields || {}), part);
     Object.assign(part, fields, { version: Number(part.version || 0) + 1, operationalVersion: Number(part.operationalVersion || 0) + 1 });
     applyVacateResidueIfNeeded(data, part, fields);
     return { target: { entityType: "partition", unitId: unit.id, entityId: part.id } };
@@ -209,7 +228,11 @@ function applyBusinessPayloadToMonth(data, type, payload) {
   if (type === "update_full") {
     const unit = (data.full || []).find((u) => String(u.id) === String(payload.unitId));
     if (!unit) throw new Error("OPERATIONAL_ENTITY_NOT_FOUND");
-    const fields = validateRentalPatch(rentalFieldsFromRequest(payload.fields || {}));
+    if (payload.baseVersion != null) {
+      const currentVersion = Number(unit.version || 0);
+      if (Number(payload.baseVersion) !== currentVersion) throw new Error("STALE_OPERATIONAL_ENTITY");
+    }
+    const fields = validateRentalPatch(rentalFieldsFromRequest(payload.fields || {}), unit);
     Object.assign(unit, fields, { version: Number(unit.version || 0) + 1, operationalVersion: Number(unit.operationalVersion || 0) + 1 });
     applyVacateResidueIfNeeded(data, unit, fields);
     return { target: { entityType: "full", entityId: unit.id } };
