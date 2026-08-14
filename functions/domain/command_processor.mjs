@@ -224,10 +224,13 @@ function approveBankPayment(state, ctx) {
 }
 
 function createDailyBooking(state, ctx) {
-  assertEmployeeOrManager(ctx.actor); const amountFils = requirePositive(ctx.payload.amountFils); const method = ctx.payload.method; if (!["cash", "bank"].includes(method)) throw new Error("INVALID_PAYMENT_METHOD");
+  // Owner contract (pre-R2): employee must submit add_daily for approval; only manager/owner may mint the booking effect.
+  assertManager(ctx.actor); const amountFils = requirePositive(ctx.payload.amountFils); const method = ctx.payload.method; if (!["cash", "bank"].includes(method)) throw new Error("INVALID_PAYMENT_METHOD");
   const paymentDate = String(ctx.payload.paymentDate); const collectionMonth = monthOf(paymentDate); const cycleId = `cycle:${ctx.operationId}`; const bookingId = `booking:${ctx.operationId}`;
-  state.cycles.push({ id: cycleId, tenancyId: ctx.payload.tenancyId, unitId: ctx.payload.unitId, tenant: ctx.payload.tenant, baseAmountFils: amountFils, reportingMonth: collectionMonth, dueDate: paymentDate, cycleType: "daily", status: method === "cash" ? "open_daily" : "pending_payment_daily", financialVersion: 0, createdAt: nowIso(ctx) });
-  state.dailyBookings.push({ id: bookingId, cycleId, unitId: ctx.payload.unitId, tenant: ctx.payload.tenant, amountFils, paymentMethod: method, paymentDate, collectionMonth, status: method === "cash" ? "paid" : "pending_payment", housingAllowed: method === "cash", createdBy: ctx.actor.id, createdAt: nowIso(ctx) });
+  const unitId = String(ctx.payload.unitId || "");
+  const tenancyId = String(ctx.payload.tenancyId || (unitId ? `daily:${unitId}` : `daily:${ctx.operationId}`));
+  state.cycles.push({ id: cycleId, tenancyId, unitId, tenant: ctx.payload.tenant, baseAmountFils: amountFils, reportingMonth: collectionMonth, dueDate: paymentDate, cycleType: "daily", status: method === "cash" ? "open_daily" : "pending_payment_daily", financialVersion: 0, createdAt: nowIso(ctx) });
+  state.dailyBookings.push({ id: bookingId, cycleId, unitId, tenant: ctx.payload.tenant, amountFils, paymentMethod: method, paymentDate, collectionMonth, status: method === "cash" ? "paid" : "pending_payment", housingAllowed: method === "cash", createdBy: ctx.actor.id, createdAt: nowIso(ctx) });
   const result = method === "cash"
     ? createCashReceipt(state, { ...ctx, payload: { cycleId, amountFils, paymentDate } })
     : createBankPayment(state, { ...ctx, payload: { cycleId, amountFils, paymentDate } });

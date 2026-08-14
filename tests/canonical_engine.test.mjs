@@ -177,7 +177,7 @@ test("expense request approval selects account and reversal returns same account
 
 test("daily cash booking permits housing before deposit and refund follows custody", () => {
   let state=seeded();state.cycles=[];
-  ({state}=executeCommand(state,"createDailyBooking",ctx("op:daily:cash1",employee,{tenancyId:"daily:t1",unitId:"unit:1",tenant:"Guest",amountFils:money(500),method:"cash",paymentDate:"2026-07-30"})));
+  ({state}=executeCommand(state,"createDailyBooking",ctx("op:daily:cash1",manager,{tenancyId:"daily:t1",unitId:"unit:1",tenant:"Guest",amountFils:money(500),method:"cash",paymentDate:"2026-07-30"})));
   assert.equal(state.dailyBookings[0].housingAllowed,true);assert.equal(cardProjection(state,"2026_07").targetFils,money(500));assert.equal(cardProjection(state,"2026_07").collectedFils,0);assert.equal(custodyProjection(state).totalFils,money(500));
   ({state}=executeCommand(state,"refundDailyBooking",ctx("op:daily:refund1",manager,{bookingId:"booking:op:daily:cash1",reason:"cancelled"})));
   assert.equal(custodyProjection(state).totalFils,0);assert.equal(cardProjection(state,"2026_07").targetFils,0);

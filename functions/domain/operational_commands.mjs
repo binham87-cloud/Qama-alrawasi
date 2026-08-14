@@ -71,6 +71,8 @@ function applyVacateResidueIfNeeded(data, entity, fields) {
 const BUSINESS_REQUEST_TYPES = Object.freeze(new Set([
   "update_partition", "update_full", "transfer_tenant",
   "add_partition", "delete_partition", "add_unit", "delete_unit", "delete_full", "add_full_unit",
+  // Employee daily booking must queue for Owner approval (no direct createDailyBooking).
+  "add_daily",
 ]));
 
 function cleanString(value, max) {
@@ -283,6 +285,24 @@ function applyBusinessPayloadToMonth(data, type, payload) {
     data.full.splice(idx, 1);
     return { target: { entityType: "full", entityId: payload.unitId } };
   }
+  if (type === "add_daily") {
+    // Mirror approved daily booking into the familiar month document for UI lists/KPIs.
+    // Canonical cash/bank effect is applied separately by createDailyBooking on approve.
+    const booking = payload.booking && typeof payload.booking === "object" ? { ...payload.booking } : null;
+    if (!booking) throw new Error("OPERATIONAL_VALUE_INVALID");
+    const bookingId = String(payload.requestId || booking.id || "").trim();
+    if (!bookingId) throw new Error("OPERATIONAL_VALUE_INVALID");
+    data.dailyBookings = data.dailyBookings || [];
+    if (!data.dailyBookings.some((b) => String(b.id) === bookingId || String(b.requestId) === bookingId)) {
+      data.dailyBookings.push({
+        ...booking,
+        id: bookingId,
+        requestId: bookingId,
+        status: booking.status || "paid",
+      });
+    }
+    return { target: { entityType: "daily", entityId: bookingId } };
+  }
   if (type === "transfer_tenant") {
     const srcUnit = (data.units || []).find((u) => String(u.id) === String(payload.fromUnitId));
     const dstUnit = (data.units || []).find((u) => String(u.id) === String(payload.toUnitId));
@@ -324,7 +344,10 @@ export function applyApprovedBusinessRequest(monthDocument, request, actor) {
   const type = String(request.type || "");
   if (!BUSINESS_REQUEST_TYPES.has(type)) throw new Error("REQUEST_TYPE_UNSUPPORTED");
   const data = structuredClone(monthDocument?.data || {});
-  const applied = applyBusinessPayloadToMonth(data, type, request.payload || {});
+  const payload = { ...(request.payload || {}) };
+  // Ensure approve path can idempotently key month.dailyBookings by request id.
+  if (request.id != null && payload.requestId == null) payload.requestId = request.id;
+  const applied = applyBusinessPayloadToMonth(data, type, payload);
   return { data, target: applied.target, financialEffectFils: 0 };
 }
 

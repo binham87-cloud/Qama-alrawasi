@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="qama-build-id" content="qama-unified-final-2026-08-14.4"/>
+<meta name="qama-build-id" content="qama-unified-final-2026-08-14.5"/>
 <title>قمة الرواسي v11 PIN Safe</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
@@ -44,7 +44,7 @@ const firebaseConfig = {
   appId: "1:717899519677:web:b61329cd6e4dda0314c9d4",
   measurementId: "G-EZCBZWFVWM"
 };
-const BUILD_ID="qama-unified-final-2026-08-14.4";
+const BUILD_ID="qama-unified-final-2026-08-14.5";
 console.log("QAMA BUILD:",BUILD_ID);
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
@@ -377,6 +377,27 @@ function sanitizeBusinessRequestPayload(type, payload){
       }
     }
   }
+  if(type==="add_daily"){
+    const b=(out.booking&&typeof out.booking==="object")?out.booking:{};
+    const method=b.paymentMethod==="bank"?"bank":(b.paymentMethod==="cash"?"cash":null);
+    out.booking={
+      partId:String(b.partId||""),
+      partLabel:String(b.partLabel||"").slice(0,120),
+      guest:String(b.guest||"").slice(0,120),
+      startDate:String(b.startDate||"").slice(0,32),
+      endDate:String(b.endDate||"").slice(0,32),
+      nights:Number(b.nights)||0,
+      nightRate:Number(b.nightRate)||0,
+      total:Number(b.total)||0,
+      paymentMethod:method||"cash",
+      status:(method?"paid":"pending"),
+      unitId:b.unitId!=null?String(b.unitId):undefined
+    };
+    if(out.booking.unitId==null) delete out.booking.unitId;
+    // Strip approval/financial injection vectors from employee-submitted booking payloads.
+    delete out.approvedBy; delete out.approvedAt; delete out.rejectedBy; delete out.status;
+    delete out.version; delete out.operationalVersion; delete out.balances; delete out.ledger;
+  }
   return out;
 }
 async function submitBusinessRequestViaServer(type, desc, payload){
@@ -397,8 +418,18 @@ async function submitBusinessRequestViaServer(type, desc, payload){
   return true;
 }
 function dispatchLegacyFinancialRequest(type, desc, payload){
-  if(["update_partition","update_full","transfer_tenant","add_partition","delete_partition","add_unit","delete_unit","delete_full","add_full_unit"].includes(type)){
-    return submitBusinessRequestViaServer(type, desc, payload);
+  if(["update_partition","update_full","transfer_tenant","add_partition","delete_partition","add_unit","delete_unit","delete_full","add_full_unit","add_daily"].includes(type)){
+    // Employee add_daily must queue; Owner/manager keep direct mint below.
+    if(type==="add_daily"){
+      const role=USERS[S.user]?.role;
+      if(role==="owner"||role==="manager"){
+        /* fall through to owner-direct createDailyBooking */
+      }else{
+        return submitBusinessRequestViaServer(type, desc, payload);
+      }
+    }else{
+      return submitBusinessRequestViaServer(type, desc, payload);
+    }
   }
   if(type==="add_expense"){
     const e=payload.expense||{};
@@ -413,12 +444,24 @@ function dispatchLegacyFinancialRequest(type, desc, payload){
     return runUiFinancialCommand({command:"requestExpense",identity:["fac-maint",m.desc,m.amount,m.date].join(":"),payload:{amountFils:fils(m.amount),reason:String(m.desc||""),monthKey:getReportingMonthKey(S.year,S.month),category:"facilityMaintenance",subject:String(m.facility||m.desc||"facility"),date:m.date||todayISO()},successMessage:"✓ أُرسلت صيانة المرافق للاعتماد"});
   }
   if(type==="add_daily"){
+    // Owner/manager direct path only (employees already returned via submitBusinessRequestViaServer).
     const b=payload.booking||{};
     const method=b.paymentMethod==="bank"?"bank":"cash";
     if(method!=="cash"&&method!=="bank")throw new Error("INVALID_PAYMENT_METHOD");
     const parsed=parseDailyPartRef(b.unitId?null:b.partId);
     const unitId=String(b.unitId||parsed.unitId||"");
-    return runUiFinancialCommand({command:"createDailyBooking",identity:["daily",unitId,b.startDate,b.total].join(":"),payload:{unitId,tenant:b.guest||"",guestName:String(b.guest||"").trim(),amountFils:fils(b.total),nights:Number(b.nights)||1,method,paymentDate:b.startDate||todayISO(),monthKey:getReportingMonthKey(S.year,S.month)},successMessage:"✓ سُجّل الحجز اليومي"});
+    const mirrorId=String(b.id||("own_daily_"+Date.now()));
+    return runUiFinancialCommand({command:"createDailyBooking",identity:["daily",unitId,b.startDate,b.total,mirrorId].join(":"),payload:{unitId,tenant:b.guest||"",guestName:String(b.guest||"").trim(),amountFils:fils(b.total),nights:Number(b.nights)||1,method,paymentDate:b.startDate||todayISO(),monthKey:getReportingMonthKey(S.year,S.month)},successMessage:"✓ سُجّل الحجز اليومي"}).then(async(ok)=>{
+      if(!ok)return false;
+      try{
+        await applyOwnerBusinessMutation("add_daily",{booking:{...b,id:mirrorId},requestId:mirrorId});
+      }catch(e){
+        console.error("owner daily month mirror",e);
+        showMsg(backendErrorMessage(e));
+        return false;
+      }
+      return true;
+    });
   }
   if(type==="confirm_handover"){
     const transferId=payload.transferId||payload.handoverId;
@@ -501,6 +544,30 @@ function dispatchApproveRequest(req){
       await loadRequests();
       await loadMonthOnline(req.year,req.month);
       showMsg(result?.replay?BACKEND_ERROR_MESSAGES.ALREADY_PROCESSED:"✓ تم اعتماد الطلب");
+      R();
+      return result;
+    })();
+  }
+  if(type==="add_daily"){
+    return (async()=>{
+      const b=req.payload?.booking||{};
+      const method=b.paymentMethod==="bank"?"bank":"cash";
+      if(method!=="cash"&&method!=="bank"){showMsg("⚠ طريقة دفع الحجز غير صالحة");return false;}
+      const parsed=parseDailyPartRef(b.unitId?null:b.partId);
+      const unitId=String(b.unitId||parsed.unitId||"");
+      // Financial mint first (idempotent by request id); then mark request approved + month mirror.
+      const fin=await runUiFinancialCommand({
+        command:"createDailyBooking",
+        identity:"approve-daily:"+req.id,
+        payload:{unitId,tenant:b.guest||"",guestName:String(b.guest||"").trim(),amountFils:fils(b.total),nights:Number(b.nights)||1,method,paymentDate:b.startDate||todayISO(),monthKey:getMonthKey(req.year,req.month)},
+        successMessage:null
+      });
+      if(!fin)return false;
+      const result=await sendOperationalCommand({command:"approveBusinessRequest",requestId:req.id,monthId:getMonthKey(req.year,req.month)},"approve:"+req.id);
+      memClear(getMonthKey(req.year,req.month));
+      await loadRequests();
+      await loadMonthOnline(req.year,req.month);
+      showMsg(result?.replay?BACKEND_ERROR_MESSAGES.ALREADY_PROCESSED:"✓ تم اعتماد الحجز اليومي");
       R();
       return result;
     })();
@@ -4255,7 +4322,8 @@ function renderApp(){
           canEdit()?h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>{if(!isOwner&&S._snap){Object.keys(p).forEach(k=>delete p[k]);Object.assign(p,JSON.parse(JSON.stringify(S._snap)));}set({editPart:null,_snapKey:null,_snap:null});}},["إغلاق"]),
              (p.status!=="vacant"&&p.status!=="staff")?h("button",{class:"btn",style:{flex:"1",background:"#083344",border:"1px solid #0e7490",color:"#22d3ee",borderRadius:"8px",padding:"8px",fontSize:"13px",fontWeight:"600"},onClick:()=>set({transferPart:S.transferPart===(unit.id+"-"+p.id)?null:(unit.id+"-"+p.id)})},["🔁 تحويل"]):null,
-            isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteP},["حذف البارتشن"]):null,
+            isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteP},["حذف البارتشن"]):
+            canEdit()?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteP},["طلب حذف البارتشن"]):null,
             !isOwner?h("button",{class:"btn",style:{flex:"2",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
               const _orig=JSON.parse(JSON.stringify(_snapFor("p-"+unit.id+"-"+p.id,p)));
               const _d=_diffFields(p,_orig);
@@ -4465,7 +4533,8 @@ function renderApp(){
           })():null,
           canEdit()?h("div",{style:{display:"flex",gap:"8px"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>{if(!isOwner&&S._snap){Object.keys(u).forEach(k=>delete u[k]);Object.assign(u,JSON.parse(JSON.stringify(S._snap)));}set({editPart:null,_snapKey:null,_snap:null});}},["إغلاق"]),
-            isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteFull},["حذف الشقة"]):null,
+            isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteFull},["حذف الشقة"]):
+            canEdit()?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteFull},["طلب حذف الشقة"]):null,
             !isOwner?h("button",{class:"btn",style:{flex:"2",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
               const _orig=JSON.parse(JSON.stringify(_snapFor("f-"+u.id,u)));
               const _df=_diffFields(u,_orig);
@@ -4492,9 +4561,9 @@ function renderApp(){
               h("span",{style:{fontSize:"14px",color:"#444"}},[isEd?"▲":"▼"])])]),
           form]);
       });
-      const addUnitBtn=isOwner?h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"12px"}},[
-        h("button",{class:"btn",style:{background:"#111",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"10px",padding:"10px",fontSize:"13px",fontWeight:"600"},onClick:()=>set({showAddUnit:true,showAddFullUnit:false})},["+ شقة بارتشنات"]),
-        h("button",{class:"btn",style:{background:"#111",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"10px",padding:"10px",fontSize:"13px",fontWeight:"600"},onClick:()=>set({showAddFullUnit:true,showAddUnit:false})},["+ شقة كاملة"])]):null;
+      const addUnitBtn=canEdit()?h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"12px"}},[
+        h("button",{class:"btn",style:{background:"#111",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"10px",padding:"10px",fontSize:"13px",fontWeight:"600"},onClick:()=>set({showAddUnit:true,showAddFullUnit:false})},[isOwner?"+ شقة بارتشنات":"+ طلب شقة بارتشنات"]),
+        h("button",{class:"btn",style:{background:"#111",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"10px",padding:"10px",fontSize:"13px",fontWeight:"600"},onClick:()=>set({showAddFullUnit:true,showAddUnit:false})},[isOwner?"+ شقة كاملة":"+ طلب شقة كاملة"])]):null;
 
       const addUnitForm=S.showAddUnit?h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
         h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fff",marginBottom:"12px"}},["شقة جديدة – بارتشنات"]),
@@ -5636,6 +5705,13 @@ function renderApp(){
         "💰 "+Number(req.payload?.transaction?.amount||0).toLocaleString()+" د.إ — "+( req.payload?.transaction?.desc||"")]));
       if(req.type==="add_expense") detailRows.push(h("div",{style:{fontSize:"14px",color:"#f87171",marginTop:"4px"}},[
         "💸 "+Number(req.payload?.expense?.amount||0).toLocaleString()+" د.إ — "+(req.payload?.expense?.desc||"")]));
+      if(req.type==="add_daily"){
+        const bk=req.payload?.booking||{};
+        detailRows.push(h("div",{style:{fontSize:"14px",color:"#60a5fa",marginTop:"4px"}},[
+          "📅 "+(bk.partLabel||bk.partId||"—")+" — "+(bk.guest||"—")]));
+        detailRows.push(h("div",{style:{fontSize:"13px",color:"#aaa"}},[
+          String(bk.startDate||"—")+" ← "+String(bk.endDate||"—")+" · "+Number(bk.nights||0)+" ليلة · "+Number(bk.total||0).toLocaleString()+" د.إ · "+(bk.paymentMethod==="bank"?"بنك":"نقد")]));
+      }
 
       return h("div",{class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(req.status==="pending"?"#854d0e":req.status==="approved"?"#166534":"#7f1d1d")}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
@@ -5785,8 +5861,8 @@ function renderApp(){
           if(b.mode==="nights"&&b.nightRate){b.total=n*Number(b.nightRate);totalInp.value=b.total;}
         }
       }
-      startInp.addEventListener("change",e=>{b.startDate=e.target.value;recalc();});
-      endInp.addEventListener("change",e=>{b.endDate=e.target.value;recalc();});
+      startInp.addEventListener("change",e=>{const iso=parseQamaDateInput(e.target.value); if(e.target.value&&!iso){showMsg("⚠ التاريخ يجب أن يكون DD-MM-YYYY");e.target.value=formatQamaDate(b.startDate)||"";return;} e.target.value=formatQamaDate(iso)||""; b.startDate=iso; recalc();});
+      endInp.addEventListener("change",e=>{const iso=parseQamaDateInput(e.target.value); if(e.target.value&&!iso){showMsg("⚠ التاريخ يجب أن يكون DD-MM-YYYY");e.target.value=formatQamaDate(b.endDate)||"";return;} e.target.value=formatQamaDate(iso)||""; b.endDate=iso; recalc();});
       const d1=h("button",{class:"btn",id:"dm1",style:{flex:"1",padding:"9px",borderRadius:"8px",fontSize:"14px",fontWeight:"600",background:"#fff",color:"#000"},onClick:()=>{b.mode="nights";d1.style.background="#fff";d1.style.color="#000";d2.style.background="#222";d2.style.color="#888";rateInp.style.display="";totalInp.readOnly=true;recalc();}},["سعر الليلة × ليالي"]);
       const d2=h("button",{class:"btn",id:"dm2",style:{flex:"1",padding:"9px",borderRadius:"8px",fontSize:"14px",fontWeight:"600",background:"#222",color:"#888"},onClick:()=>{b.mode="total";d2.style.background="#fff";d2.style.color="#000";d1.style.background="#222";d1.style.color="#888";rateInp.style.display="none";totalInp.readOnly=false;}},["مبلغ إجمالي"]);
       const modeRow=h("div",{style:{display:"flex",gap:"8px",marginBottom:"10px"}},[d1,d2]);

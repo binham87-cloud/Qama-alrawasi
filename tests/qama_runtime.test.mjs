@@ -34,8 +34,8 @@ for (const file of FILES) {
     assert.match(html, /\["لوحة "\+nm\]/);
     assert.match(html, /🏠 الرئيسية/);
     assert.match(html, /units:"الوحدات"/);
-    assert.match(html, /\["\+ شقة بارتشنات"\]/);
-    assert.match(html, /\["\+ شقة كاملة"\]/);
+    assert.match(html, /isOwner\?"\+ شقة بارتشنات":"\+ طلب شقة بارتشنات"/);
+    assert.match(html, /isOwner\?"\+ شقة كاملة":"\+ طلب شقة كاملة"/);
   });
 
   test(`${file} has no financial UI path that calls commitMoneyOp`, () => {

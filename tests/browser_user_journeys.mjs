@@ -44,7 +44,7 @@ try{
   await page.waitForFunction(()=>window.QAMA_READY===true,{timeout:30000});
   console.log("BROWSER_STEP:transactions_a");
   await clickText("الإيداعات");
-  await clickText("+ إيداع");
+  await clickText("+ إضافة");
   await page.select("select","external_revenue");
   await page.type('input[placeholder="مصدر الإيراد الآخر (إلزامي)"]',"اختبار متصفح محلي");
   await page.type('input[placeholder^="الوصف"]',"إيراد خارجي موثق");
