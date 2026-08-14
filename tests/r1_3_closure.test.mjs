@@ -25,8 +25,8 @@ const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 test("R1.3-00 index/public parity + BUILD .5", () => {
   assert.equal(html, publicHtml);
   assert.equal(sha256(html), sha256(publicHtml));
-  assert.match(html, /qama-unified-final-2026-08-14\.5/);
-  assert.doesNotMatch(html, /qama-unified-final-2026-08-14\.4/);
+  assert.match(html, /qama-unified-final-2026-08-14\.6-rc1/);
+  assert.doesNotMatch(html, /qama-unified-final-2026-08-14\.5/);
 });
 
 test("R1.3-01 add_daily is a business request type", () => {
@@ -106,7 +106,7 @@ test("R1.3-08 write machine-readable action inventory artifact", () => {
   const financialCmds = [...html.matchAll(/command:"([A-Za-z]+)"/g)].map((m) => m[1]);
   const finUniq = [...new Set(financialCmds)].sort();
   const inventory = {
-    build: "qama-unified-final-2026-08-14.5",
+    build: "qama-unified-final-2026-08-14.6-rc1",
     businessRequestTypes,
     submitRequestTypesInUi: uniq,
     financialCommandsReferencedInUi: finUniq,

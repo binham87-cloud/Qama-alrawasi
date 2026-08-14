@@ -1,0 +1,68 @@
+{
+  "generatedAt": "2026-08-14T08:20:50.496Z",
+  "mode": "dry-run",
+  "write": false,
+  "months": [
+    {
+      "monthId": "fixture_2026_7",
+      "write": false,
+      "mintedFils": 0,
+      "spaces": [
+        {
+          "key": "u1|1",
+          "kind": "partition",
+          "unitId": "u1",
+          "entityId": 1,
+          "tenant": "A",
+          "classification": "B",
+          "rent": 1000,
+          "paid": 400,
+          "status": "late",
+          "reasons": [
+            "legacy_paid_amount_without_canonical_event"
+          ]
+        },
+        {
+          "key": "u1|2",
+          "kind": "partition",
+          "unitId": "u1",
+          "entityId": 2,
+          "tenant": "B",
+          "classification": "D",
+          "rent": 1000,
+          "paid": 0,
+          "status": "collected",
+          "reasons": [
+            "status_collected_without_paid_amount"
+          ]
+        }
+      ],
+      "transactions": [
+        {
+          "id": "tx1",
+          "amount": 400,
+          "reversed": false,
+          "classification": "B",
+          "reasons": [
+            "month_transactions_compatibility"
+          ]
+        }
+      ],
+      "counts": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 0
+      },
+      "conclusion": "Unverifiable collected-status rows preserved without minting revenue."
+    }
+  ],
+  "totals": {
+    "A": 0,
+    "B": 1,
+    "C": 0,
+    "D": 1,
+    "E": 0
+  }
+}

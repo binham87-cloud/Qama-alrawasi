@@ -20,7 +20,7 @@ const db = getFirestore(admin);
 const outDir = "/tmp/r13_hat";
 mkdirSync(outDir, { recursive: true });
 const report = {
-  build: "qama-unified-final-2026-08-14.5",
+  build: "qama-unified-final-2026-08-14.6-rc1",
   matrix: {},
   pass: [],
   fail: [],
@@ -144,7 +144,7 @@ const logout = async () => {
 try {
   // AUTH
   await login("مدير R13", "1111", "لوحة مدير R13");
-  const buildOk = await page.evaluate(() => (document.querySelector('meta[name="qama-build-id"]')?.content || "") === "qama-unified-final-2026-08-14.5");
+  const buildOk = await page.evaluate(() => (document.querySelector('meta[name="qama-build-id"]')?.content || "") === "qama-unified-final-2026-08-14.6-rc1");
   mark("AUTH_owner_pin_build", buildOk, { buildOk });
   await logout();
   await login("موظف R13", "2222", "لوحة موظف R13");

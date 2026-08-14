@@ -1,0 +1,39 @@
+{
+  "build": "qama-unified-final-2026-08-14.6-rc1",
+  "schemaVersion": 3,
+  "currency": "AED fils (integer)",
+  "definitions": {
+    "TARGET": {
+      "canonical": "Sum of effectiveTarget(cycle) for cycles in the reporting month that are not cancelled_eviction / cancelled_daily / pending_payment_daily. effectiveTarget = baseAmountFils - active discounts.",
+      "not": "UI occupancy status strings, paid_amount, or collected labels."
+    },
+    "ACTUAL_COLLECTED": {
+      "canonical": "Sum of active approved collectionEvents (schema v3) net of reversals/refunds, plus classified opening residuals. Cash is collected on receipt; bank is collected on owner approveBankPayment.",
+      "not": "status=collected, occupancy edits, or deposit requests."
+    },
+    "DEPOSITED": {
+      "canonical": "Approved bank collectionEvents (method=bank) + active cashMovements type=deposit minus deposit_reversal, plus classified opening deposited residuals.",
+      "not": "Merely marking a unit collected. Employee deposit request has zero deposited effect until approveDeposit."
+    },
+    "EMPLOYEE_HOLDING": {
+      "canonical": "Sum of cashLotAvailable(lot) by currentHolder. Cash receipts create lots; deposits/refunds/transfers consume them. Bank never creates a lot.",
+      "not": "Math.max(0, collected-deposited). Negative available throws CASH_LOT_INVARIANT."
+    },
+    "ARREARS": {
+      "canonical": "Remaining collectible on active cycles whose dueDate <= asOfDate.",
+      "not": "Raw status===late."
+    },
+    "PAID": {
+      "canonical": "tenantReceivedReservedFils = reserved allocations + classified legacyOpeningReservedFils."
+    },
+    "REMAINING": {
+      "canonical": "targetFils - tenantReceivedReservedFils. CYCLE_OVERPAYMENT if reserved exceeds target."
+    },
+    "CASH_COLLECTION": "createCashReceipt → paymentIntent method=cash + collectionEvent + cashLot held by actor.",
+    "BANK_COLLECTION": "createBankPayment (pending, no collected/holding) → approveBankPayment (manager) credits revenue and deposited.",
+    "HANDOVER": "createCustodyTransfer + confirmCustodyTransfer moves lot holder once. Zero collected/deposited/revenue effect.",
+    "EXPENSE": "requestExpense pending → approveExpense manager debit of chosen account exactly once. reverseExpense is a compensating event.",
+    "DAILY": "Employee submits add_daily. Owner createDailyBooking (manager-only) then approveBusinessRequest. Cash daily uses createCashReceipt internally."
+  },
+  "writePath": "financialCommand | operationalCommand (server) → authorization → idempotency (financialOperations/operationalOperations) → canonical mutation → ledger/balances/custody → operationalReadModel projection → UI CALC cards"
+}

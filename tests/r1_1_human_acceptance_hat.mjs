@@ -21,7 +21,7 @@ const db = getFirestore(admin);
 const outDir = "/tmp/r11_hat_shots";
 mkdirSync(outDir, { recursive: true });
 const report = {
-  build: "qama-unified-final-2026-08-14.5",
+  build: "qama-unified-final-2026-08-14.6-rc1",
   paths: {},
   pass: [],
   fail: [],
@@ -259,7 +259,7 @@ const confirmCash = async (amount) => page.evaluate((amt) => {
 
 try {
   await login("مدير HAT", "1111", "لوحة مدير HAT");
-  const buildOk = await page.evaluate(() => (document.querySelector('meta[name="qama-build-id"]')?.content || "") === "qama-unified-final-2026-08-14.5");
+  const buildOk = await page.evaluate(() => (document.querySelector('meta[name="qama-build-id"]')?.content || "") === "qama-unified-final-2026-08-14.6-rc1");
   mark("build_id", buildOk, await page.evaluate(() => document.querySelector('meta[name="qama-build-id"]')?.content));
 
   await openHatUnit();

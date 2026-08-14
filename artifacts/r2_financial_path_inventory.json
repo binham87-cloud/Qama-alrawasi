@@ -1,0 +1,26 @@
+{
+  "build": "qama-unified-final-2026-08-14.6-rc1",
+  "paths": [
+    { "path": "financialCommand callable", "class": "authoritative write", "notes": "All money-moving commands." },
+    { "path": "operationalCommand callable", "class": "authoritative write", "notes": "Business requests, owner rental patch, month operational mutations. financialEffectFils=0 except via paired financialCommand." },
+    { "path": "operationalReadModel / canonicalReadModel", "class": "derived projection", "notes": "Role-filtered KPI/cards/details." },
+    { "path": "functions/domain/financial_engine.mjs", "class": "authoritative write", "notes": "cycleProjection, custodyProjection, ledgerReplay, invariants." },
+    { "path": "functions/domain/canonical_selectors.mjs", "class": "derived projection", "notes": "monthlyOperationalProjection; legacy_month compatibility; hybrid residual paid_amount." },
+    { "path": "functions/domain/legacy_month_projection.mjs", "class": "legacy compatibility", "notes": "Read-only KPI from months/{id}.data when cycles empty. paid_amount evidence, never status-only collected." },
+    { "path": "months/{id}.data.units[].partitions[].rent", "class": "operational + compatibility", "notes": "Contractual rent for UI; cycles.baseAmountFils is financial target once a cycle exists." },
+    { "path": "months/{id}.data.*.status", "class": "UI-only / operational occupancy", "notes": "Must not mint collection. displayStatus projects from operational remaining when synced." },
+    { "path": "months/{id}.data.*.paid_amount", "class": "legacy compatibility / requires preservation", "notes": "Class B evidence. Not an authoritative write. R2 classifier." },
+    { "path": "months/{id}.data.transactions", "class": "legacy compatibility", "notes": "Historical deposit list. Not KPI authority when canonical cashMovements/bank events exist." },
+    { "path": "months/{id}.data.expenses / unitMaintenance / facilityMaintenance", "class": "legacy compatibility", "notes": "UI lists; canonical expenses collection is authority when present." },
+    { "path": "months/{id}.data.dailyBookings", "class": "projection / compatibility", "notes": "Mirrored on add_daily approve. Canonical dailyBookings collection + createDailyBooking is money authority." },
+    { "path": "months/{id}.data.cashReceipts / handovers", "class": "historical-only", "notes": "Not written by current UI. Canonical cashLots / custodyTransfers." },
+    { "path": "CALC in index.html", "class": "UI-only derived", "notes": "Cards from operationalReadModel when synced; unsynced collected/target/deposited = 0." },
+    { "path": "commitMoneyOp / saveCurData", "class": "unsafe/dead removed from authority", "notes": "Blocked / LEGACY_STRUCTURAL_WRITE_DISABLED." },
+    { "path": "client setDoc months / ledger / balances / requests", "class": "requires removal from authority", "notes": "Rules write:false. Unreachable submitRequest body after dispatchLegacyFinancialRequest return." },
+    { "path": "collectionEvents / cashLots / cashMovements / payments / paymentAllocations", "class": "authoritative write", "notes": "Admin SDK / functions only." },
+    { "path": "financialLedger / accountBalances", "class": "authoritative write", "notes": "Must replay-equal. Rules write:false." },
+    { "path": "config/balances", "class": "deprecated", "notes": "Rules write:false. Retired client authority." },
+    { "path": "legacyOpeningStates / legacyCycleOpenings", "class": "requires preservation", "notes": "Class C opening residuals. Not reconstructed transactions." },
+    { "path": "Math.max hybrid deposited (removed R2)", "class": "unsafe/dead", "notes": "Replaced by canonical-authoritative deposited + DEPOSITED_DUAL_REPRESENTATION exception." }
+  ]
+}

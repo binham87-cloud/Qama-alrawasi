@@ -119,7 +119,7 @@ test("تبويبة المالية ظاهرة مباشرة بعد الرئيسي�
 });
 
 test("الملخص المالي يفضّل الإسقاط التشغيلي Collected/Deposited ولا يخلط العهدة", () => {
-  assert.match(html, /function actualCollected\(d\)\{ const value=card\("collectedFils"\); return value!==null\?value:netDepositedForKPI\(d\); \}/);
+  assert.match(html, /function actualCollected\(d\)\{ const value=card\("collectedFils"\); return value!==null\?value:0; \}/);
   assert.match(html, /const value=card\("depositedFils"\)/);
   assert.match(html, /const value=card\("receivedNotDepositedFils"\)/);
   assert.match(html, /operationalReadModelCall=httpsCallable/);

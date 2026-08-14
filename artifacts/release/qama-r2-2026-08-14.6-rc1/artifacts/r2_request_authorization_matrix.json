@@ -1,0 +1,18 @@
+{
+  "build": "qama-unified-final-2026-08-14.6-rc1",
+  "types": [
+    { "type": "update_partition", "submit": "employee/owner via operationalCommand", "approve": "owner/manager", "reject": "owner/manager", "financial": false, "idempotency": "operationalOperations.operationId", "stale": "baseVersion / STALE_OPERATIONAL_ENTITY" },
+    { "type": "update_full", "submit": "employee/owner", "approve": "owner/manager", "reject": "owner/manager", "financial": false, "idempotency": "operationId", "stale": "baseVersion" },
+    { "type": "transfer_tenant", "submit": "employee/owner", "approve": "owner/manager", "reject": "owner/manager", "financial": false, "idempotency": "operationId", "stale": "entity versions" },
+    { "type": "add_partition / add_unit / add_full_unit / delete_partition / delete_unit / delete_full", "submit": "employee (request) / owner (direct mutation)", "approve": "owner/manager", "financial": false },
+    { "type": "add_daily", "submit": "employee submitBusinessRequest", "approve": "owner createDailyBooking + approveBusinessRequest", "reject": "owner rejectRequest", "financial": true, "idempotency": "approve-daily:{requestId} + operational approve:{requestId}" },
+    { "type": "add_expense / add_unit_maintenance / add_facility_maintenance", "submit": "employee requestExpense", "approve": "owner approveExpense (account chosen)", "reject": "owner rejectExpense", "financial": true, "idempotency": "financialOperations.operationId" },
+    { "type": "add_transaction (deposit)", "submit": "employee createDepositRequest", "approve": "owner approveDeposit", "reject": "owner rejectDeposit", "financial": true, "idempotency": "operationId", "stale": "STALE_CASH_ALLOCATION" },
+    { "type": "confirm_handover / reject_handover", "submit": "peer employee", "approve": "n/a (peer confirm)", "financial": false, "notes": "Moves custody; does not mint revenue" }
+  ],
+  "layers": {
+    "ui": "hidden buttons are not security",
+    "functions": "assertManager / assertEmployeeOrManager on each command",
+    "rules": "all canonical financial collections allow write: if false"
+  }
+}

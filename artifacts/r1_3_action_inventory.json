@@ -1,5 +1,5 @@
 {
-  "build": "qama-unified-final-2026-08-14.5",
+  "build": "qama-unified-final-2026-08-14.6-rc1",
   "businessRequestTypes": [
     "update_partition",
     "update_full",

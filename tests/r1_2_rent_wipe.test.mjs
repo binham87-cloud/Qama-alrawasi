@@ -31,7 +31,7 @@ function monthDoc(part = {}) {
 
 test("R1.2-00 build sync + three defense layers present", () => {
   assert.equal(html, publicHtml);
-  assert.match(html, /qama-unified-final-2026-08-14\.5/);
+  assert.match(html, /qama-unified-final-2026-08-14\.6-rc1/);
   assert.match(html, /function parseMoneyInputRaw/);
   assert.match(html, /function sanitizeRentalDiff/);
   assert.match(html, /function rentalDiffLooksLikeRentWipe/);
