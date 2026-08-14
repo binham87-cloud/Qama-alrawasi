@@ -1,8 +1,8 @@
 {
   "releaseId": "qama-unified-final-2026-08-14.6-rc1",
   "branch": "recovery/qama-prod-2026-08-13.6",
-  "gitCommit": "bc34d803e43238136aa0291f33f7dd754a800565",
-  "createdAt": "2026-08-14T08:30:33.993Z",
+  "gitCommit": "5612799c0f5fe0ed85812feafa159b1ea6ad4c5b",
+  "createdAt": "2026-08-14T08:36:00.000Z",
   "productionMutation": false,
   "migrationWrite": false,
   "deploymentOrder": [
@@ -17,17 +17,13 @@
     "Firestore export/backup",
     "Owner-authorized deploy window"
   ],
-  "testsNote": "See artifacts/r2_verification_report.json after gate run",
+  "testsNote": "See artifacts/r2_predeploy_verification_report.json",
+  "manifestSelfHashExcluded": true,
   "files": [
     {
       "path": "DEPLOYMENT_RUNBOOK.md",
       "sha256": "4331c7cd59a8d50409a0c37d4e2d08040ec8f49887f49ad486563e1c98cf2e87",
       "bytes": 2400
-    },
-    {
-      "path": "MANIFEST.json",
-      "sha256": "1f5cc0d8e149b6044d4b848bc9bcffe32590abc723badb8a619a5fcf9bb12f5d",
-      "bytes": 6678
     },
     {
       "path": "ROLLBACK.md",

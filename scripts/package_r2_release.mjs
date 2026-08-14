@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, copyFileSync, cpSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, copyFileSync, cpSync, writeFileSync, rmSync } from "node:fs";
 import { execSync } from "node:child_process";
 import path from "node:path";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const build = "qama-unified-final-2026-08-14.6-rc1";
-const stamp = new Date().toISOString();
+/** Product source commit this RC packages — manifest must reference this, not a metadata-only parent. */
+const SOURCE_COMMIT = "5612799c0f5fe0ed85812feafa159b1ea6ad4c5b";
+/** Fixed packaging epoch — same commit must yield identical archive bytes. */
+const createdAt = "2026-08-14T08:36:00.000Z";
+const tarMtime = Math.floor(Date.parse(createdAt) / 1000);
 const outDir = path.join(root, "artifacts", "release", "qama-r2-2026-08-14.6-rc1");
 const archivePath = path.join(root, "artifacts", "release", "qama-r2-2026-08-14.6-rc1.tar.gz");
 
@@ -14,7 +18,21 @@ function sha256File(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
+function listPayloadFiles(baseDir) {
+  const fileList = execSync(`find "${baseDir}" -type f ! -name MANIFEST.json | sort`, { encoding: "utf8" })
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  return fileList.map((abs) => ({
+    path: path.relative(baseDir, abs),
+    sha256: sha256File(abs),
+    bytes: readFileSync(abs).length,
+  }));
+}
+
+rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
+
 const copies = [
   ["public/index.html", "hosting/index.html"],
   ["index.html", "hosting/index.root.html"],
@@ -46,33 +64,42 @@ cpSync(path.join(root, "functions"), path.join(outDir, "functions"), {
   filter: (src) => !src.includes("node_modules"),
 });
 
-const fileList = execSync(`find "${outDir}" -type f | sort`, { encoding: "utf8" }).trim().split("\n").filter(Boolean);
-const files = fileList.map((abs) => ({
-  path: path.relative(outDir, abs),
-  sha256: sha256File(abs),
-  bytes: readFileSync(abs).length,
-}));
+let gitCommit = SOURCE_COMMIT;
+try {
+  const head = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim();
+  if (head !== SOURCE_COMMIT) {
+    execSync(
+      `git diff --quiet ${SOURCE_COMMIT} HEAD -- index.html public/index.html functions firestore-v11.rules firebase.json firestore.indexes.json package.json package-lock.json`,
+      { cwd: root },
+    );
+  }
+} catch (e) {
+  throw new Error(`PRODUCT_TREE_DRIFT: package only from ${SOURCE_COMMIT} product tree (${e.message || e})`);
+}
 
-let gitCommit = "WORKING_TREE";
-try { gitCommit = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim(); } catch {}
-
+const files = listPayloadFiles(outDir);
 const manifest = {
   releaseId: build,
   branch: "recovery/qama-prod-2026-08-13.6",
   gitCommit,
-  createdAt: stamp,
+  createdAt,
   productionMutation: false,
   migrationWrite: false,
   deploymentOrder: ["firestore:rules", "firestore:indexes", "functions", "hosting"],
   rollbackReference: "artifacts/release/ROLLBACK.md",
   productionPrerequisites: ["PIN authPins intact", "Firestore export/backup", "Owner-authorized deploy window"],
-  testsNote: "See artifacts/r2_verification_report.json after gate run",
+  testsNote: "See artifacts/r2_predeploy_verification_report.json",
+  manifestSelfHashExcluded: true,
   files,
 };
-writeFileSync(path.join(outDir, "MANIFEST.json"), JSON.stringify(manifest, null, 2));
-writeFileSync(path.join(root, "artifacts/r2_release_manifest.json"), JSON.stringify(manifest, null, 2));
+const manifestPath = path.join(outDir, "MANIFEST.json");
+writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+writeFileSync(path.join(root, "artifacts/r2_release_manifest.json"), readFileSync(manifestPath));
 
-execSync(`tar -C "${path.dirname(outDir)}" -czf "${archivePath}" "${path.basename(outDir)}"`);
+execSync(
+  `tar --sort=name --mtime='@${tarMtime}' --owner=0 --group=0 --numeric-owner -C "${path.dirname(outDir)}" -cf - "${path.basename(outDir)}" | gzip -cn > "${archivePath}"`,
+  { shell: "/bin/bash" },
+);
 const archiveSha = sha256File(archivePath);
 const verify = createHash("sha256").update(readFileSync(archivePath)).digest("hex");
 if (verify !== archiveSha) throw new Error("ARCHIVE_HASH_MISMATCH");
@@ -87,6 +114,8 @@ const integrity = {
   rollbackSha256: sha256File(path.join(root, "artifacts/release/ROLLBACK.md")),
   hostingIndexSha256: sha256File(path.join(root, "public/index.html")),
   rulesSha256: sha256File(path.join(root, "firestore-v11.rules")),
+  gitCommit,
+  reproducible: true,
 };
 writeFileSync(path.join(root, "artifacts/r2_archive_integrity.json"), JSON.stringify(integrity, null, 2));
 console.log(JSON.stringify({ ok: true, ...integrity }, null, 2));
