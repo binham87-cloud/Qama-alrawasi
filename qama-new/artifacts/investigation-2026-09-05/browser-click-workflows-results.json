@@ -1,0 +1,131 @@
+{
+  "generatedAt": "2026-09-05T21:37:03.484Z",
+  "kind": "ui_click_only",
+  "results": [
+    {
+      "name": "UI partition collect↔uncollect + partial",
+      "status": "PASS",
+      "actions": [
+        "login owner PIN 1325",
+        "units → unit card → expand partition 1",
+        "select الحالة=محصّل (collected)",
+        "select طريقة التحصيل=نقداً",
+        "تحديث → status still collected + holding persisted",
+        "select الحالة=متأخر (late/overdue)",
+        "collect again + cash",
+        "uncollect again → late",
+        "نوع الدفع=جزئي",
+        "paid=40 + method=cash on live form",
+        "logout + relogin owner",
+        "relogin: partial 40 + holding +4000 persisted"
+      ],
+      "expected": "holding cycles 0→100→0→100→0→40 AED; UI status/partial persist across refresh+relogin",
+      "actual": {
+        "holdingFils": 4000,
+        "paid": 40,
+        "partial": "true",
+        "liveReceipts": 1,
+        "reversed": 2
+      },
+      "evidence": "{\"beforeHolding\":0,\"finalHolding\":4000}",
+      "detail": "{\"beforeHolding\":0,\"finalHolding\":4000}"
+    },
+    {
+      "name": "UI full-unit collect↔uncollect + partial",
+      "status": "PASS",
+      "actions": [
+        "units → expand full unit 201",
+        "full status=collected",
+        "full method=cash",
+        "full status=late",
+        "full re-collect",
+        "full uncollect again",
+        "full partial 75 cash"
+      ],
+      "expected": "full unit 200 AED cycles + partial 75; refresh persists",
+      "actual": {
+        "holdingFils": 11500,
+        "paid": 75
+      },
+      "detail": ""
+    },
+    {
+      "name": "UI daily create→edit→cancel (form+saved)",
+      "status": "PASS",
+      "actions": [
+        "open tab اليومي",
+        "open + حجز → type guest → إلغاء form",
+        "create: part=unit:seed-bridge:unit:1788644146117-2 2026-09-10→12 rate=100 total=200",
+        "edit: end→09-13 rate→150 → save (total 450)",
+        "edit form cancel without save",
+        "حذف saved booking"
+      ],
+      "expected": "form cancel no write; create 200; edit 450; delete 0; extras-only financial rollup",
+      "actual": {
+        "monthTotal": "0 د.إ",
+        "holding": 11500,
+        "liveReceipts": 2
+      },
+      "detail": "Daily bookings persist via savePeriodExtras; do not mint receipts"
+    },
+    {
+      "name": "UI employee submit → manager approve+reject",
+      "status": "PASS",
+      "actions": [
+        "login employee يحيى",
+        "employee submit expense 33 (approve path)",
+        "employee submit expense 44 with triple-click (reject path + dup guard)",
+        "employee sees requests on طلباتي",
+        "manager open الطلبات",
+        "manager click اعتماد on first",
+        "approved request persisted",
+        "duplicate اعتماد clicks on remaining",
+        "manager click رفض",
+        "employee sees resolved statuses"
+      ],
+      "expected": "2 pending → 1 approved expense + 1 rejected; employee visibility; dup-click safe",
+      "actual": {
+        "pending": 0,
+        "approvedRequests": 1,
+        "rejectedRequests": 1,
+        "approvedExpenses": 1
+      },
+      "detail": ""
+    },
+    {
+      "name": "UI month lock/unlock + role restrictions",
+      "status": "PASS",
+      "actions": [
+        "owner click قفل month",
+        "تحديث → still locked",
+        "owner still sees + مصروف while locked",
+        "employee: add controls hidden or blocked while locked",
+        "employee units edit restricted while locked",
+        "owner unlock",
+        "employee editing resumes after unlock"
+      ],
+      "expected": "lock persists refresh; owner edits; employee blocked; unlock restores employee edit",
+      "actual": {
+        "lockLabelAfterUnlock": "🔓 قفل"
+      },
+      "detail": ""
+    },
+    {
+      "name": "Action inventory complete",
+      "status": "PASS",
+      "actions": [
+        "static inventory scan of shell controls"
+      ],
+      "expected": "all controls classified; print/export NOT AVAILABLE",
+      "actual": {
+        "counted": 18,
+        "classifiedOk": 12
+      },
+      "evidence": "[{\"control\":\"PRINT\",\"status\":\"NOT AVAILABLE\",\"note\":\"no print control in assembled UI\"},{\"control\":\"EXPORT\",\"status\":\"NOT AVAILABLE\",\"note\":\"no export control in assembled UI\"},{\"control\":\"Owner login / logout\",\"status\":\"PASS\",\"note\":\"exercised in workflows\"},{\"control\":\"Employee login\",\"status\":\"PASS\",\"note\":\"exercised in request+lock workflows\"},{\"control\":\"Partition status/collection/partial\",\"status\":\"COVERED\",\"note\":\"workflow 1\"},{\"control\":\"Full-unit status/collection/partial\",\"status\":\"COVERED\",\"note\":\"workflow 1b\"},{\"control\":\"Daily add/edit/delete/form-cancel\",\"status\":\"COVERED\",\"note\":\"workflow 2 (+ edit control added)\"},{\"control\":\"Expense add (owner)\",\"status\":\"PRIOR\",\"note\":\"prior matrix/workflows; not re-run\"},{\"control\":\"Expense invalid submit\",\"status\":\"PRIOR\",\"note\":\"prior assembled_ui_workflows\"},{\"control\":\"Employee expense submit + manager approve/reject\",\"status\":\"COVERED\",\"note\":\"workflow 3\"},{\"control\":\"Month lock/unlock\",\"status\":\"COVERED\",\"note\":\"workflow 4\"},{\"control\":\"Add partitioned unit / add full unit forms\",\"status\":\"NOT TESTED\",\"note\":\"forms present; out of four workflows — inventory only\"},{\"control\":\"Delete partition / delete full unit\",\"status\":\"NOT TESTED\",\"note\":\"destructive; inventory only this session\"},{\"control\":\"Deposit / transaction add+cancel\",\"status\":\"PRIOR\",\"note\":\"prior browser matrix/workflows\"},{\"control\":\"Maintenance unit/facility add\",\"status\":\"NOT TESTED\",\"note\":\"inventory only\"},{\"control\":\"Permissions tab\",\"status\":\"NOT TESTED\",\"note\":\"inventory only\"},{\"control\":\"Occupancy / audit / financial tabs view\",\"status\":\"NOT TESTED\",\"note\":\"read views; inventory only\"},{\"control\":\"Receipt reverse (حذف الإيصال)\",\"status\":\"NOT TESTED\",\"note\":\"inventory only; uncollect path covered via status\"}]",
+      "detail": "[{\"control\":\"PRINT\",\"status\":\"NOT AVAILABLE\",\"note\":\"no print control in assembled UI\"},{\"control\":\"EXPORT\",\"status\":\"NOT AVAILABLE\",\"note\":\"no export control in assembled UI\"},{\"control\":\"Owner login / logout\",\"status\":\"PASS\",\"note\":\"exercised in workflows\"},{\"control\":\"Employee login\",\"status\":\"PASS\",\"note\":\"exercised in request+lock workflows\"},{\"control\":\"Partition status/collection/partial\",\"status\":\"COVERED\",\"note\":\"workflow 1\"},{\"control\":\"Full-unit status/collection/partial\",\"status\":\"CO"
+    }
+  ],
+  "pass": 6,
+  "fail": 0,
+  "blocked": 0
+}
