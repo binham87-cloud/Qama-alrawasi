@@ -243,6 +243,9 @@ if (!out.includes("الشقق الكاملة")) throw new Error("missing full ap
 if (!out.includes("👤  مدير") && !out.includes("مدير")) throw new Error("missing login users");
 if (!out.includes('"pending"') && !out.includes("'pending'")) throw new Error("pending status option missing");
 if (!out.includes("uncollectObligation")) throw new Error("missing uncollect in bridge");
+if (!out.includes("renewRentalCycle")) throw new Error("missing renewRentalCycle in assembled UI");
+if (!out.includes("endTenancy")) throw new Error("missing endTenancy in assembled UI");
+if (!out.includes("btn-renew-cycle")) throw new Error("missing renew button");
 if (!out.includes("hydrateMonthFromEngine")) throw new Error("missing hydrate");
 if (out.includes("S.pendingRequests=[...reqs, ...enginePending]")) {
   throw new Error("regressive pendingApprovals merge still present in assembled UI");

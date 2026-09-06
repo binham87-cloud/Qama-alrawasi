@@ -3194,12 +3194,34 @@ function renderApp(){
               p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
             }
             else if(val==="late"||val==="pending"){
+              const paidNow=Number(p._enginePaid||0);
+              if(paidNow>0){
+                if(!confirm("إلغاء التحصيل\n\nسيُعكس الإيصال وينقص عهدة الموظف بمبلغ "+paidNow.toLocaleString()+" د.إ.\nهذا ليس إخلاءً.\nمتابعة؟")){
+                  p.status=prevStatus||"collected";
+                  set({editPart:unit.id+"-"+p.id});
+                  return;
+                }
+              }
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;p.draftClearedByVacate=false;
               // Rotate session and clear gen — any leftover collect extras become stale after reverse.
               p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
               p.draftReverseGen=null;
             }
             else if(val==="vacant"||val==="staff"){
+              const paidNow=Number(p._enginePaid||0);
+              const remNow=Math.max(0,(Number(p.rent)||0)-paidNow);
+              let vacMsg=(val==="vacant"?"إخلاء وتحويل لفارغ":"تحويل لموظفين")+"\n\n"
+                +"• لا يعكس التحصيلات الصحيحة\n"
+                +"• لا ينقص عهدة الموظف\n"
+                +"• يحفظ سجل المستأجر ودوراته\n";
+              if(paidNow>0) vacMsg+="• تحصيل سابق معترف به: "+paidNow.toLocaleString()+" د.إ (يبقى)\n";
+              if(remNow>0) vacMsg+="• متأخرات: "+remNow.toLocaleString()+" د.إ — ستبقى مسجّلة\n";
+              vacMsg+="\nلإلغاء تحصيل خاطئ استخدم «متأخر»/زر إلغاء التحصيل — وليس فارغ.";
+              if(!confirm(vacMsg)){
+                p.status=prevStatus||"late";
+                set({editPart:unit.id+"-"+p.id});
+                return;
+              }
               // Explicit vacate/staff — mark residue so hydrate will not resurrect collect draft.
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;
               p.draftClearedByVacate=true;p.draftSessionId="";p.draftReverseGen=null;
@@ -3222,7 +3244,7 @@ function renderApp(){
                   set({editPart:unit.id+"-"+p.id});
                   return;
                 }
-                showMsg("⚠ لتغيير الاسم اكتب الاسم الجديد مباشرة — للإخلاء اختر الحالة «فارغ»",5000);
+                showMsg("⚠ لتغيير الاسم اكتب الاسم الجديد مباشرة — للإخلاء اختر الحالة «فارغ» (لا يلغي التحصيل)",5000);
                 p.tenant=p._tenantCommitted || prevTenant || "";
                 set({editPart:unit.id+"-"+p.id});
                 return;
@@ -3379,6 +3401,55 @@ function renderApp(){
               ]);
             })
           ]):null,
+          // دورة الإيجار: تجديد / إخلاء / إلغاء تحصيل — أزرار منفصلة برسائل مالية واضحة
+          (p._rentalId&&typeof engineCommand==="function")?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px",display:"flex",flexDirection:"column",gap:"6px"}},[
+            (p._cycleStart||p._nextCycleStart)?h("div",{style:{fontSize:"12px",color:"#888"}},[
+              "دورة: "+(p._cycleStart||"—")+" → "+(p._cycleEnd||"—")
+              +(p._nextCycleStart?" · التالي: "+p._nextCycleStart:"")
+            ]):null,
+            p._renewVisible?h("button",{"data-testid":"btn-renew-cycle",class:"btn",style:{width:"100%",background:"#0c1a2e",border:"1px solid #1e3a5f",color:"#93c5fd",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},onClick:async()=>{
+              if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+              const nxt=p._nextCycleStart||"";
+              if(!confirm("تجديد شهر\n\n• دورة جديدة للمستأجر نفسه بدون إعادة إدخال\n• يبدأ التحصيل من صفر (مستحق)\n• لا يُنشأ إيصال تلقائياً\n"+(nxt?"• بداية الدورة: "+nxt+"\n":"")+"متابعة؟"))return;
+              try{
+                const key=typeof intentKey==="function"?intentKey("renew",p._rentalId,nxt||"x"):("renew-"+p._rentalId+"-"+(nxt||"x")).slice(0,120);
+                await engineCommand("renewRentalCycle",{rentalId:p._rentalId,asOfDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),earlyWindowDays:7},key);
+                showMsg("✓ تم تجديد الدورة");
+                try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
+                set({editPart:unit.id+"-"+p.id});
+              }catch(e){showMsg("⛔ "+(e&&e.message||e));}
+            }},["تجديد شهر"]):null,
+            Number(p._enginePaid||0)>0?h("button",{"data-testid":"btn-uncollect",class:"btn",style:{width:"100%",background:"#450a0a",border:"1px solid #7f1d1d",color:"#fca5a5",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},onClick:async()=>{
+              if(!isOwner){showMsg("🔒 إلغاء التحصيل للمدير فقط");return;}
+              const paid=Number(p._enginePaid||0);
+              if(!confirm("إلغاء التحصيل\n\nسيُعكس الإيصال وينقص العهدة بمبلغ "+paid.toLocaleString()+" د.إ.\nلا يُخلي البارتشن.\nمتابعة؟"))return;
+              try{
+                p.status="late";p.paid_amount=0;p.partial=false;p.collectionMethod="";p._collectDraft=false;
+                await saveCurData(data);
+                showMsg("✓ تم إلغاء التحصيل");
+                try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
+                set({editPart:unit.id+"-"+p.id});
+              }catch(e){showMsg("⛔ "+(e&&e.message||e));}
+            }},["إلغاء التحصيل (عكس العهدة)"]):null,
+            h("button",{"data-testid":"btn-end-tenancy",class:"btn",style:{width:"100%",background:"#1c1917",border:"1px solid #444",color:"#a8a29e",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},onClick:async()=>{
+              if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+              const paid=Number(p._enginePaid||0);
+              const rem=Math.max(0,(Number(p.rent)||0)-paid);
+              let msg="إخلاء وتحويل لفارغ\n\n• لا يعكس التحصيل ولا ينقص العهدة\n• يحفظ السجل المالي السابق\n";
+              if(paid>0) msg+="• تحصيل معترف به يبقى: "+paid.toLocaleString()+" د.إ\n";
+              if(rem>0) msg+="• متأخرات ستبقى: "+rem.toLocaleString()+" د.إ\n";
+              if(!confirm(msg+"متابعة؟"))return;
+              try{
+                const decision=rem>0?"retain":"none";
+                const key=typeof intentKey==="function"?intentKey("end-tenancy",p._rentalId,decision):("end-"+p._rentalId).slice(0,120);
+                await engineCommand("endTenancy",{rentalId:p._rentalId,endDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),reason:"إخلاء من زر مستقل",arrearsDecision:decision},key);
+                p.status="vacant";p.tenant="";p.paid_amount=0;p.partial=false;p._collectDraft=false;p.draftClearedByVacate=true;
+                showMsg("✓ تم الإخلاء");
+                try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
+                set({editPart:null});
+              }catch(e){showMsg("⛔ "+(e&&e.message||e));}
+            }},["إخلاء وتحويل لفارغ"])
+          ]):null,
           canEdit()?h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>set({editPart:null})},["إغلاق"]),
             isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteP},["حذف البارتشن"]):null,
@@ -3511,11 +3582,33 @@ function renderApp(){
               u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
             }
             else if(val==="late"||val==="pending"){
+              const paidNow=Number(u._enginePaid||0);
+              if(paidNow>0){
+                if(!confirm("إلغاء التحصيل\n\nسيُعكس الإيصال وينقص عهدة الموظف بمبلغ "+paidNow.toLocaleString()+" د.إ.\nهذا ليس إخلاءً.\nمتابعة؟")){
+                  u.status=prevStatus||"collected";
+                  set({editPart:"full-"+u.id});
+                  return;
+                }
+              }
               u.collectionMethod="";u.collectedBy="";u.partial=false;u.paid_amount=0;u._collectDraft=false;u.draftClearedByVacate=false;
               u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
               u.draftReverseGen=null;
             }
             else if(val==="vacant"||val==="staff"){
+              const paidNow=Number(u._enginePaid||0);
+              const remNow=Math.max(0,(Number(u.rent)||0)-paidNow);
+              let vacMsg=(val==="vacant"?"إخلاء وتحويل لفارغ":"تحويل لموظفين")+"\n\n"
+                +"• لا يعكس التحصيلات الصحيحة\n"
+                +"• لا ينقص عهدة الموظف\n"
+                +"• يحفظ سجل المستأجر ودوراته\n";
+              if(paidNow>0) vacMsg+="• تحصيل سابق معترف به: "+paidNow.toLocaleString()+" د.إ (يبقى)\n";
+              if(remNow>0) vacMsg+="• متأخرات: "+remNow.toLocaleString()+" د.إ — ستبقى مسجّلة\n";
+              vacMsg+="\nلإلغاء تحصيل خاطئ استخدم «متأخر»/زر إلغاء التحصيل — وليس فارغ.";
+              if(!confirm(vacMsg)){
+                u.status=prevStatus||"late";
+                set({editPart:"full-"+u.id});
+                return;
+              }
               u.collectionMethod="";u.collectedBy="";u.partial=false;u.paid_amount=0;u._collectDraft=false;
               u.draftClearedByVacate=true;u.draftSessionId="";u.draftReverseGen=null;
             }
@@ -3531,7 +3624,7 @@ function renderApp(){
                   set({editPart:"full-"+u.id});
                   return;
                 }
-                showMsg("⚠ لتغيير الاسم اكتب الاسم الجديد مباشرة — للإخلاء اختر الحالة «فارغ»",5000);
+                showMsg("⚠ لتغيير الاسم اكتب الاسم الجديد مباشرة — للإخلاء اختر الحالة «فارغ» (لا يلغي التحصيل)",5000);
                 u.tenant=u._tenantCommitted || prevTenant || "";
                 set({editPart:"full-"+u.id});
                 return;

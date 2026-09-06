@@ -257,49 +257,47 @@ test("vacant occupancy closes rental and drops unpaid target", async () => {
   assert.equal(ob.state, "cancelled");
 });
 
-test("close rental reverses live cash then cancels obligation; holding returns to 0", async () => {
+test("close rental after cash keeps holding (إخلاء ≠ إلغاء تحصيل); uncollect clears it", async () => {
   const { db, owner, building, yahia } = await setup();
   await run(db, actorFrom(yahia), "createCashReceipt", {
     obligationId: building.obligationId, amountFils: 920000, collectionDate: "2026-09-05",
   });
   const mid = buildDashboardFromDump(db, building.period, "2026-09-15");
   assert.equal(mid.summary.sharedEmployeeHoldingFils, 920000);
-  const closed = await run(db, owner, "closeRental", {
+  await run(db, owner, "closeRental", {
     rentalId: building.rental.rentalId, endDate: "2026-09-30", reason: "انتهاء", setVacant: true,
   });
-  assert.ok((closed.reversedReceiptIds || []).length >= 1);
-  const after = buildDashboardFromDump(db, building.period, "2026-09-15");
-  assert.equal(after.summary.targetFils, 0);
-  assert.equal(after.summary.collectedFils, 0);
-  assert.equal(after.summary.sharedEmployeeHoldingFils, 0);
-  const space = db.dump("spaces").find((s) => s.id === building.space.spaceId);
-  assert.equal(space.occupancy, "vacant");
-  const ob = db.dump("obligations").find((o) => o.id === building.obligationId);
-  assert.equal(ob.state, "cancelled");
+  const afterClose = buildDashboardFromDump(db, building.period, "2026-09-15");
+  assert.equal(afterClose.summary.targetFils, 0);
+  // Paid cash remains in Shared Holding until deposit or explicit uncollect/reverse.
+  assert.equal(afterClose.summary.sharedEmployeeHoldingFils, 920000);
   const rcpt = db.dump("receipts").find((r) => r.obligationId === building.obligationId);
-  assert.equal(rcpt.state, "reversed");
+  assert.equal(rcpt.state, "recognized");
+  await run(db, owner, "uncollectObligation", {
+    obligationId: building.obligationId, reason: "إلغاء تحصيل خاطئ",
+  });
+  const afterUncol = buildDashboardFromDump(db, building.period, "2026-09-15");
+  assert.equal(afterUncol.summary.sharedEmployeeHoldingFils, 0);
+  assert.equal(db.dump("receipts").find((r) => r.id === rcpt.id).state, "reversed");
 });
 
-test("vacate after cash: atomic reverse + holding clear; double vacate idempotent", async () => {
+test("vacate after cash: holding unchanged; double vacate safe; uncollect once", async () => {
   const { db, owner, building, yahia } = await setup();
   await run(db, actorFrom(yahia), "createCashReceipt", {
     obligationId: building.obligationId, amountFils: 17700, collectionDate: "2026-09-06",
   }, opId("vac-cash-177"));
   assert.equal(buildDashboardFromDump(db, building.period, "2026-09-15").summary.sharedEmployeeHoldingFils, 17700);
-  const vac1 = await run(db, owner, "setSpaceOccupancy", {
+  await run(db, owner, "setSpaceOccupancy", {
     spaceId: building.space.spaceId, occupancy: "vacant",
   }, opId("vac-177-a"));
-  assert.ok((vac1.closedRentals || []).some((c) => (c.reversedReceiptIds || []).length >= 1));
-  const after = buildDashboardFromDump(db, building.period, "2026-09-15");
-  assert.equal(after.summary.sharedEmployeeHoldingFils, 0);
-  assert.equal(after.summary.targetFils, 0);
-  assert.equal(after.summary.remainingFils, 0);
-  const rcpt = db.dump("receipts").find((r) => r.obligationId === building.obligationId && Number(r.amountFils) === 17700);
-  assert.equal(rcpt.state, "reversed");
-  // Second vacate must not invent another reversal / must not throw
+  assert.equal(buildDashboardFromDump(db, building.period, "2026-09-15").summary.sharedEmployeeHoldingFils, 17700);
   await run(db, owner, "setSpaceOccupancy", {
     spaceId: building.space.spaceId, occupancy: "vacant",
   }, opId("vac-177-b"));
+  assert.equal(buildDashboardFromDump(db, building.period, "2026-09-15").summary.sharedEmployeeHoldingFils, 17700);
+  await run(db, owner, "uncollectObligation", {
+    obligationId: building.obligationId, reason: "إلغاء تحصيل",
+  }, opId("vac-177-uncol"));
   assert.equal(buildDashboardFromDump(db, building.period, "2026-09-15").summary.sharedEmployeeHoldingFils, 0);
   const revCount = db.dump("receipts").filter((r) => r.obligationId === building.obligationId && r.state === "reversed").length;
   assert.equal(revCount, 1);

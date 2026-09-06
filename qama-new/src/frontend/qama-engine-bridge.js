@@ -383,6 +383,11 @@ function mapDashboardToMonth(dash) {
         _enginePaid: filsToAed(sp.paidFils),
         _receipts: sp.spaceReceipts || [],
         _tenantCommitted: sp.tenantName || "",
+        _renewVisible: !!sp.renewVisible,
+        _cycleStart: sp.cycleStart || "",
+        _cycleEnd: sp.cycleEnd || "",
+        _nextCycleStart: sp.nextCycleStart || "",
+        _rentalCycleId: sp.rentalCycleId || "",
       });
     } else {
       const partitions = (u.spaces || []).map((sp) => {
@@ -425,6 +430,11 @@ function mapDashboardToMonth(dash) {
           _enginePaid: filsToAed(sp.paidFils),
           _receipts: sp.spaceReceipts || [],
           _tenantCommitted: sp.tenantName || extraUse.tenant || "",
+          _renewVisible: !!sp.renewVisible,
+          _cycleStart: sp.cycleStart || "",
+          _cycleEnd: sp.cycleEnd || "",
+          _nextCycleStart: sp.nextCycleStart || "",
+          _rentalCycleId: sp.rentalCycleId || "",
         };
       });
       units.push({
@@ -650,19 +660,45 @@ async function maybeUncollect(item, dashSp) {
   const already = dashSp ? Number(dashSp.paidFils || 0) : 0;
   // OLD UI historically left paid_amount set when picking متأخر after محصّل.
   // Unpaid intent: late/pending with partial off, OR explicit paid_amount 0.
+  // IMPORTANT: vacant/staff must NEVER uncollect here — إخلاء ≠ إلغاء تحصيل.
   const unpaidUi =
     ((item.status === "late" || item.status === "pending") && !item.partial) ||
     ((item.status === "late" || item.status === "pending") && Number(item.paid_amount || 0) === 0);
-  // Vacate/staff must clear live money too (server closeRental also reverses; belt-and-suspenders).
-  const vacateUi = item.status === "vacant" || item.status === "staff";
-  if ((unpaidUi || vacateUi) && already > 0) {
+  if (unpaidUi && already > 0) {
     const receipts = Array.isArray(item._receipts) ? item._receipts
       : Array.isArray(dashSp?.spaceReceipts) ? dashSp.spaceReceipts
       : [];
     await engineCommand("uncollectObligation", {
-      obligationId: ob, reason: vacateUi ? "إفراغ الوحدة من الشاشة" : "تعديل الحالة من الشاشة"
+      obligationId: ob, reason: "إلغاء تحصيل من الشاشة"
     }, uncollectOpKey(ob, already, receipts));
   }
+}
+
+async function renewCycleForItem(item, dashSp) {
+  const rentalId = item._rentalId || dashSp?.rentalId;
+  if (!rentalId) throw new Error("NO_RENTAL_TO_RENEW");
+  const asOf = engineToday();
+  const key = intentKey("renew", rentalId, dashSp?.nextCycleStart || item.nextCycleStart || asOf);
+  return engineCommand("renewRentalCycle", { rentalId, asOfDate: asOf, earlyWindowDays: 7 }, key);
+}
+
+async function endTenancyForItem(item, dashSp, { retainArrears = false, reason = "إخلاء من الشاشة" } = {}) {
+  const rentalId = item._rentalId || dashSp?.rentalId;
+  if (!rentalId) throw new Error("NO_RENTAL_TO_END");
+  const remaining = Number(dashSp?.remainingFils || 0);
+  const decision = retainArrears || remaining > 0 ? "retain" : "none";
+  if (remaining > 0 && !retainArrears) {
+    const err = new Error("ARREARS_CONFIRMATION_REQUIRED");
+    err.code = "ARREARS_CONFIRMATION_REQUIRED";
+    err.arrearsFils = remaining;
+    throw err;
+  }
+  return engineCommand("endTenancy", {
+    rentalId,
+    endDate: engineToday(),
+    reason: String(reason).slice(0, 300),
+    arrearsDecision: decision,
+  }, intentKey("end-tenancy", rentalId, decision));
 }
 
 async function syncOccupancyAndTenant(item, dashSp) {
@@ -671,33 +707,36 @@ async function syncOccupancyAndTenant(item, dashSp) {
   const engineOcc = dashSp ? (dashSp.occupancy || "vacant") : null;
   let rentalId = item._rentalId || dashSp?.rentalId || null;
 
-  // Vacant/staff must end live tenancy — but MUST NOT wipe draft tenant/rent the user
-  // typed while the card is still vacant (start-date / quiet saves used to clear
-  // item.tenant="" and then status→rented threw TENANT_REQUIRED).
+  // Vacant/staff must end live tenancy WITHOUT reversing collections (use endTenancy).
+  // MUST NOT wipe draft tenant/rent the user typed while the card is still vacant
+  // (start-date / quiet saves used to clear item.tenant="" → TENANT_REQUIRED).
   if (occ === "vacant" || occ === "staff") {
     const mustClose = (engineOcc && engineOcc !== occ) || !!rentalId;
-    // Include rentalId so vacate→rent→vacate is a NEW logical op, not a stale
-    // replay of the previous cycle's setSpaceOccupancy(vacant) (same payload).
-    const vacKey = intentKey("occ", item._spaceId, occ, rentalId || "norent");
-    if (engineOcc !== occ) {
-      await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: occ }, vacKey);
-    } else if (rentalId) {
+    if (rentalId) {
+      const remaining = Number(dashSp?.remainingFils || 0);
       try {
-        await engineCommand("closeRental", {
-          rentalId, endDate: engineToday(), reason: "تأكيد إفراغ من الشاشة",
-          setVacant: occ === "vacant",
-        }, intentKey("close-force", rentalId));
+        await engineCommand("endTenancy", {
+          rentalId,
+          endDate: engineToday(),
+          reason: occ === "staff" ? "تحويل لموظفين من الشاشة" : "إخلاء وتحويل لفارغ من الشاشة",
+          arrearsDecision: remaining > 0 ? "retain" : "none",
+        }, intentKey("end-tenancy", rentalId, remaining > 0 ? "retain" : "none"));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/RENTAL_ALREADY_CLOSED|RENTAL_NOT_ACTIVE|RENTAL_NOT_FOUND/.test(code)) throw e;
       }
-      try {
-        await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: occ },
-          intentKey("occ-force", item._spaceId, occ, rentalId));
-      } catch (e2) {
-        const c2 = String((e2 && (e2.message || e2.code)) || e2);
-        if (!/NOTHING_TO_UPDATE/.test(c2)) throw e2;
+      if (occ === "staff") {
+        try {
+          await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: "staff" },
+            intentKey("occ-staff", item._spaceId, rentalId));
+        } catch (e2) {
+          const c2 = String((e2 && (e2.message || e2.code)) || e2);
+          if (!/NOTHING_TO_UPDATE|SPACE_/.test(c2)) throw e2;
+        }
       }
+    } else if (engineOcc !== occ) {
+      await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: occ },
+        intentKey("occ", item._spaceId, occ, "norent"));
     }
     if (mustClose) {
       item._rentalId = null;
@@ -1326,6 +1365,7 @@ if (typeof window !== "undefined" && typeof __QAMA_EMULATOR__ !== "undefined" &&
   window.__qamaTest = {
     collectionOpKey, uncollectOpKey, shortOb, receiptCounts, formatEngineError, intentKey, opId,
     engineCommand, refreshEngine, applyEngineDiff, applyCollection, maybeUncollect,
+    renewCycleForItem, endTenancyForItem,
     authState() {
       return {
         screen: typeof S !== "undefined" ? S.screen : null,

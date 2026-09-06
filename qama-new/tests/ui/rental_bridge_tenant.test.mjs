@@ -14,6 +14,17 @@ const html = readFileSync(resolve(root, "src/frontend/index.html"), "utf8");
 const assemble = readFileSync(resolve(root, "scripts/assemble_old_ui.mjs"), "utf8");
 const commit = readFileSync(resolve(root, "functions/commands/commit_work_request.mjs"), "utf8");
 
+test("vacate path must not call uncollectObligation", () => {
+  const sync = bridge.slice(
+    bridge.indexOf("async function maybeUncollect"),
+    bridge.indexOf("async function renewCycleForItem"),
+  );
+  assert.doesNotMatch(sync, /vacateUi/);
+  assert.match(sync, /إخلاء ≠ إلغاء تحصيل/);
+  assert.match(bridge, /endTenancy/);
+  assert.match(bridge, /renewRentalCycle/);
+});
+
 test("vacant path keeps draft tenant unless closing a live tenancy", () => {
   assert.match(bridge, /const mustClose = \(engineOcc && engineOcc !== occ\) \|\| !!rentalId/);
   assert.match(bridge, /keep draft fields for the next rent save/);

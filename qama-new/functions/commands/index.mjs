@@ -15,6 +15,9 @@ import {
   periodOf, dueDateFor, obligationIdFor,
   assertPositiveFils, isFils, isPlaceholderTenant,
 } from "../domain/finance.mjs";
+import {
+  buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
+} from "../domain/rental_cycle.mjs";
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
 
 /** Cancel unpaid active obligations for a rental (no live receipts). History with money is kept. */
@@ -44,8 +47,8 @@ async function cancelUnpaidObligationsForRental(ctx, rentalId, reason, { ignoreR
 
 /**
  * Reverse every recognized receipt on a rental (idempotent per operationId+receiptId).
- * Required before vacate/close: otherwise cash stays in Shared Holding while the space
- * looks empty and monthly target drops — the production vacate/holding contradiction.
+ * Used only when reverseLiveMoney:true (legacy/emergency). Normal إخلاء keeps receipts;
+ * إلغاء تحصيل uses uncollectObligation / reverseReceipt.
  */
 async function reverseLiveReceiptsForRental(ctx, rentalId, reason) {
   const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
@@ -110,10 +113,14 @@ async function reverseLiveReceiptsForRental(ctx, rentalId, reason) {
   return { reversedReceiptIds, reversalIds };
 }
 
-/** Close an active rental, reverse live money, vacate optionally, cancel unpaid obligations. */
-async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant }) {
+/** Close an active rental. By default does NOT reverse live receipts (إخلاء ≠ إلغاء تحصيل).
+ *  Pass reverseLiveMoney:true only for legacy emergency paths — prefer uncollectObligation. */
+async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, reverseLiveMoney = false, retainArrears = false }) {
   const closeReason = reason || "rental closed";
-  const reversed = await reverseLiveReceiptsForRental(ctx, rental.id, closeReason);
+  let reversed = { reversedReceiptIds: [], reversalIds: [] };
+  if (reverseLiveMoney) {
+    reversed = await reverseLiveReceiptsForRental(ctx, rental.id, closeReason);
+  }
   ctx.tx.update("rentals", rental.id, {
     state: "closed",
     endDate,
@@ -122,15 +129,47 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant }) {
     closeReason,
   });
   if (setVacant) ctx.tx.update("spaces", rental.spaceId, { occupancy: "vacant" });
-  // In-tx queries may still see pre-update receipt state — ignore ids we just reversed.
-  const cancelledObligationIds = await cancelUnpaidObligationsForRental(
-    ctx, rental.id, closeReason, { ignoreReceiptIds: reversed.reversedReceiptIds },
-  );
+
+  let cancelledObligationIds = [];
+  if (retainArrears) {
+    const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+    for (const ob of obligations) {
+      if (ob.state !== "active") continue;
+      const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
+      const livePaid = receipts
+        .filter((r) => r.state === RECEIPT_STATE.RECOGNIZED)
+        .reduce((s, r) => s + Number(r.amountFils || 0), 0);
+      const remaining = Math.max(0, Number(ob.amountFils || 0) - livePaid);
+      if (remaining > 0) {
+        ctx.tx.update("obligations", ob.id, {
+          retainArrearsAfterVacate: true,
+          arrearsRemainingFilsSnapshot: remaining,
+        });
+      } else if (!livePaid) {
+        // Fully unpaid with no money movement — cancel clean vacancy leftover.
+        ctx.tx.update("obligations", ob.id, {
+          state: "cancelled",
+          cancelledBy: ctx.actor.userId,
+          cancelledAt: ctx.now,
+          cancelReason: closeReason,
+        });
+        cancelledObligationIds.push(ob.id);
+      }
+      // Fully paid with receipts: leave as active history; KPI excludes via closed rental
+      // unless retainArrearsAfterVacate (not set when remaining=0).
+    }
+  } else {
+    cancelledObligationIds = await cancelUnpaidObligationsForRental(
+      ctx, rental.id, closeReason, { ignoreReceiptIds: reversed.reversedReceiptIds },
+    );
+  }
   audit(ctx, "rental_closed", "rental", rental.id, {
     reason: closeReason,
     cancelledObligationIds,
     reversedReceiptIds: reversed.reversedReceiptIds,
     reversalIds: reversed.reversalIds,
+    reverseLiveMoney: !!reverseLiveMoney,
+    retainArrears: !!retainArrears,
   });
   return {
     rentalId: rental.id,
@@ -291,6 +330,7 @@ export const PERMISSIONS = Object.freeze({
   // could already add partitions / change occupancy by writing the month document.
   createSpace: BOTH, updateSpace: BOTH, setSpaceOccupancy: BOTH,
   createRental: BOTH, updateRentalRent: BOTH, updateRentalTenant: BOTH, updateRentalSchedule: OWNER, closeRental: BOTH,
+  renewRentalCycle: BOTH, endTenancy: BOTH,
   generateObligations: OWNER, cancelObligation: OWNER,
   createCashReceipt: BOTH,
   submitBankReceipt: BOTH, approveBankReceipt: OWNER, rejectBankReceipt: OWNER,
@@ -350,6 +390,18 @@ export const SCHEMAS = Object.freeze({
     dueDayOfMonth: S.opt(S.int(1, 31)),
   },
   closeRental: { rentalId: S.id(), endDate: S.date(), reason: S.str(300), setVacant: S.opt(S.bool()) },
+  renewRentalCycle: {
+    rentalId: S.id(),
+    asOfDate: S.opt(S.date()),
+    earlyWindowDays: S.opt(S.int(0, 31)),
+  },
+  endTenancy: {
+    rentalId: S.id(),
+    endDate: S.date(),
+    reason: S.str(300),
+    /** retain = keep unpaid arrears visible; required when remaining > 0 */
+    arrearsDecision: S.opt(S.enum(["retain", "none"])),
+  },
 
   generateObligations: { period: S.period() },
   cancelObligation: { obligationId: S.id(), reason: S.str(300) },
@@ -542,7 +594,7 @@ function sortKeys(v) {
 /* ═════════════════════ audit ═════════════════════ */
 
 function audit(ctx, action, targetType, targetId, extra = {}) {
-  ctx.tx.create("auditEvents", `audit:${ctx.operationId}:${targetType}:${targetId}`, {
+  ctx.tx.create("auditEvents", `audit:${ctx.operationId}:${action}:${targetType}:${targetId}`.slice(0, 700), {
     at: ctx.now, actorUserId: ctx.actor.userId, actorRole: ctx.actor.role,
     action, targetType, targetId, operationId: ctx.operationId, ...extra,
   });
@@ -754,9 +806,8 @@ const HANDLERS = {
     return { rentalId: rental.id, dueDayOfMonth: nextDueDay, revisedObligationIds: revised.map((r) => r.obligationId) };
   },
   /**
-   * Closing ends the tenancy. Unpaid obligations are cancelled so Target/Late cannot
-   * keep a due on a vacant space. Obligations with live receipts stay as audit history
-   * but the read model excludes closed-rental obligations from monthly KPIs.
+   * Closing ends the tenancy without reversing collections (إخلاء ≠ إلغاء تحصيل).
+   * Prefer endTenancy for vacate-with-arrears-confirm. reverseLiveMoney stays false.
    */
   async closeRental(ctx) {
     const rental = await ctx.tx.get("rentals", ctx.payload.rentalId);
@@ -766,39 +817,199 @@ const HANDLERS = {
       endDate: ctx.payload.endDate,
       reason: ctx.payload.reason,
       setVacant: !!ctx.payload.setVacant,
+      reverseLiveMoney: false,
+      retainArrears: false,
     });
+  },
+
+  /**
+   * تجديد شهر — create the next anniversary cycle for the same tenant/rent/space.
+   * Idempotent by deterministic rentalCycleId. Never mints a receipt.
+   */
+  async renewRentalCycle(ctx) {
+    const rental = await ctx.tx.get("rentals", ctx.payload.rentalId);
+    if (!rental) throw new DomainError("RENTAL_NOT_FOUND");
+    if (rental.state !== "active") throw new DomainError("RENTAL_NOT_ACTIVE");
+    const space = await ctx.tx.get("spaces", rental.spaceId);
+    if (!space || space.occupancy === "vacant" || space.occupancy === "staff") {
+      throw new DomainError("SPACE_NOT_RENTED", { spaceId: rental.spaceId });
+    }
+
+    const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+    const cycles = obligations
+      .filter((o) => o && o.state !== "cancelled")
+      .map((o) => ({
+        ...o,
+        _start: o.cycleStart || o.dueDate || `${o.period}-01`,
+      }))
+      .sort((a, b) => String(a._start).localeCompare(String(b._start)));
+    if (!cycles.length) throw new DomainError("NO_CYCLE_TO_RENEW", { rentalId: rental.id });
+
+    const latest = cycles[cycles.length - 1];
+    const latestStart = assertIsoDate(latest.cycleStart || latest.dueDate || latest._start);
+    const anniversaryDay = Number(
+      rental.dueDayOfMonth
+      || latest.anniversaryDay
+      || String(rental.startDate || latestStart).slice(8, 10),
+    ) || Number(latestStart.slice(8, 10));
+    const nextStart = nextCycleStart(latestStart, 1, anniversaryDay);
+    const fields = buildCycleFields({
+      rentalId: rental.id,
+      cycleStart: nextStart,
+      previousCycleId: latest.rentalCycleId || latest.id,
+      amountFils: rental.contractualAmountFils,
+      tenantName: rental.tenantName,
+      anniversaryDay,
+    });
+    const existing = await ctx.tx.get("obligations", fields.id);
+    if (existing) {
+      return {
+        alreadyApplied: true,
+        rentalCycleId: fields.id,
+        obligationId: fields.id,
+        cycleStart: fields.cycleStart,
+        cycleEnd: fields.cycleEnd,
+        previousCycleId: fields.previousCycleId,
+      };
+    }
+
+    const asOf = assertIsoDate(ctx.payload.asOfDate || ctx.now.slice(0, 10));
+    const earlyWindowDays = ctx.payload.earlyWindowDays != null ? ctx.payload.earlyWindowDays : 7;
+    if (!renewButtonVisible(nextStart, asOf, earlyWindowDays)) {
+      throw new DomainError("CYCLE_NOT_DUE_YET", {
+        nextCycleStart: nextStart, asOfDate: asOf, earlyWindowDays,
+      });
+    }
+
+    ctx.tx.create("obligations", fields.id, {
+      id: fields.id,
+      rentalCycleId: fields.rentalCycleId,
+      rentalId: rental.id,
+      propertyId: rental.propertyId,
+      unitId: rental.unitId,
+      spaceId: rental.spaceId,
+      period: fields.period,
+      amountFils: fields.amountFils,
+      dueDate: fields.dueDate,
+      cycleStart: fields.cycleStart,
+      cycleEnd: fields.cycleEnd,
+      previousCycleId: fields.previousCycleId,
+      anniversaryDay: fields.anniversaryDay,
+      tenantNameSnapshot: fields.tenantNameSnapshot,
+      state: "active",
+      ...base(ctx),
+    });
+    audit(ctx, "rental_cycle_renewed", "obligation", fields.id, {
+      rentalId: rental.id,
+      previousCycleId: fields.previousCycleId,
+      cycleStart: fields.cycleStart,
+      cycleEnd: fields.cycleEnd,
+      amountFils: fields.amountFils,
+      asOfDate: asOf,
+    });
+    return {
+      alreadyApplied: false,
+      rentalCycleId: fields.id,
+      obligationId: fields.id,
+      cycleStart: fields.cycleStart,
+      cycleEnd: fields.cycleEnd,
+      previousCycleId: fields.previousCycleId,
+      amountFils: fields.amountFils,
+    };
+  },
+
+  /**
+   * إخلاء وتحويل لفارغ — end tenancy, keep collection history & holding.
+   * Does NOT reverse receipts. Arrears require explicit arrearsDecision:"retain".
+   */
+  async endTenancy(ctx) {
+    const rental = await ctx.tx.get("rentals", ctx.payload.rentalId);
+    if (!rental) throw new DomainError("RENTAL_NOT_FOUND");
+    if (rental.state === "closed") throw new DomainError("RENTAL_ALREADY_CLOSED");
+
+    const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+    let arrearsFils = 0;
+    for (const ob of obligations) {
+      if (ob.state !== "active") continue;
+      const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
+      const paid = receipts
+        .filter((r) => r.state === RECEIPT_STATE.RECOGNIZED)
+        .reduce((s, r) => s + Number(r.amountFils || 0), 0);
+      arrearsFils += Math.max(0, Number(ob.amountFils || 0) - paid);
+    }
+    const decision = ctx.payload.arrearsDecision || "none";
+    if (arrearsFils > 0 && decision !== "retain") {
+      throw new DomainError("ARREARS_CONFIRMATION_REQUIRED", {
+        arrearsFils,
+        message: "توجد متأخرات — اختر retain للإخلاء مع الإبقاء على المتأخرات",
+      });
+    }
+
+    const closed = await closeRentalInTx(ctx, rental, {
+      endDate: ctx.payload.endDate,
+      reason: ctx.payload.reason,
+      setVacant: true,
+      reverseLiveMoney: false,
+      retainArrears: decision === "retain",
+    });
+    audit(ctx, "tenancy_ended", "rental", rental.id, {
+      reason: ctx.payload.reason,
+      arrearsFils,
+      arrearsDecision: decision,
+      reversedReceiptIds: closed.reversedReceiptIds,
+    });
+    return { ...closed, arrearsFils, arrearsDecision: decision };
   },
 
   /* ---------- obligations ---------- */
   /**
-   * Deterministic ids make this idempotent at the database, not merely at the operation
-   * record: two concurrent calls for the same period cannot both create.
-   * ONLY legitimate ACTIVE rentals on non-vacant spaces get obligations.
-   * Closed / reset / archive rentals never regenerate.
+   * Seeds ONLY the first anniversary cycle (period of rental.startDate).
+   * Later cycles are created exclusively by renewRentalCycle (user press).
    */
   async generateObligations(ctx) {
     const period = ctx.payload.period;
     const rentals = await ctx.tx.query("rentals", [["state", "==", "active"]]);
     const created = [];
     for (const rental of rentals) {
-      if (String(rental.startDate).slice(0, 7) > period) continue;
+      if (periodOf(rental.startDate) !== period) continue;
       const space = await ctx.tx.get("spaces", rental.spaceId);
       if (!space || space.active === false) continue;
       if (space.occupancy === "vacant" || space.occupancy === "staff") continue;
       if (isPlaceholderTenant(rental.tenantName)) continue;
-      const id = obligationIdFor(rental.id, period);
-      const existing = await ctx.tx.get("obligations", id);
-      // Existing cancelled/closed docs must never be resurrected by regenerate.
-      if (existing) continue;
-      ctx.tx.create("obligations", id, {
-        id, rentalId: rental.id, propertyId: rental.propertyId, unitId: rental.unitId,
-        spaceId: rental.spaceId, period,
+      const cycleStart = assertIsoDate(rental.startDate);
+      const anniversaryDay = Number(rental.dueDayOfMonth) || Number(cycleStart.slice(8, 10));
+      const fields = buildCycleFields({
+        rentalId: rental.id,
+        cycleStart,
+        previousCycleId: null,
         amountFils: rental.contractualAmountFils,
-        dueDate: dueDateFor(period, rental.dueDayOfMonth),
-        tenantNameSnapshot: rental.tenantName,
-        state: "active", ...base(ctx),
+        tenantName: rental.tenantName,
+        anniversaryDay,
       });
-      created.push(id);
+      // Prefer anniversary id; also skip legacy calendar id if present.
+      const legacyId = obligationIdFor(rental.id, period);
+      const existing = (await ctx.tx.get("obligations", fields.id))
+        || (await ctx.tx.get("obligations", legacyId));
+      if (existing) continue;
+      ctx.tx.create("obligations", fields.id, {
+        id: fields.id,
+        rentalCycleId: fields.rentalCycleId,
+        rentalId: rental.id,
+        propertyId: rental.propertyId,
+        unitId: rental.unitId,
+        spaceId: rental.spaceId,
+        period: fields.period,
+        amountFils: fields.amountFils,
+        dueDate: fields.dueDate,
+        cycleStart: fields.cycleStart,
+        cycleEnd: fields.cycleEnd,
+        previousCycleId: null,
+        anniversaryDay: fields.anniversaryDay,
+        tenantNameSnapshot: fields.tenantNameSnapshot,
+        state: "active",
+        ...base(ctx),
+      });
+      created.push(fields.id);
     }
     audit(ctx, "obligations_generated", "period", period, { count: created.length });
     return { period, created: created.length, obligationIds: created };
