@@ -1,0 +1,14 @@
+{
+  "at": "2026-09-06T02:26:49.659Z",
+  "mode": "verify",
+  "amountAed": 188,
+  "stamp": "mtp6xrgo",
+  "beforeK": {
+    "target": 0,
+    "collected": 0,
+    "remaining": 0,
+    "atEmp": 0,
+    "holding": 0
+  },
+  "liveReceipts": []
+}

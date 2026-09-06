@@ -33,3 +33,6 @@ At investigation start, **no live recognized 100** remained (holding 0). Closest
 
 ## Remaining
 **Nothing** for this incident. Stop.
+
+## Commit
+`a988f1c` — Fix vacate/close to reverse live cash so employee holding clears.
