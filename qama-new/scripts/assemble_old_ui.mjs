@@ -20,11 +20,14 @@ let bridge = readFileSync(bridgePath, "utf8");
 const draftPartial = readFileSync(draftPartialPath, "utf8")
   .replace(/^export\s+/gm, "")
   .replace(/\/\*\*[\s\S]*?\*\//, "/* draft_partial_merge.mjs (assembled) */");
-// Prefer assembled module over any inline copy in the bridge.
+// Prefer assembled module over any inline copy in the bridge (through mergeDraftStatus).
 bridge = bridge.replace(
-  /\/\*\*\s*\n\s*\* Draft partial\/paid from extras[\s\S]*?\nfunction mergeDraftPartial\([\s\S]*?\n\}\n/,
+  /\/\*\*\s*\n\s*\* Draft partial\/paid from extras[\s\S]*?\nfunction mergeDraftStatus\([\s\S]*?\n\}\n/,
   draftPartial + "\n"
 );
+if (!bridge.includes("function isStaleCollectDraft")) {
+  bridge = draftPartial + "\n" + bridge;
+}
 if (!bridge.includes("function mergeDraftPartial")) {
   bridge = draftPartial + "\n" + bridge;
 }

@@ -211,8 +211,20 @@ function engineStatusToOld(sp) {
 /**
  * Draft partial/paid from extras may survive hydrate for mid-edit only.
  * NEVER resurrect after uncollect/reverse, and NEVER carry into a new rental.
- * (Source of truth: draft_partial_merge.mjs — keep in sync / assembled prepend.)
+ * (Source of truth: draft_partial_merge.mjs — assemble replaces this block.)
  */
+function reverseCount(sp) {
+  const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
+  return receipts.filter((r) => r && r.state === "reversed").length;
+}
+function isStaleCollectDraft(extra, sp) {
+  if (!extra) return false;
+  const rev = reverseCount(sp);
+  if (!(rev > 0)) return false;
+  const gen = Number(extra.draftReverseGen);
+  if (!Number.isFinite(gen)) return true;
+  return gen < rev;
+}
 function mergeDraftPartial(mapped, extra, sp) {
   const enginePaid = Number(mapped.paid_amount || 0);
   if (enginePaid > 0 || mapped.partial) {
@@ -233,10 +245,39 @@ function mergeDraftPartial(mapped, extra, sp) {
   }
   const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
   const hasRecognized = receipts.some((r) => r && r.state === "recognized");
-  const hasReversed = receipts.some((r) => r && r.state === "reversed");
   if (hasRecognized) return { partial: false, paid_amount: enginePaid };
-  if (hasReversed) return { partial: false, paid_amount: 0 };
+  if (isStaleCollectDraft(extra, sp)) {
+    return { partial: false, paid_amount: 0 };
+  }
   return { partial: draftPartial, paid_amount: draftPaid };
+}
+function mergeDraftStatus(mapped, extra, sp) {
+  const draft = String((extra && extra.status) || "");
+  const eng = String((mapped && mapped.status) || "");
+  const tenantOk = !!(
+    (extra && String(extra.tenant || "").trim()) ||
+    (sp && String(sp.tenantName || "").trim())
+  );
+  const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
+  const hasRecognized = receipts.some((r) => r && r.state === "recognized");
+  if (hasRecognized) return {};
+  const out = {};
+  if (extra && extra.collectionMethod && !isStaleCollectDraft(extra, sp)) {
+    out.collectionMethod = extra.collectionMethod;
+  }
+  if (!tenantOk) return out;
+  if ((eng === "vacant" || eng === "staff") && (draft === "late" || draft === "pending")) {
+    out.status = draft;
+    return out;
+  }
+  if (draft === "collected") {
+    if (isStaleCollectDraft(extra, sp)) return out;
+    out._collectDraft = true;
+    if (eng === "vacant" || eng === "staff") out.status = "late";
+    else out.status = "collected";
+    return out;
+  }
+  return out;
 }
 
 function applyUiConfig(ui) {
@@ -325,6 +366,7 @@ function mapDashboardToMonth(dash) {
         draftSessionId: extra.draftSessionId || "",
         draftClearedByVacate: !!extra.draftClearedByVacate,
         draftForRentalId: extra.draftForRentalId || "",
+        draftReverseGen: Number.isFinite(Number(extra.draftReverseGen)) ? Number(extra.draftReverseGen) : null,
         ...mapped,
         ...mergeDraftPartial(mapped, (() => {
           const abandoned = isVacateResidueExtra(extra, sp, mapped);
@@ -372,6 +414,7 @@ function mapDashboardToMonth(dash) {
           draftSessionId: extraUse.draftSessionId || "",
           draftClearedByVacate: !!extraUse.draftClearedByVacate,
           draftForRentalId: extraUse.draftForRentalId || "",
+          draftReverseGen: Number.isFinite(Number(extraUse.draftReverseGen)) ? Number(extraUse.draftReverseGen) : null,
           ...mapped,
           ...mergeDraftPartial(mapped, extraUse, sp),
           ...mergeDraftStatus(mapped, extraUse, sp),
@@ -514,6 +557,8 @@ function extrasFromData(data) {
       draftForRentalId: x._rentalId || x.draftForRentalId || "",
       draftSessionId: x.draftSessionId || "",
       draftClearedByVacate: !!x.draftClearedByVacate,
+      // Reverse-count when this collect/partial draft was opened (stale if behind live).
+      draftReverseGen: Number.isFinite(Number(x.draftReverseGen)) ? Number(x.draftReverseGen) : null,
     };
   };
   (data.units || []).forEach((u) => (u.partitions || []).forEach(remember));

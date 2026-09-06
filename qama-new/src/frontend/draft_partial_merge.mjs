@@ -7,7 +7,26 @@
  *  - auto-create receipts (applyCollection still requires collectionMethod)
  *  - carry a prior tenant's draft into a new rental (draftForRentalId mismatch)
  *  - paint the card/KPI as confirmed «محصّل» before a recognized receipt exists
+ *
+ * draftReverseGen: reverse-count at the moment the *current* collect/partial draft
+ * was opened. A draft with missing/older gen than live reverse count is stale
+ * (pre-uncollect) and must not reopen method/paid or re-mint money.
  */
+export function reverseCount(sp) {
+  const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
+  return receipts.filter((r) => r && r.state === "reversed").length;
+}
+
+export function isStaleCollectDraft(extra, sp) {
+  if (!extra) return false;
+  const rev = reverseCount(sp);
+  if (!(rev > 0)) return false;
+  const gen = Number(extra.draftReverseGen);
+  // Missing gen after any reverse ⇒ predates the uncollect bookkeeping.
+  if (!Number.isFinite(gen)) return true;
+  return gen < rev;
+}
+
 export function mergeDraftPartial(mapped, extra, sp) {
   const enginePaid = Number(mapped.paid_amount || 0);
   if (enginePaid > 0 || mapped.partial) {
@@ -28,12 +47,9 @@ export function mergeDraftPartial(mapped, extra, sp) {
   }
   const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
   const hasRecognized = receipts.some((r) => r && r.state === "recognized");
-  const hasReversed = receipts.some((r) => r && r.state === "reversed");
   if (hasRecognized) return { partial: false, paid_amount: enginePaid };
-  // Reversed history must not resurrect a *stale* draft — but an intentional new
-  // partial draft after uncollect (extras.partial / paid just set) must survive hydrate
-  // so the method picker can appear and applyCollection can run.
-  if (hasReversed && !(draftPartial || draftPaid > 0)) {
+  // Stale pre-uncollect draft (paid/method from before reverse) must die.
+  if (isStaleCollectDraft(extra, sp)) {
     return { partial: false, paid_amount: 0 };
   }
   return { partial: draftPartial, paid_amount: draftPaid };
@@ -56,25 +72,25 @@ export function mergeDraftStatus(mapped, extra, sp) {
   if (hasRecognized) return {};
 
   const out = {};
-  if (extra && extra.collectionMethod) {
+  // Never restore collectionMethod from a pre-uncollect draft.
+  if (extra && extra.collectionMethod && !isStaleCollectDraft(extra, sp)) {
     out.collectionMethod = extra.collectionMethod;
   }
 
   if (!tenantOk) return out;
 
-  // Vacant engine + rented draft (late/pending): show unpaid rented, not collected.
   if ((eng === "vacant" || eng === "staff") && (draft === "late" || draft === "pending")) {
     out.status = draft;
     return out;
   }
 
-  // User chose محصّل in the form but money is not recognized yet — form draft only.
-  // Keep status "collected" so a later method pick (cash/bank) still runs applyCollection
-  // after hydrate. Cards/KPIs stay unpaid via displayStatus/paidValue + _collectDraft.
   if (draft === "collected") {
+    if (isStaleCollectDraft(extra, sp)) {
+      // Pre-uncollect «محصّل» extras must not reopen as collect draft.
+      return out;
+    }
     out._collectDraft = true;
     if (eng === "vacant" || eng === "staff") {
-      // No rental yet: occupancy intent without confirming cash.
       out.status = "late";
     } else {
       out.status = "collected";

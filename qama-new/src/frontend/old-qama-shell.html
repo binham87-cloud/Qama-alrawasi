@@ -3185,15 +3185,24 @@ function renderApp(){
               else { try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){} }
               return;
             }
-            if(val==="collected"){p.partial=false;p.collectionMethod="";p._collectDraft=true;p.draftClearedByVacate=false;if(!p.draftSessionId)p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);}
+            if(val==="collected"){
+              p.partial=false;p.collectionMethod="";p._collectDraft=true;p.draftClearedByVacate=false;
+              p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              // Bind to reverse count; +1 if live money still visible (uncollect in-flight).
+              const _rc=(p._receipts||[]);
+              const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+              p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            }
             else if(val==="late"||val==="pending"){
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;p.draftClearedByVacate=false;
-              if(!p.draftSessionId)p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              // Rotate session and clear gen — any leftover collect extras become stale after reverse.
+              p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              p.draftReverseGen=null;
             }
             else if(val==="vacant"||val==="staff"){
               // Explicit vacate/staff — mark residue so hydrate will not resurrect collect draft.
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;
-              p.draftClearedByVacate=true;p.draftSessionId="";
+              p.draftClearedByVacate=true;p.draftSessionId="";p.draftReverseGen=null;
             }
             if(val==="collected"||val==="late"||val==="pending"){
               if(p.note==="فارغ") p.note="";
@@ -3230,6 +3239,16 @@ function renderApp(){
             }
             if(val==="cash") p.collectedBy=S.user;
             else if(val==="bank") p.collectedBy="";
+            const _rc=(p._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!p.draftSessionId) p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+          }
+          if(field==="partial"||field==="paid_amount"){
+            const _rc=(p._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!p.draftSessionId) p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
           }
           if(field==="paid_amount"&&Number(val)>0&&!p.collectedBy) p.collectedBy=S.user;
           // مسار الموظف: يحفظ في localStorage فقط (بدون Firebase، بدون audit log)
@@ -3484,14 +3503,21 @@ function renderApp(){
               else { try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){} }
               return;
             }
-            if(val==="collected"){u.partial=false;u.collectionMethod="";u._collectDraft=true;u.draftClearedByVacate=false;if(!u.draftSessionId)u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);}
+            if(val==="collected"){
+              u.partial=false;u.collectionMethod="";u._collectDraft=true;u.draftClearedByVacate=false;
+              u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              const _rc=(u._receipts||[]);
+              const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+              u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            }
             else if(val==="late"||val==="pending"){
               u.collectionMethod="";u.collectedBy="";u.partial=false;u.paid_amount=0;u._collectDraft=false;u.draftClearedByVacate=false;
-              if(!u.draftSessionId)u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              u.draftReverseGen=null;
             }
             else if(val==="vacant"||val==="staff"){
               u.collectionMethod="";u.collectedBy="";u.partial=false;u.paid_amount=0;u._collectDraft=false;
-              u.draftClearedByVacate=true;u.draftSessionId="";
+              u.draftClearedByVacate=true;u.draftSessionId="";u.draftReverseGen=null;
             }
           }
           if(field==="tenant"){
@@ -3522,6 +3548,16 @@ function renderApp(){
             }
             if(val==="cash") u.collectedBy=S.user;
             else if(val==="bank") u.collectedBy="";
+            const _rc=(u._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!u.draftSessionId) u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+          }
+          if(field==="partial"||field==="paid_amount"){
+            const _rc=(u._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!u.draftSessionId) u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
           }
           if(field==="paid_amount"&&Number(val)>0&&!u.collectedBy) u.collectedBy=S.user;
           if(!isOwner){

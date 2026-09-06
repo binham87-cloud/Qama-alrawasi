@@ -1,30 +1,36 @@
-# Continuation note — 2026-09-06 COMPLETE
+# Continuation note — 2026-09-06 FINAL (3 gaps closed)
 
-**Commit:** `0053c3abf9a8786a44204a2d7e5ee1d2e0a63698`  
-**Hosting:** https://qama-new-prod-2026.web.app (live release 2026-09-06 01:44:04Z)  
-**SHA match:** local assembled `index.html` == live (8f7eae880cfc5ad9…)  
-**Backup:** `artifacts/release/BACKUP-pre-resume-deploy-20260906T014227Z/` (see LATEST-BACKUP.txt)  
-**Checkpoint:** `CHECKPOINT-RESUME-20260906T011825Z/`
+**Branch:** `recovery/qama-prod-2026-08-13.6`  
+**Live:** https://qama-new-prod-2026.web.app  
+**Hosting SHA256:** `c2ba3c157b3c760c39c8afc1e162037d4a00af96b84f31bd84225bd0fb7060b1`  
+**Do not resume:** Holding-150 / BOT DEP OK / superseded reports
 
-## Last completed
-1. Recovered interrupted session; did **not** resume Holding-150 / BOT DEP OK.
-2. Fixed recollect-after-uncollect (draft status + wantsPay).
-3. Fixed installment empty-schedule seed before `payInstallment`.
-4. Fixed partial draft survival after reversed receipts.
-5. Emulator: tenant_installment **9/9**, click workflows **6/6**, system **34/34**.
-6. Deployed **hosting + functions** to `qama-new-prod-2026`.
-7. Live UI verify **10/10**; cleanup holding **0**, no BOT-HOTFIX tenants.
-8. Commit saved.
+## Completed (all 3)
 
-## Post-cleanup KPI (2026-09)
-- holdingFils **0**, liveReceipts **0**, depositedFils **0**
-- expensesFils **16000** (= **160 AED**), revenueBalance **-160**
-- installmentBalance **20706**, schedule **6** with **1** paid
+### 1) Draft stale vs fresh (pre-uncollect vs post-uncollect)
+- Code: `draftReverseGen` + `isStaleCollectDraft` in `draft_partial_merge.mjs`; shell stamps on collect/method/partial; bridge persists gen; assemble injects into `index.html`.
+- Unit: `draft_partial_merge.test.mjs` + `draft_stale_vs_fresh.test.mjs` PASS
+- Emulator: `draft_cycle_no_double.mjs` **5/5 PASS** (collect→uncollect→refresh no resurrection; recollect exactly 1 live; second cycle still 1 live)
+- Deployed hosting (markers `isStaleCollectDraft` / `draftReverseGen` live-verified)
 
-## Expense 60 vs 160
-Not a bug in this pass: engine `expensesFils=16000` fils = **160 AED**. Cumulative `revenueBalance=-160` matches. Any UI “60” was a different surface/filter, not a second ledger amount.
+### 2) Expense 60 vs 160
+- Evidence: `EXPENSE-60-VS-160.md` + `prod-expense-breakdown-160.json`
+- **60** = 10+20+30 (`exp:uiexp-1788645077195-1000` + `exp:uimaint-1788645088698-2000` + `exp:uimaint-1788645101150-3000`)
+- **160** = 60 + **100** (`exp:cwr-req_1788645450831-exp`)
+- Note: current live KPI after later cleanups may differ; the dump is the forensic proof for that jump.
 
-## Remaining blockers
-- Physical iPhone Safari not re-run (Chromium mobile only).
-- Employee→manager deposit approval path not re-run on live this pass (owner deposit verified).
-- Alternate `app.mjs` static tests (familiar tabs / float) still fail — not the assembled Old UI production shell.
+### 3) Live employee deposit → manager approve + reject another
+- Script: `scripts/prod_employee_deposit_flow.mjs`
+- Result artifact: `prod-employee-deposit-flow.json` — **13/13 PASS** (stamp `mtp6fb5t`)
+- Seed cash holding 2000 → employee deposit 55 approved (`dep:reqdep-req_1788660764724`) holding 1945 → reject expense request → refresh/relogin stable → cleanup holding **0**
+- Fixes found while testing: date input must be set by value (keyboard corrupted date); approve/reject must use `data-reqid` (DOM parent walk hit wrong card)
+
+## Current live baseline (post-cleanup)
+- holding **0**, live receipts **0**, approved deposits **0**, pending requests **0**, expensesFils **0**, revenueBalance **100** (AED)
+
+## Commits
+- Prior: `0053c3a`, `b01e4c1`
+- This close-out: see git log after commit
+
+## Remaining
+**Nothing** for the three assigned gaps. Stop unless new instructions.

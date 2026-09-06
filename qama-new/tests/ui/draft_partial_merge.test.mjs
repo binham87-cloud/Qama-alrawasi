@@ -22,8 +22,20 @@ const late0 = { status: "late", partial: false, paid_amount: 0 };
 }
 
 {
-  // Intentional new partial draft after uncollect must survive hydrate (method picker).
-  const r = mergeDraftPartial(late0, { partial: true, paid_amount: 40, draftForRentalId: "r1" }, {
+  // Pre-uncollect partial (no draftReverseGen) after reverse must die.
+  const stale = mergeDraftPartial(late0, { partial: true, paid_amount: 40, draftForRentalId: "r1" }, {
+    rentalId: "r1",
+    spaceReceipts: [{ state: "reversed", amountFils: 10000 }],
+  });
+  assert.equal(stale.partial, false);
+  assert.equal(stale.paid_amount, 0);
+}
+
+{
+  // Intentional new partial after uncollect (stamped draftReverseGen) survives hydrate.
+  const r = mergeDraftPartial(late0, {
+    partial: true, paid_amount: 40, draftForRentalId: "r1", draftReverseGen: 1,
+  }, {
     rentalId: "r1",
     spaceReceipts: [{ state: "reversed", amountFils: 10000 }],
   });

@@ -1,0 +1,91 @@
+{
+  "stamp": "mtp6fb5t",
+  "created": {
+    "depositIds": [
+      "dep:reqdep-req_1788660764724"
+    ],
+    "requestIds": [
+      "req_1788660769786",
+      "req_1788660764724"
+    ],
+    "receiptIds": [
+      "rcpt:empflow-cash-mtp6fb5t"
+    ],
+    "rentalIds": [
+      "rental:empflow-rent-mtp6fb5t"
+    ],
+    "spaceIds": [
+      "mig:space:space:legacy:769d0cd3fee7f533bf3601ae"
+    ],
+    "expenseIds": []
+  },
+  "results": [
+    {
+      "name": "employee API login",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "seed holding via cash receipt (≥200 AED)",
+      "ok": true,
+      "detail": "{\"holding\":200000,\"space\":\"mig:space:space:legacy:769d0cd3fee7f533bf3601ae\"}"
+    },
+    {
+      "name": "employee sees submitted requests",
+      "ok": true,
+      "detail": "قمة الرواسي\nلوحة يحيى\nمتصل\nتحديث\nخروج\nالرئيسية\nالوحدات\n📅 اليومي\nالمصاريف والصيانة\nالإيداعات\nطلباتي\n○ ميزان 2/1\n○ ميزان 2/2\n○ ميزان 2/3\n○ ميزان 2/4\n○ ميزان 2/5\n○ ميزان 2/6\n○ ميزان 2/7\n○ ميزان 2/8\n○ ميزان 2/9\n○ ميزان 3/2\n"
+    },
+    {
+      "name": "pending trial requests ≥2 (deposits and/or expense)",
+      "ok": true,
+      "detail": "[{\"id\":\"req_1788660769786\",\"type\":\"add_expense\",\"status\":\"pending\",\"dep\":null},{\"id\":\"req_1788660764724\",\"type\":\"add_transaction\",\"status\":\"pending\",\"dep\":\"dep:reqdep-req_1788660764724\"}]"
+    },
+    {
+      "name": "manager clicked approve on deposit req",
+      "ok": true,
+      "detail": "req_1788660764724"
+    },
+    {
+      "name": "approved deposit exists + holding −55 AED",
+      "ok": true,
+      "detail": "{\"seededH\":200000,\"afterH\":194500,\"delta\":5500,\"newApproved\":[{\"id\":\"dep:reqdep-req_1788660764724\",\"fils\":5500,\"note\":\"BOT-EMP-DEP-OK mtp6fb5t\"}]}"
+    },
+    {
+      "name": "reject reduced pending trial requests",
+      "ok": true,
+      "detail": "before=2 after=1"
+    },
+    {
+      "name": "holding unchanged by reject",
+      "ok": true,
+      "detail": "{\"afterH\":194500,\"now\":194500}"
+    },
+    {
+      "name": "after refresh: approved deposit + holding stable",
+      "ok": true,
+      "detail": "{\"holding\":194500}"
+    },
+    {
+      "name": "after manager re-login balances match",
+      "ok": true,
+      "detail": "{\"holding\":194500}"
+    },
+    {
+      "name": "employee re-login myrequests shows history",
+      "ok": true,
+      "detail": "قمة الرواسي\nلوحة يحيى\nمتصل\nتحديث\nخروج\nالرئيسية\nالوحدات\n📅 اليومي\nالمصاريف والصيانة\nالإيداعات\nطلباتي\n○ ميزان 2/1\n○ ميزان 2/2\n○ ميزان 2/3\n○ ميزان 2/4\n○ ميزان 2/5\n○ ميزان 2/6\n○ ميزان "
+    },
+    {
+      "name": "cleanup: trial approved deposits gone",
+      "ok": true,
+      "detail": "{\"cleaned\":[\"dep:reqdep-req_1788660764724\"],\"beforeCleanH\":194500,\"finalH\":0}"
+    },
+    {
+      "name": "cleanup: holding back to 0 (seed reversed)",
+      "ok": true,
+      "detail": "{\"finalH\":0,\"receiptIds\":[\"rcpt:empflow-cash-mtp6fb5t\"],\"rentalIds\":[\"rental:empflow-rent-mtp6fb5t\"]}"
+    }
+  ],
+  "pass": 13,
+  "fail": 0
+}

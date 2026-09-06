@@ -236,6 +236,21 @@ function engineStatusToOld(sp) {
 }
 
 /* draft_partial_merge.mjs (assembled) */
+function reverseCount(sp) {
+  const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
+  return receipts.filter((r) => r && r.state === "reversed").length;
+}
+
+function isStaleCollectDraft(extra, sp) {
+  if (!extra) return false;
+  const rev = reverseCount(sp);
+  if (!(rev > 0)) return false;
+  const gen = Number(extra.draftReverseGen);
+  // Missing gen after any reverse ⇒ predates the uncollect bookkeeping.
+  if (!Number.isFinite(gen)) return true;
+  return gen < rev;
+}
+
 function mergeDraftPartial(mapped, extra, sp) {
   const enginePaid = Number(mapped.paid_amount || 0);
   if (enginePaid > 0 || mapped.partial) {
@@ -256,12 +271,9 @@ function mergeDraftPartial(mapped, extra, sp) {
   }
   const receipts = Array.isArray(sp && sp.spaceReceipts) ? sp.spaceReceipts : [];
   const hasRecognized = receipts.some((r) => r && r.state === "recognized");
-  const hasReversed = receipts.some((r) => r && r.state === "reversed");
   if (hasRecognized) return { partial: false, paid_amount: enginePaid };
-  // Reversed history must not resurrect a *stale* draft — but an intentional new
-  // partial draft after uncollect (extras.partial / paid just set) must survive hydrate
-  // so the method picker can appear and applyCollection can run.
-  if (hasReversed && !(draftPartial || draftPaid > 0)) {
+  // Stale pre-uncollect draft (paid/method from before reverse) must die.
+  if (isStaleCollectDraft(extra, sp)) {
     return { partial: false, paid_amount: 0 };
   }
   return { partial: draftPartial, paid_amount: draftPaid };
@@ -284,25 +296,25 @@ function mergeDraftStatus(mapped, extra, sp) {
   if (hasRecognized) return {};
 
   const out = {};
-  if (extra && extra.collectionMethod) {
+  // Never restore collectionMethod from a pre-uncollect draft.
+  if (extra && extra.collectionMethod && !isStaleCollectDraft(extra, sp)) {
     out.collectionMethod = extra.collectionMethod;
   }
 
   if (!tenantOk) return out;
 
-  // Vacant engine + rented draft (late/pending): show unpaid rented, not collected.
   if ((eng === "vacant" || eng === "staff") && (draft === "late" || draft === "pending")) {
     out.status = draft;
     return out;
   }
 
-  // User chose محصّل in the form but money is not recognized yet — form draft only.
-  // Keep status "collected" so a later method pick (cash/bank) still runs applyCollection
-  // after hydrate. Cards/KPIs stay unpaid via displayStatus/paidValue + _collectDraft.
   if (draft === "collected") {
+    if (isStaleCollectDraft(extra, sp)) {
+      // Pre-uncollect «محصّل» extras must not reopen as collect draft.
+      return out;
+    }
     out._collectDraft = true;
     if (eng === "vacant" || eng === "staff") {
-      // No rental yet: occupancy intent without confirming cash.
       out.status = "late";
     } else {
       out.status = "collected";
@@ -400,6 +412,7 @@ function mapDashboardToMonth(dash) {
         draftSessionId: extra.draftSessionId || "",
         draftClearedByVacate: !!extra.draftClearedByVacate,
         draftForRentalId: extra.draftForRentalId || "",
+        draftReverseGen: Number.isFinite(Number(extra.draftReverseGen)) ? Number(extra.draftReverseGen) : null,
         ...mapped,
         ...mergeDraftPartial(mapped, (() => {
           const abandoned = isVacateResidueExtra(extra, sp, mapped);
@@ -447,6 +460,7 @@ function mapDashboardToMonth(dash) {
           draftSessionId: extraUse.draftSessionId || "",
           draftClearedByVacate: !!extraUse.draftClearedByVacate,
           draftForRentalId: extraUse.draftForRentalId || "",
+          draftReverseGen: Number.isFinite(Number(extraUse.draftReverseGen)) ? Number(extraUse.draftReverseGen) : null,
           ...mapped,
           ...mergeDraftPartial(mapped, extraUse, sp),
           ...mergeDraftStatus(mapped, extraUse, sp),
@@ -589,6 +603,8 @@ function extrasFromData(data) {
       draftForRentalId: x._rentalId || x.draftForRentalId || "",
       draftSessionId: x.draftSessionId || "",
       draftClearedByVacate: !!x.draftClearedByVacate,
+      // Reverse-count when this collect/partial draft was opened (stale if behind live).
+      draftReverseGen: Number.isFinite(Number(x.draftReverseGen)) ? Number(x.draftReverseGen) : null,
     };
   };
   (data.units || []).forEach((u) => (u.partitions || []).forEach(remember));
@@ -4540,15 +4556,24 @@ function renderApp(){
               else { try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){} }
               return;
             }
-            if(val==="collected"){p.partial=false;p.collectionMethod="";p._collectDraft=true;p.draftClearedByVacate=false;if(!p.draftSessionId)p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);}
+            if(val==="collected"){
+              p.partial=false;p.collectionMethod="";p._collectDraft=true;p.draftClearedByVacate=false;
+              p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              // Bind to reverse count; +1 if live money still visible (uncollect in-flight).
+              const _rc=(p._receipts||[]);
+              const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+              p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            }
             else if(val==="late"||val==="pending"){
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;p.draftClearedByVacate=false;
-              if(!p.draftSessionId)p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              // Rotate session and clear gen — any leftover collect extras become stale after reverse.
+              p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              p.draftReverseGen=null;
             }
             else if(val==="vacant"||val==="staff"){
               // Explicit vacate/staff — mark residue so hydrate will not resurrect collect draft.
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;
-              p.draftClearedByVacate=true;p.draftSessionId="";
+              p.draftClearedByVacate=true;p.draftSessionId="";p.draftReverseGen=null;
             }
             if(val==="collected"||val==="late"||val==="pending"){
               if(p.note==="فارغ") p.note="";
@@ -4585,6 +4610,16 @@ function renderApp(){
             }
             if(val==="cash") p.collectedBy=S.user;
             else if(val==="bank") p.collectedBy="";
+            const _rc=(p._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!p.draftSessionId) p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+          }
+          if(field==="partial"||field==="paid_amount"){
+            const _rc=(p._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!p.draftSessionId) p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
           }
           if(field==="paid_amount"&&Number(val)>0&&!p.collectedBy) p.collectedBy=S.user;
           // مسار الموظف: يحفظ في localStorage فقط (بدون Firebase، بدون audit log)
@@ -4839,14 +4874,21 @@ function renderApp(){
               else { try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){} }
               return;
             }
-            if(val==="collected"){u.partial=false;u.collectionMethod="";u._collectDraft=true;u.draftClearedByVacate=false;if(!u.draftSessionId)u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);}
+            if(val==="collected"){
+              u.partial=false;u.collectionMethod="";u._collectDraft=true;u.draftClearedByVacate=false;
+              u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              const _rc=(u._receipts||[]);
+              const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+              u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            }
             else if(val==="late"||val==="pending"){
               u.collectionMethod="";u.collectedBy="";u.partial=false;u.paid_amount=0;u._collectDraft=false;u.draftClearedByVacate=false;
-              if(!u.draftSessionId)u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+              u.draftReverseGen=null;
             }
             else if(val==="vacant"||val==="staff"){
               u.collectionMethod="";u.collectedBy="";u.partial=false;u.paid_amount=0;u._collectDraft=false;
-              u.draftClearedByVacate=true;u.draftSessionId="";
+              u.draftClearedByVacate=true;u.draftSessionId="";u.draftReverseGen=null;
             }
           }
           if(field==="tenant"){
@@ -4877,6 +4919,16 @@ function renderApp(){
             }
             if(val==="cash") u.collectedBy=S.user;
             else if(val==="bank") u.collectedBy="";
+            const _rc=(u._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!u.draftSessionId) u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+          }
+          if(field==="partial"||field==="paid_amount"){
+            const _rc=(u._receipts||[]);
+            const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
+            u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            if(!u.draftSessionId) u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
           }
           if(field==="paid_amount"&&Number(val)>0&&!u.collectedBy) u.collectedBy=S.user;
           if(!isOwner){
