@@ -83,33 +83,83 @@ function saveMonthData(y,m,data,quiet=false){
   data=normalizeData(data);
   const k=getMonthKey(y,m);
   try{localStorage.setItem("qama_month_"+k,JSON.stringify(data));}catch(e){}
-  const go=()=>setDoc(doc(db,"months",k),{data,updatedAt:serverTimestamp()},{merge:true})
-    .then(async ()=>{
-      // Successful engine apply — clear any prior failed-draft hold and re-hydrate.
-      S._preserveDraftUntil=0;
-      try { await hydrateMonthFromEngine(y, m); } catch (e) { console.error(e); }
-      S.syncMsg="تم الحفظ أونلاين";
-      if(!quiet)R();
-    })
-    .catch(async e=>{
-      console.error(e);
-      const code=String((e&&(e.message||e.code))||e);
-      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|IDEMPOTENCY_PAYLOAD_MISMATCH/i.test(code)
-        || (S._preserveDraftUntil && Date.now() < S._preserveDraftUntil);
-      if(!keepDraft){
-        try { await hydrateMonthFromEngine(y, m); } catch (e2) {}
-      }
-      S.syncMsg="تعذر الحفظ أونلاين";
-      if(!quiet){try{showMsg("⚠ لم يُحفظ: "+code);}catch(_e){}}
-      if(!quiet)R();
-    });
-  // Non-quiet save must cancel a pending quiet debounce — otherwise an older
-  // vacant mid-edit save can race and clear tenant after the rented save started.
+  // Always keep the latest intent; older in-flight saves must not win over newer edits.
+  saveMonthData._pending={y,m,data,quiet:!!quiet};
   clearTimeout(saveMonthData._t);
   saveMonthData._t=null;
+  const publishSaveState=()=>{
+    try{
+      if(typeof window==="undefined")return;
+      window.__qamaSaveState={
+        saveOpSeq:S._saveOpSeq||0,
+        saveOpId:S._saveOpId||0,
+        saveOpDoneId:S._saveOpDoneId||0,
+        saveOpStatus:S._saveOpStatus||null,
+        syncMsg:S.syncMsg||"",
+        msg:S.msg||"",
+      };
+    }catch(_e){}
+  };
+  const kick=()=>{
+    if(S._saveInFlight){ S._saveQueued=true; return; }
+    const job=saveMonthData._pending;
+    if(!job) return;
+    const opId=(S._saveOpSeq=(S._saveOpSeq||0)+1);
+    S._saveOpId=opId;
+    S._saveOpStatus="pending";
+    S._saveInFlight=true;
+    const sy=job.y, sm=job.m, snap=job.data;
+    const sk=getMonthKey(sy,sm);
+    S.syncMsg="جاري الحفظ...";
+    publishSaveState();
+    if(!job.quiet)R();
+    Promise.resolve(setDoc(doc(db,"months",sk),{data:snap,updatedAt:serverTimestamp()},{merge:true}))
+    .then(async ()=>{
+      if(opId!==S._saveOpId) return; // superseded by a newer queued save
+      S._preserveDraftUntil=0;
+      try { await hydrateMonthFromEngine(sy, sm); } catch (e) { console.error(e); }
+      if(opId!==S._saveOpId) return;
+      S._saveOpStatus="ok";
+      S._saveOpDoneId=opId;
+      S.syncMsg="تم الحفظ أونلاين";
+      publishSaveState();
+      if(!job.quiet)R();
+    })
+    .catch(async e=>{
+      if(opId!==S._saveOpId) return;
+      console.error(e);
+      const code=String((e&&(e.message||e.code))||e);
+      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED/i.test(code);
+      if(!keepDraft){
+        try { await hydrateMonthFromEngine(sy, sm); } catch (e2) {}
+      } else {
+        try {
+          localStorage.setItem("qama_month_"+sk, JSON.stringify(snap));
+          // Local restore aid only — not used as abandonment proof.
+          S._preserveDraftUntil = Date.now() + 120000;
+        } catch (_e3) {}
+      }
+      S._saveOpStatus="fail";
+      S._saveOpDoneId=opId;
+      S.syncMsg="تعذر الحفظ أونلاين";
+      publishSaveState();
+      if(!job.quiet){try{showMsg("⚠ لم يُحفظ: "+(typeof formatEngineError==="function"?formatEngineError(e):code));}catch(_e){}}
+      if(!job.quiet)R();
+    })
+    .finally(()=>{
+      if(opId!==S._saveOpId) return;
+      S._saveInFlight=false;
+      publishSaveState();
+      if(S._saveQueued){
+        S._saveQueued=false;
+        kick();
+      }
+    });
+  };
+  // Non-quiet cancels quiet debounce so the latest rented/collect intent runs now.
   if(quiet){
-    saveMonthData._t=setTimeout(go, 700);
-  } else go();
+    saveMonthData._t=setTimeout(kick, 700);
+  } else kick();
 }
 `;
 

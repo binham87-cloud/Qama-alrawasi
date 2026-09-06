@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-05T21:37:03.484Z",
+  "generatedAt": "2026-09-06T01:42:12.530Z",
   "kind": "ui_click_only",
   "results": [
     {
@@ -37,6 +37,7 @@
         "units → expand full unit 201",
         "full status=collected",
         "full method=cash",
+        "full tenant clear→newtype keeps holding",
         "full status=late",
         "full re-collect",
         "full uncollect again",
@@ -55,7 +56,7 @@
       "actions": [
         "open tab اليومي",
         "open + حجز → type guest → إلغاء form",
-        "create: part=unit:seed-bridge:unit:1788644146117-2 2026-09-10→12 rate=100 total=200",
+        "create: part=unit:seed-bridge:unit:1788658839259-2 2026-09-10→12 rate=100 total=200",
         "edit: end→09-13 rate→150 → save (total 450)",
         "edit form cancel without save",
         "حذف saved booking"

@@ -1,0 +1,13 @@
+{
+  "period": "2026-09",
+  "holdingFils": 0,
+  "expensesFils": 16000,
+  "depositedFils": 0,
+  "liveReceipts": 0,
+  "revenueBalance": -160,
+  "installmentBalance": 20706,
+  "installmentPaid": 1,
+  "installmentLen": 6,
+  "botHotfixTenants": [],
+  "expenseNote": "expensesFils is integer fils; 16000 fils = 160 AED. revenueBalance -160 AED matches cumulative expense impact, not a separate 60 AED ledger."
+}

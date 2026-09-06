@@ -261,12 +261,31 @@ function applyUiConfig(ui) {
     if (b.companyBalance != null && !S.showEditCompany) S.companyBalance = b.companyBalance;
     if (b.revenueBalance != null && !S.showEditRevenue) S.revenueBalance = b.revenueBalance;
     if (b.installmentBalance != null) S.installmentBalance = b.installmentBalance;
-    if (b.installmentSchedule != null) S.installmentSchedule = b.installmentSchedule;
+    if (typeof ensureInstallmentSchedule === "function") {
+      S.installmentSchedule = ensureInstallmentSchedule(b.installmentSchedule);
+    } else if (Array.isArray(b.installmentSchedule) && b.installmentSchedule.length) {
+      S.installmentSchedule = b.installmentSchedule;
+    }
   }
   if (c.customUnits) {
     const cu = c.customUnits.data || c.customUnits;
     if (cu) try { localStorage.setItem("qama_custom_units", JSON.stringify(cu)); } catch (e) {}
   }
+}
+
+/**
+ * Strip collect/tenant paint only for real vacate leftovers — never because a timer expired.
+ * Active pre-rental drafts (no draftForRentalId / no draftClearedByVacate) are kept as draft.
+ */
+function isVacateResidueExtra(extra, sp, mapped) {
+  if (!extra) return false;
+  if (sp && sp.rentalId) return false;
+  if (!(mapped && (mapped.status === "vacant" || mapped.status === "staff"))) return false;
+  if (!["collected", "late", "pending"].includes(String(extra.status || ""))) return false;
+  if (extra.draftClearedByVacate) return true;
+  const bound = extra.draftForRentalId != null ? String(extra.draftForRentalId) : "";
+  if (bound) return true; // bound to a rental that no longer occupies this space
+  return false;
 }
 
 function mapDashboardToMonth(dash) {
@@ -289,7 +308,10 @@ function mapDashboardToMonth(dash) {
         rent: (mapped.status === "vacant" || mapped.status === "staff")
           ? (draftRent || engineRent)
           : (engineRent || draftRent),
-        tenant: sp.tenantName || extra.tenant || "",
+        tenant: (() => {
+          const abandoned = isVacateResidueExtra(extra, sp, mapped);
+          return abandoned ? "" : (sp.tenantName || extra.tenant || "");
+        })(),
         phone: extra.phone || sp.tenantPhone || "",
         note: extra.note || "",
         start_date: extra.start_date || sp.startDate || "",
@@ -300,14 +322,25 @@ function mapDashboardToMonth(dash) {
         collectionMethod: extra.collectionMethod || "",
         collectedBy: extra.collectedBy || "",
         rent_type: extra.rent_type || "monthly",
+        draftSessionId: extra.draftSessionId || "",
+        draftClearedByVacate: !!extra.draftClearedByVacate,
+        draftForRentalId: extra.draftForRentalId || "",
         ...mapped,
-        ...mergeDraftPartial(mapped, extra, sp),
+        ...mergeDraftPartial(mapped, (() => {
+          const abandoned = isVacateResidueExtra(extra, sp, mapped);
+          return abandoned ? { ...extra, tenant: "", status: mapped.status, collectionMethod: "", partial: false, paid_amount: 0 } : extra;
+        })(), sp),
+        ...mergeDraftStatus(mapped, (() => {
+          const abandoned = isVacateResidueExtra(extra, sp, mapped);
+          return abandoned ? { ...extra, tenant: "", status: mapped.status, collectionMethod: "", partial: false, paid_amount: 0 } : extra;
+        })(), sp),
         _unitId: u.unitId,
         _spaceId: sp.spaceId,
         _rentalId: sp.rentalId,
         _obligationId: sp.obligationId,
         _enginePaid: filsToAed(sp.paidFils),
         _receipts: sp.spaceReceipts || [],
+        _tenantCommitted: sp.tenantName || "",
       });
     } else {
       const partitions = (u.spaces || []).map((sp) => {
@@ -315,29 +348,40 @@ function mapDashboardToMonth(dash) {
         const extra = extraBySpace[sp.spaceId] || {};
         const engineRent = filsToAed(sp.dueFils);
         const draftRent = Number(extra.rent || 0) || 0;
+        // Vacate leftovers (bound prior rental / explicit clear) vs active pre-rental draft.
+        // Timer expiry is NOT abandonment — slow typing / reconnect / failed create keep draft.
+        const abandonedDraft = isVacateResidueExtra(extra, sp, mapped);
+        const extraUse = abandonedDraft
+          ? { ...extra, tenant: "", status: mapped.status, collectionMethod: "", partial: false, paid_amount: 0 }
+          : extra;
         return {
           id: spacePartId(sp),
           rent: (mapped.status === "vacant" || mapped.status === "staff")
             ? (draftRent || engineRent)
             : (engineRent || draftRent),
-          tenant: sp.tenantName || extra.tenant || "",
-          phone: extra.phone || sp.tenantPhone || "",
-          note: extra.note || (mapped.status === "vacant" ? "فارغ" : mapped.status === "staff" ? "موظفين" : ""),
-          start_date: extra.start_date || sp.startDate || "",
-          end_date: extra.end_date || "",
-          due_date: sp.dueDate || extra.due_date || "",
-          deposit: extra.deposit || "",
-          collectionMethod: extra.collectionMethod || "",
-          collectedBy: extra.collectedBy || "",
-          rent_type: extra.rent_type || "monthly",
+          tenant: sp.tenantName || extraUse.tenant || "",
+          phone: extraUse.phone || sp.tenantPhone || "",
+          note: extraUse.note || (mapped.status === "vacant" ? "فارغ" : mapped.status === "staff" ? "موظفين" : ""),
+          start_date: extraUse.start_date || sp.startDate || "",
+          end_date: extraUse.end_date || "",
+          due_date: sp.dueDate || extraUse.due_date || "",
+          deposit: extraUse.deposit || "",
+          collectionMethod: extraUse.collectionMethod || "",
+          collectedBy: extraUse.collectedBy || "",
+          rent_type: extraUse.rent_type || "monthly",
+          draftSessionId: extraUse.draftSessionId || "",
+          draftClearedByVacate: !!extraUse.draftClearedByVacate,
+          draftForRentalId: extraUse.draftForRentalId || "",
           ...mapped,
-          ...mergeDraftPartial(mapped, extra, sp),
+          ...mergeDraftPartial(mapped, extraUse, sp),
+          ...mergeDraftStatus(mapped, extraUse, sp),
           _unitId: u.unitId,
           _spaceId: sp.spaceId,
           _rentalId: sp.rentalId,
           _obligationId: sp.obligationId,
           _enginePaid: filsToAed(sp.paidFils),
           _receipts: sp.spaceReceipts || [],
+          _tenantCommitted: sp.tenantName || extraUse.tenant || "",
         };
       });
       units.push({
@@ -467,7 +511,9 @@ function extrasFromData(data) {
       // Scoped to current rental so a prior tenant's draft cannot leak into a new cycle.
       partial: !!x.partial,
       paid_amount: Number(x.paid_amount || 0) || 0,
-      draftForRentalId: x._rentalId || "",
+      draftForRentalId: x._rentalId || x.draftForRentalId || "",
+      draftSessionId: x.draftSessionId || "",
+      draftClearedByVacate: !!x.draftClearedByVacate,
     };
   };
   (data.units || []).forEach((u) => (u.partitions || []).forEach(remember));
@@ -513,8 +559,6 @@ function dashSpaceById(spaceId) {
 }
 
 async function applyCollection(item, dashSp) {
-  const ob = item._obligationId || dashSp?.obligationId;
-  if (!ob) return;
   const already = dashSp ? Number(dashSp.paidFils || 0) : aedToFils(item._enginePaid || 0);
   let want = 0;
   if (item.partial) want = aedToFils(item.paid_amount);
@@ -522,9 +566,14 @@ async function applyCollection(item, dashSp) {
   else return;
   const delta = want - already;
   if (delta <= 0) return;
-  // Partial/full collect from the Old UI requires an explicit method — otherwise a
-  // mid-edit partial=true save would no-op on money but still race hydrate.
-  if (!item.collectionMethod && item.partial) return;
+  // Full and partial collect both require an explicit method. Otherwise selecting
+  // محصّل alone would mint a cash receipt before the user chose نقداً/تحويل,
+  // and a concurrent hydrate could wipe the method picker mid-edit.
+  if (!item.collectionMethod) return;
+  const ob = item._obligationId || dashSp?.obligationId;
+  if (!ob) {
+    throw new Error("COLLECTION_NOT_READY: لا يوجد التزام جاهز للتحصيل — أعد المحاولة");
+  }
   const date = (item.due_date && /^\d{4}-\d{2}-\d{2}$/.test(item.due_date)) ? item.due_date : engineToday();
   const collector = NEW_UID[item.collectedBy] || NEW_UID[S.user] || (S._actor && S._actor.userId);
   const method = item.collectionMethod === "bank" ? "bank" : "cash";
@@ -660,11 +709,18 @@ async function syncOccupancyAndTenant(item, dashSp) {
         const code = String((e && (e.message || e.code)) || e);
         if (/SPACE_ALREADY_RENTED/.test(code)) {
           item._rentCreateOp = null;
-          try { await refreshEngine(S.year, S.month, true); } catch (_e) {}
+          try {
+            await refreshEngine(S.year, S.month, true);
+          } catch (e2) {
+            throw new Error("COLLECTION_REFRESH_FAILED: " + String((e2 && e2.message) || e2));
+          }
           const live = dashSpaceById(item._spaceId);
           if (live && live.rentalId) {
             item._rentalId = live.rentalId;
             rentalId = live.rentalId;
+            if (live.obligationId) item._obligationId = live.obligationId;
+          } else {
+            throw new Error("SPACE_ALREADY_RENTED: تعذر قراءة الإيجار الحالي — أعد المحاولة");
           }
         } else {
           item._rentCreateOp = null;
@@ -678,7 +734,24 @@ async function syncOccupancyAndTenant(item, dashSp) {
             intentKey("genobl2", period, item._spaceId, rentalId || "x"));
         } catch (e) {
           const code = String((e && (e.message || e.code)) || e);
-          if (!/SPACE_ALREADY_RENTED/.test(code)) throw e;
+          if (!/SPACE_ALREADY_RENTED/.test(code)) {
+            throw new Error("OBLIGATION_GENERATE_FAILED: " + code);
+          }
+        }
+        // Obligation id is only available after generate + refresh — without it
+        // collection must fail visibly (not leave UI محصّل with holding 0).
+        try {
+          await refreshEngine(S.year, S.month, true);
+        } catch (e) {
+          throw new Error("COLLECTION_REFRESH_FAILED: " + String((e && e.message) || e));
+        }
+        const live = dashSpaceById(item._spaceId);
+        if (live) {
+          if (live.rentalId) { item._rentalId = live.rentalId; rentalId = live.rentalId; }
+          if (live.obligationId) item._obligationId = live.obligationId;
+        }
+        if ((item.status === "collected" || item.partial) && item.collectionMethod && !item._obligationId) {
+          throw new Error("COLLECTION_NOT_READY: لم يُنشأ الالتزام بعد إنشاء الإيجار — أعد المحاولة");
         }
       }
     } else if (engineOcc !== "rented") {
@@ -889,7 +962,35 @@ async function applyEngineDiff(data) {
     try {
       await maybeUncollect(item, dashSp);
       await syncOccupancyAndTenant(item, dashSp);
-      if (item.status === "collected" || item.partial) await applyCollection(item, dashSp);
+      let fresh = dashSpaceById(item._spaceId) || dashSp;
+      // _collectDraft + method means the operator confirmed محصّل in the form even if
+      // a prior hydrate left mapped.status as late (unpaid engine truth).
+      const wantsPay = item.status === "collected" || item.partial
+        || (!!item._collectDraft && !!item.collectionMethod);
+      if (wantsPay && item.collectionMethod
+          && !(item._obligationId || (fresh && fresh.obligationId))) {
+        const period = periodOfMonth(S.year, S.month);
+        try {
+          await engineCommand("generateObligations", { period },
+            intentKey("genobl-pay", period, item._spaceId));
+        } catch (e) {
+          throw new Error("OBLIGATION_GENERATE_FAILED: " + String((e && e.message) || e));
+        }
+        try {
+          await refreshEngine(S.year, S.month, true);
+        } catch (e) {
+          throw new Error("COLLECTION_REFRESH_FAILED: " + String((e && e.message) || e));
+        }
+        fresh = dashSpaceById(item._spaceId) || fresh;
+        if (fresh && fresh.obligationId) item._obligationId = fresh.obligationId;
+        if (fresh && fresh.rentalId) item._rentalId = fresh.rentalId;
+      }
+      if (wantsPay) {
+        // applyCollection keys off status/partial — promote draft collect for this call only.
+        const payItem = (item.status === "collected" || item.partial) ? item
+          : { ...item, status: "collected" };
+        await applyCollection(payItem, fresh);
+      }
     } catch (e) {
       console.error("applyEngineDiff item failed", item._spaceId, e);
       errors.push(e);
@@ -1190,6 +1291,11 @@ if (typeof window !== "undefined" && typeof __QAMA_EMULATOR__ !== "undefined" &&
         hasDash: !!(typeof S !== "undefined" && S._dash),
         summary: (typeof S !== "undefined" && S._dash && S._dash.summary) || null,
         actorId: (typeof S !== "undefined" && S._actor && S._actor.userId) || null,
+        saveOpSeq: typeof S !== "undefined" ? (S._saveOpSeq || 0) : 0,
+        saveOpId: typeof S !== "undefined" ? (S._saveOpId || 0) : 0,
+        saveOpDoneId: typeof S !== "undefined" ? (S._saveOpDoneId || 0) : 0,
+        saveOpStatus: typeof S !== "undefined" ? (S._saveOpStatus || null) : null,
+        saveInFlight: typeof S !== "undefined" ? !!S._saveInFlight : false,
       };
     },
   };
