@@ -1,0 +1,13 @@
+{
+  "at": "2026-09-06T02:26:12.156Z",
+  "opId": "repair-vacate-holding-177-mtp6trpe-reverse",
+  "result": {
+    "receiptId": "rcpt:vacinc-cash-mtp6trpe",
+    "reversalId": "rev:repair-vacate-holding-177-mtp6trpe-reverse",
+    "replay": false
+  },
+  "holdingBefore": 17700,
+  "holdingAfter": 0,
+  "receiptId": "rcpt:vacinc-cash-mtp6trpe",
+  "receiptState": "reversed"
+}

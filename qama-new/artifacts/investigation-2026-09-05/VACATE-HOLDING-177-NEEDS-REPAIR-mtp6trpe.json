@@ -1,0 +1,19 @@
+{
+  "created": {
+    "rentalIds": [
+      "rental:vacinc-rent-mtp6trpe"
+    ],
+    "receiptIds": [
+      "rcpt:vacinc-cash-mtp6trpe"
+    ],
+    "spaceIds": [
+      "mig:space:space:legacy:769d0cd3fee7f533bf3601ae"
+    ],
+    "obligationIds": [
+      "rental:vacinc-rent-mtp6trpe_2026-09"
+    ]
+  },
+  "stamp": "mtp6trpe",
+  "amountFils": 17700,
+  "note": "Stuck by pre-fix vacate; repair with reverseReceipt after deploy"
+}

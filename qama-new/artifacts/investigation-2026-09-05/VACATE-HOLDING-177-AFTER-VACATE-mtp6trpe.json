@@ -1,0 +1,53 @@
+{
+  "at": "2026-09-06T02:23:51.535Z",
+  "vac": {
+    "spaceId": "mig:space:space:legacy:769d0cd3fee7f533bf3601ae",
+    "occupancy": "vacant",
+    "closedRentals": [
+      {
+        "rentalId": "rental:vacinc-rent-mtp6trpe",
+        "cancelledObligationIds": []
+      }
+    ],
+    "replay": false
+  },
+  "vacK": {
+    "target": 0,
+    "collected": 0,
+    "remaining": 0,
+    "atEmp": 0,
+    "holding": 177
+  },
+  "midK": {
+    "target": 177,
+    "collected": 177,
+    "remaining": 0,
+    "atEmp": 177,
+    "holding": 177
+  },
+  "beforeK": {
+    "target": 0,
+    "collected": 0,
+    "remaining": 0,
+    "atEmp": 0,
+    "holding": 0
+  },
+  "receiptId": "rcpt:vacinc-cash-mtp6trpe",
+  "reversedIds": [],
+  "found": {
+    "id": "rcpt:vacinc-cash-mtp6trpe",
+    "obligationId": "rental:vacinc-rent-mtp6trpe_2026-09",
+    "amountFils": 17700,
+    "method": "cash",
+    "state": "recognized",
+    "collectionDate": "2026-09-06",
+    "collectorName": "يحيى",
+    "tenantName": "BOT-VACATE-177 mtp6trpe",
+    "spaceName": "ميزان ١",
+    "unitName": "ميزان ١"
+  },
+  "holdingFils": 17700,
+  "spaceId": "mig:space:space:legacy:769d0cd3fee7f533bf3601ae",
+  "rentalId": "rental:vacinc-rent-mtp6trpe",
+  "obligationId": "rental:vacinc-rent-mtp6trpe_2026-09"
+}

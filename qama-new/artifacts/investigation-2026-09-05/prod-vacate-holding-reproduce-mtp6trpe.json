@@ -1,0 +1,48 @@
+{
+  "mode": "reproduce",
+  "stamp": "mtp6trpe",
+  "amountAed": 177,
+  "created": {
+    "rentalIds": [
+      "rental:vacinc-rent-mtp6trpe"
+    ],
+    "receiptIds": [
+      "rcpt:vacinc-cash-mtp6trpe"
+    ],
+    "spaceIds": [
+      "mig:space:space:legacy:769d0cd3fee7f533bf3601ae"
+    ],
+    "obligationIds": [
+      "rental:vacinc-rent-mtp6trpe_2026-09"
+    ]
+  },
+  "results": [
+    {
+      "name": "baseline holding recorded",
+      "ok": true,
+      "detail": "{\"target\":0,\"collected\":0,\"remaining\":0,\"atEmp\":0,\"holding\":0}"
+    },
+    {
+      "name": "cash 177 raises holding by 177",
+      "ok": true,
+      "detail": "{\"before\":0,\"mid\":177,\"receiptId\":\"rcpt:vacinc-cash-mtp6trpe\"}"
+    },
+    {
+      "name": "REPRODUCE: vacate left holding stuck (bug present)",
+      "ok": true,
+      "detail": "{\"vacK\":{\"target\":0,\"collected\":0,\"remaining\":0,\"atEmp\":0,\"holding\":177},\"midK\":{\"target\":177,\"collected\":177,\"remaining\":0,\"atEmp\":177,\"holding\":177},\"reversedIds\":[]}"
+    },
+    {
+      "name": "REPRODUCE: receipt still recognized OR holding not cleared",
+      "ok": true,
+      "detail": "{\"foundState\":\"recognized\",\"vacK\":{\"target\":0,\"collected\":0,\"remaining\":0,\"atEmp\":0,\"holding\":177}}"
+    },
+    {
+      "name": "reproduce left stuck data for repair (intentional)",
+      "ok": true,
+      "detail": "{\"rentalIds\":[\"rental:vacinc-rent-mtp6trpe\"],\"receiptIds\":[\"rcpt:vacinc-cash-mtp6trpe\"],\"spaceIds\":[\"mig:space:space:legacy:769d0cd3fee7f533bf3601ae\"],\"obligationIds\":[\"rental:vacinc-rent-mtp6trpe_2026-09\"]}"
+    }
+  ],
+  "pass": 5,
+  "fail": 0
+}

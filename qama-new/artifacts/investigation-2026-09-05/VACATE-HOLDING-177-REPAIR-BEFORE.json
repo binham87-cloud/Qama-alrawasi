@@ -1,0 +1,30 @@
+{
+  "at": "2026-09-06T02:26:08.944Z",
+  "holdingBefore": 17700,
+  "live": [
+    {
+      "id": "rcpt:vacinc-cash-mtp6trpe",
+      "obligationId": "rental:vacinc-rent-mtp6trpe_2026-09",
+      "amountFils": 17700,
+      "method": "cash",
+      "state": "recognized",
+      "collectionDate": "2026-09-06",
+      "collectorName": "يحيى",
+      "tenantName": "BOT-VACATE-177 mtp6trpe",
+      "spaceName": "ميزان ١",
+      "unitName": "ميزان ١"
+    }
+  ],
+  "stuck177": {
+    "id": "rcpt:vacinc-cash-mtp6trpe",
+    "obligationId": "rental:vacinc-rent-mtp6trpe_2026-09",
+    "amountFils": 17700,
+    "method": "cash",
+    "state": "recognized",
+    "collectionDate": "2026-09-06",
+    "collectorName": "يحيى",
+    "tenantName": "BOT-VACATE-177 mtp6trpe",
+    "spaceName": "ميزان ١",
+    "unitName": "ميزان ١"
+  }
+}

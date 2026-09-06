@@ -1,36 +1,35 @@
-# Continuation note — 2026-09-06 FINAL (3 gaps closed)
+# Continuation note — 2026-09-06 VACATE/HOLDING INCIDENT — CLOSED
 
-**Branch:** `recovery/qama-prod-2026-08-13.6`  
 **Live:** https://qama-new-prod-2026.web.app  
-**Hosting SHA256:** `c2ba3c157b3c760c39c8afc1e162037d4a00af96b84f31bd84225bd0fb7060b1`  
-**Do not resume:** Holding-150 / BOT DEP OK / superseded reports
+**Hosting SHA256:** `98766e8afa764132887597fc337db74902696e9b3dbc9d88617a8a6081299195`  
+**Functions:** deployed with atomic vacate reverse (same deploy wave)
 
-## Completed (all 3)
+## Root cause
+`closeRental` / `setSpaceOccupancy(vacant|staff)` closed the rental and cancelled **unpaid** obligations only. It did **not** reverse recognized cash receipts. Shared Holding = Σ recognized cash − deposits, so holding stayed up while the space looked فارغ and monthly target dropped to 0 (closed rental excluded from KPIs).
 
-### 1) Draft stale vs fresh (pre-uncollect vs post-uncollect)
-- Code: `draftReverseGen` + `isStaleCollectDraft` in `draft_partial_merge.mjs`; shell stamps on collect/method/partial; bridge persists gen; assemble injects into `index.html`.
-- Unit: `draft_partial_merge.test.mjs` + `draft_stale_vs_fresh.test.mjs` PASS
-- Emulator: `draft_cycle_no_double.mjs` **5/5 PASS** (collect→uncollect→refresh no resurrection; recollect exactly 1 live; second cycle still 1 live)
-- Deployed hosting (markers `isStaleCollectDraft` / `draftReverseGen` live-verified)
+**Mode:** reverse was never executed on vacate (not a holding-calc bug; not a UI-only paint). Proven pre-fix on prod with 177 AED.
 
-### 2) Expense 60 vs 160
-- Evidence: `EXPENSE-60-VS-160.md` + `prod-expense-breakdown-160.json`
-- **60** = 10+20+30 (`exp:uiexp-1788645077195-1000` + `exp:uimaint-1788645088698-2000` + `exp:uimaint-1788645101150-3000`)
-- **160** = 60 + **100** (`exp:cwr-req_1788645450831-exp`)
-- Note: current live KPI after later cleanups may differ; the dump is the forensic proof for that jump.
+## User 100 AED
+At investigation start, **no live recognized 100** remained (holding 0). Closest historical 100: `rcpt:pay-rental:rentnew-44353e6fa_53472a4cb8b3_…` on **ميزان 2 / 1** (`mig:space:space:legacy:abccab24ba324cd72257f84b`), collector `mig:user:owner:saeed`, already `reversed` via uncollect then staff. Symptom matches the proven vacate-without-reverse failure mode (see 177 repro).
 
-### 3) Live employee deposit → manager approve + reject another
-- Script: `scripts/prod_employee_deposit_flow.mjs`
-- Result artifact: `prod-employee-deposit-flow.json` — **13/13 PASS** (stamp `mtp6fb5t`)
-- Seed cash holding 2000 → employee deposit 55 approved (`dep:reqdep-req_1788660764724`) holding 1945 → reject expense request → refresh/relogin stable → cleanup holding **0**
-- Fixes found while testing: date input must be set by value (keyboard corrupted date); approve/reject must use `data-reqid` (DOM parent walk hit wrong card)
+## Evidence / repair
+| Item | ID / value |
+|------|------------|
+| Pre-fix repro receipt | `rcpt:vacinc-cash-mtp6trpe` (17700 fils) — stayed `recognized` after vacate; holding 177 |
+| Repair opId | `repair-vacate-holding-177-mtp6trpe-reverse` → state `reversed`; holding 177→0 |
+| Post-fix verify 188 | stamp `mtp6xrgo` — 9/9 PASS |
+| UI manager 199 | `prod-vacate-ui-verify.json` — 6/6 PASS |
+| Employee vacate 166 | holding +166 then 0; reversed `rcpt:empvac-cash-mtp71qky` |
+| Stuck live scan after repair | **0** (`STUCK-LIVE-RECEIPTS-SCAN.json`) |
+| Orphan obligations cancelled | 4 (`ORPHAN-OBLIGATIONS-*.json`) |
 
-## Current live baseline (post-cleanup)
-- holding **0**, live receipts **0**, approved deposits **0**, pending requests **0**, expensesFils **0**, revenueBalance **100** (AED)
+## Fix
+- Server: `reverseLiveReceiptsForRental` inside `closeRentalInTx` (idempotent `rev:{operationId}:{receiptId}`), then cancel obligations ignoring just-reversed ids.
+- UI belt: `maybeUncollect` also runs on vacant/staff.
 
-## Commits
-- Prior: `0053c3a`, `b01e4c1`
-- Close-out: **`413766f`** — Close qama-new draft-gen, expense evidence, and employee deposit gaps.
+## Tests
+- `system.test.mjs` + `vacancy_clean_reset_regression` — **45/45**
+- Live API verify 188 — **9/9**; UI — **6/6**; employee vacate — PASS
 
 ## Remaining
-**Nothing** for the three assigned gaps. Stop unless new instructions.
+**Nothing** for this incident. Stop.

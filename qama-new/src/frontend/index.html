@@ -699,12 +699,14 @@ async function maybeUncollect(item, dashSp) {
   const unpaidUi =
     ((item.status === "late" || item.status === "pending") && !item.partial) ||
     ((item.status === "late" || item.status === "pending") && Number(item.paid_amount || 0) === 0);
-  if (unpaidUi && already > 0) {
+  // Vacate/staff must clear live money too (server closeRental also reverses; belt-and-suspenders).
+  const vacateUi = item.status === "vacant" || item.status === "staff";
+  if ((unpaidUi || vacateUi) && already > 0) {
     const receipts = Array.isArray(item._receipts) ? item._receipts
       : Array.isArray(dashSp?.spaceReceipts) ? dashSp.spaceReceipts
       : [];
     await engineCommand("uncollectObligation", {
-      obligationId: ob, reason: "تعديل الحالة من الشاشة"
+      obligationId: ob, reason: vacateUi ? "إفراغ الوحدة من الشاشة" : "تعديل الحالة من الشاشة"
     }, uncollectOpKey(ob, already, receipts));
   }
 }

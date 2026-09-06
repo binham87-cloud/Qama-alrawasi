@@ -18,14 +18,17 @@ import {
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
 
 /** Cancel unpaid active obligations for a rental (no live receipts). History with money is kept. */
-async function cancelUnpaidObligationsForRental(ctx, rentalId, reason) {
+async function cancelUnpaidObligationsForRental(ctx, rentalId, reason, { ignoreReceiptIds = [] } = {}) {
+  const skip = new Set(ignoreReceiptIds || []);
   const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
   const cancelled = [];
   for (const ob of obligations) {
     if (ob.state !== "active") continue;
     const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
     const live = receipts.filter(
-      (r) => r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING,
+      (r) =>
+        !skip.has(r.id) &&
+        (r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING),
     );
     if (live.length) continue;
     ctx.tx.update("obligations", ob.id, {
@@ -39,23 +42,102 @@ async function cancelUnpaidObligationsForRental(ctx, rentalId, reason) {
   return cancelled;
 }
 
-/** Close an active rental, optionally vacate the space, and drop unpaid obligations. */
+/**
+ * Reverse every recognized receipt on a rental (idempotent per operationId+receiptId).
+ * Required before vacate/close: otherwise cash stays in Shared Holding while the space
+ * looks empty and monthly target drops — the production vacate/holding contradiction.
+ */
+async function reverseLiveReceiptsForRental(ctx, rentalId, reason) {
+  const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
+  const toReverse = [];
+  for (const ob of obligations) {
+    const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
+    for (const r of receipts) {
+      if (r.state === RECEIPT_STATE.RECOGNIZED) toReverse.push(r);
+    }
+  }
+  if (!toReverse.length) return { reversedReceiptIds: [], reversalIds: [] };
+
+  const cashLive = toReverse.filter((r) => r.method === "cash");
+  if (cashLive.length) {
+    const allReceipts = await ctx.tx.query("receipts", []);
+    const allDeposits = await ctx.tx.query("deposits", []);
+    assertCashReversalFitsSharedHolding({
+      receipts: allReceipts,
+      deposits: allDeposits,
+      reversingReceiptIds: cashLive.map((r) => r.id),
+    });
+  }
+
+  const reversedReceiptIds = [];
+  const reversalIds = [];
+  for (const receipt of toReverse) {
+    const reversalId = `rev:${ctx.operationId}:${receipt.id}`.slice(0, 140);
+    if (await ctx.tx.get("reversals", reversalId)) {
+      // Same operation replay — treat as already applied.
+      if (receipt.state !== RECEIPT_STATE.REVERSED) {
+        ctx.tx.update("receipts", receipt.id, {
+          state: RECEIPT_STATE.REVERSED, reversedByReversalId: reversalId, reversedAt: ctx.now,
+        });
+      }
+      reversedReceiptIds.push(receipt.id);
+      reversalIds.push(reversalId);
+      continue;
+    }
+    if (receipt.state === RECEIPT_STATE.REVERSED) continue;
+
+    ctx.tx.create("reversals", reversalId, {
+      id: reversalId, targetType: "receipt", targetId: receipt.id,
+      amountFils: receipt.amountFils, reason, ...base(ctx),
+    });
+    ctx.tx.update("receipts", receipt.id, {
+      state: RECEIPT_STATE.REVERSED, reversedByReversalId: reversalId, reversedAt: ctx.now,
+    });
+    if (receipt.method === "bank") {
+      await debitRevenueAccount(ctx, {
+        amountFils: receipt.amountFils,
+        sourceType: "bank_receipt",
+        sourceId: receipt.id,
+        note: reason,
+      });
+    }
+    audit(ctx, "receipt_reversed", "receipt", receipt.id, {
+      amountFils: receipt.amountFils, reason, reversalId, via: "close_rental",
+    });
+    reversedReceiptIds.push(receipt.id);
+    reversalIds.push(reversalId);
+  }
+  return { reversedReceiptIds, reversalIds };
+}
+
+/** Close an active rental, reverse live money, vacate optionally, cancel unpaid obligations. */
 async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant }) {
+  const closeReason = reason || "rental closed";
+  const reversed = await reverseLiveReceiptsForRental(ctx, rental.id, closeReason);
   ctx.tx.update("rentals", rental.id, {
     state: "closed",
     endDate,
     closedBy: ctx.actor.userId,
     closedAt: ctx.now,
-    closeReason: reason,
+    closeReason,
   });
   if (setVacant) ctx.tx.update("spaces", rental.spaceId, { occupancy: "vacant" });
+  // In-tx queries may still see pre-update receipt state — ignore ids we just reversed.
   const cancelledObligationIds = await cancelUnpaidObligationsForRental(
-    ctx, rental.id, reason || "rental closed",
+    ctx, rental.id, closeReason, { ignoreReceiptIds: reversed.reversedReceiptIds },
   );
   audit(ctx, "rental_closed", "rental", rental.id, {
-    reason, cancelledObligationIds,
+    reason: closeReason,
+    cancelledObligationIds,
+    reversedReceiptIds: reversed.reversedReceiptIds,
+    reversalIds: reversed.reversalIds,
   });
-  return { rentalId: rental.id, cancelledObligationIds };
+  return {
+    rentalId: rental.id,
+    cancelledObligationIds,
+    reversedReceiptIds: reversed.reversedReceiptIds,
+    reversalIds: reversed.reversalIds,
+  };
 }
 
 const REVENUE_ACCOUNT_ID = "mig:acc:revenue";
