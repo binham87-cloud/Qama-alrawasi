@@ -30,7 +30,7 @@
 
 ## Commits
 - Prior: `0053c3a`, `b01e4c1`
-- This close-out: see git log after commit
+- Close-out: **`413766f`** — Close qama-new draft-gen, expense evidence, and employee deposit gaps.
 
 ## Remaining
 **Nothing** for the three assigned gaps. Stop unless new instructions.
