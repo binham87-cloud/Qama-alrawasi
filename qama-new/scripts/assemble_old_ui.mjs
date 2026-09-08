@@ -86,8 +86,16 @@ function saveMonthData(y,m,data,quiet=false){
   data=normalizeData(data);
   const k=getMonthKey(y,m);
   try{localStorage.setItem("qama_month_"+k,JSON.stringify(data));}catch(e){}
+  // Return a Promise so callers can await ONE explicit submit → ONE server result.
+  // Never toast success before this settles.
+  return new Promise((resolve,reject)=>{
   // Always keep the latest intent; older in-flight saves must not win over newer edits.
-  saveMonthData._pending={y,m,data,quiet:!!quiet};
+  // Superseded jobs reject softly so awaiters do not hang forever.
+  const prev=saveMonthData._pending;
+  if(prev&&typeof prev.reject==="function"&&prev.resolve!==resolve){
+    try{prev.reject(Object.assign(new Error("SAVE_SUPERSEDED"),{code:"SAVE_SUPERSEDED"}));}catch(_e){}
+  }
+  saveMonthData._pending={y,m,data,quiet:!!quiet,resolve,reject};
   clearTimeout(saveMonthData._t);
   saveMonthData._t=null;
   const publishSaveState=()=>{
@@ -100,6 +108,9 @@ function saveMonthData(y,m,data,quiet=false){
         saveOpStatus:S._saveOpStatus||null,
         syncMsg:S.syncMsg||"",
         msg:S.msg||"",
+        t0:S._saveT0||null,
+        tCmd:S._saveTCmd||null,
+        tDone:S._saveTDone||null,
       };
     }catch(_e){}
   };
@@ -107,10 +118,14 @@ function saveMonthData(y,m,data,quiet=false){
     if(S._saveInFlight){ S._saveQueued=true; return; }
     const job=saveMonthData._pending;
     if(!job) return;
+    saveMonthData._pending=null;
     const opId=(S._saveOpSeq=(S._saveOpSeq||0)+1);
     S._saveOpId=opId;
     S._saveOpStatus="pending";
     S._saveInFlight=true;
+    S._saveT0=Date.now();
+    S._saveTCmd=null;
+    S._saveTDone=null;
     const sy=job.y, sm=job.m, snap=job.data;
     const sk=getMonthKey(sy,sm);
     S.syncMsg="جاري الحفظ...";
@@ -118,51 +133,70 @@ function saveMonthData(y,m,data,quiet=false){
     if(!job.quiet)R();
     Promise.resolve(setDoc(doc(db,"months",sk),{data:snap,updatedAt:serverTimestamp()},{merge:true}))
     .then(async ()=>{
-      if(opId!==S._saveOpId) return; // superseded by a newer queued save
+      S._saveTCmd=Date.now();
+      if(opId!==S._saveOpId){
+        try{job.reject(Object.assign(new Error("SAVE_SUPERSEDED"),{code:"SAVE_SUPERSEDED"}));}catch(_e){}
+        return;
+      }
       S._preserveDraftUntil=0;
-      try { await hydrateMonthFromEngine(sy, sm); } catch (e) { console.error(e); }
-      if(opId!==S._saveOpId) return;
+      // setDoc(months) already hydrated once inside the bridge — do NOT hydrate again.
       S._saveOpStatus="ok";
       S._saveOpDoneId=opId;
-      S.syncMsg="تم الحفظ أونلاين";
+      S._saveTDone=Date.now();
+      S.syncMsg="تم الحفظ";
       publishSaveState();
       if(!job.quiet)R();
+      try{job.resolve({ok:true,opId,ms:(S._saveTDone-S._saveT0)});}catch(_e){}
     })
     .catch(async e=>{
-      if(opId!==S._saveOpId) return;
+      if(opId!==S._saveOpId){
+        try{job.reject(Object.assign(new Error("SAVE_SUPERSEDED"),{code:"SAVE_SUPERSEDED"}));}catch(_e){}
+        return;
+      }
       console.error(e);
       const code=String((e&&(e.message||e.code))||e);
-      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED/i.test(code);
+      if(code==="SAVE_SUPERSEDED"){ try{job.reject(e);}catch(_e){} return; }
+      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED|FORBIDDEN/i.test(code);
+      const moneyFail=/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|AMOUNT_EXCEEDS_HOLDING/i.test(code);
       if(!keepDraft){
         try { await hydrateMonthFromEngine(sy, sm); } catch (e2) {}
       } else {
         try {
-          localStorage.setItem("qama_month_"+sk, JSON.stringify(snap));
-          // Local restore aid only — not used as abandonment proof.
+          let snapKeep=snap;
+          if(moneyFail && typeof stripFailedCollectPaintInData==="function"){
+            try{ snapKeep=JSON.parse(JSON.stringify(snap)); stripFailedCollectPaintInData(snapKeep); }catch(_sf){ snapKeep=snap; }
+          }
+          localStorage.setItem("qama_month_"+sk, JSON.stringify(snapKeep));
           S._preserveDraftUntil = Date.now() + 120000;
+          try { await refreshEngine(sy, sm, true); } catch (_re) {}
         } catch (_e3) {}
       }
       S._saveOpStatus="fail";
       S._saveOpDoneId=opId;
-      S.syncMsg="تعذر الحفظ أونلاين";
+      S._saveTDone=Date.now();
+      const ar=(typeof formatEngineError==="function"?formatEngineError(e):code);
+      S.syncMsg=ar;
       publishSaveState();
-      if(!job.quiet){try{showMsg("⚠ لم يُحفظ: "+(typeof formatEngineError==="function"?formatEngineError(e):code));}catch(_e){}}
+      if(!job.quiet){try{showMsg("⚠ "+ar);}catch(_e){}}
       if(!job.quiet)R();
+      try{job.reject(e);}catch(_e){}
     })
     .finally(()=>{
       if(opId!==S._saveOpId) return;
       S._saveInFlight=false;
       publishSaveState();
-      if(S._saveQueued){
+      if(S._saveQueued || saveMonthData._pending){
         S._saveQueued=false;
         kick();
       }
     });
   };
-  // Non-quiet cancels quiet debounce so the latest rented/collect intent runs now.
+  // Quiet debounce is ONLY for local draft coalescing of non-money keystrokes.
+  // Explicit submits (quiet=false) kick immediately — one intentional save.
   if(quiet){
     saveMonthData._t=setTimeout(kick, 700);
   } else kick();
+  });
 }
 `;
 

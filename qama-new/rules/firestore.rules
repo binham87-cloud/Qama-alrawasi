@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// QAMA security rules — defence in depth.
+//
+// The primary control is the command layer: every write goes through a callable Cloud
+// Function using the Admin SDK, which bypasses these rules. These rules therefore exist to
+// guarantee ONE thing: a browser holding a valid session still cannot write financial truth
+// directly, and cannot read what it must not see.
+//
+// Principle: clients READ what their role permits. Clients WRITE nothing. Anywhere.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn()  { return request.auth != null; }
+    function me()        { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function activeUser(){ return signedIn() && me().active == true; }
+    function isOwner()   { return activeUser() && me().role == 'owner'; }
+    function isStaff()   { return activeUser(); }
+
+    // ---- users: never expose PIN material to any client ----
+    match /users/{userId} {
+      // A client may read its own profile or, as owner, anyone's — but only through a
+      // query that cannot select pinHash/pinSalt. Firestore cannot mask fields, so client
+      // reads of this collection are denied entirely; the app receives profile data in the
+      // login response and in read-model documents instead.
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // ---- structural data: readable by any active user, writable by no one ----
+    match /properties/{id} { allow read: if isStaff(); allow write: if false; }
+    match /units/{id}      { allow read: if isStaff(); allow write: if false; }
+    match /spaces/{id}     { allow read: if isStaff(); allow write: if false; }
+    match /rentals/{id}    { allow read: if isStaff(); allow write: if false; }
+    match /accounts/{id}   { allow read: if isStaff(); allow write: if false; }
+
+    // ---- financial truth: read-only to clients, written only by trusted commands ----
+    match /obligations/{id} { allow read: if isStaff(); allow write: if false; }
+    match /receipts/{id}    { allow read: if isStaff(); allow write: if false; }
+    match /deposits/{id} {
+      // An employee sees their own deposits; the owner sees all.
+      allow read: if isOwner() || (isStaff() && resource.data.employeeId == request.auth.uid);
+      allow write: if false;
+    }
+    match /expenses/{id} {
+      allow read: if isOwner() || (isStaff() && resource.data.submittedBy == request.auth.uid);
+      allow write: if false;
+    }
+    match /reversals/{id} { allow read: if isOwner(); allow write: if false; }
+
+    // ---- audit and idempotency: owner may read, nobody may write ----
+    match /auditEvents/{id} { allow read: if isOwner(); allow write: if false; }
+    match /operations/{id}  { allow read: if false;     allow write: if false; }
+    match /loginAttempts/{id} { allow read, write: if false; }
+
+    // ---- read model ----
+    match /periodSummaries/{id} { allow read: if isStaff(); allow write: if false; }
+
+    // Anything not named above is denied.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

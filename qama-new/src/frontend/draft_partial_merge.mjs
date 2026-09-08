@@ -89,12 +89,9 @@ export function mergeDraftStatus(mapped, extra, sp) {
       // Pre-uncollect «محصّل» extras must not reopen as collect draft.
       return out;
     }
+    // Keep editor intent via _collectDraft only — NEVER force status:"collected"
+    // without a recognized receipt (that caused Yahya محصّل vs Manager متأخر).
     out._collectDraft = true;
-    if (eng === "vacant" || eng === "staff") {
-      out.status = "late";
-    } else {
-      out.status = "collected";
-    }
     return out;
   }
 

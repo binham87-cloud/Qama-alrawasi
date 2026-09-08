@@ -1,0 +1,37 @@
+{
+  "indexes": [
+    { "collectionGroup": "rentals", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "spaceId", "order": "ASCENDING" },
+      { "fieldPath": "state", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "obligations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "period", "order": "ASCENDING" },
+      { "fieldPath": "state", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "receipts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "obligationId", "order": "ASCENDING" },
+      { "fieldPath": "state", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "receipts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "collectorUserId", "order": "ASCENDING" },
+      { "fieldPath": "period", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "receipts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "period", "order": "ASCENDING" },
+      { "fieldPath": "state", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "deposits", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "employeeId", "order": "ASCENDING" },
+      { "fieldPath": "period", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "deposits", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "period", "order": "ASCENDING" },
+      { "fieldPath": "state", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "expenses", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "period", "order": "ASCENDING" },
+      { "fieldPath": "state", "order": "ASCENDING" }
+    ]}
+  ],
+  "fieldOverrides": []
+}

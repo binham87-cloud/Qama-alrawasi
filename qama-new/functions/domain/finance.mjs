@@ -122,6 +122,8 @@ export function liveObligationsForPeriod(obligations, rentals) {
 /** A receipt counts toward money only when recognized and not reversed. */
 export function isRecognizedReceipt(receipt) {
   if (!receipt || receipt.baselineExcluded === true) return false;
+  // Archived/hidden test receipts never enter operational Collected/Holding.
+  if (receipt.operationalHidden === true || receipt.archivedOperational === true) return false;
   return receipt.state === RECEIPT_STATE.RECOGNIZED;
 }
 
@@ -240,6 +242,10 @@ export function sharedHoldingFils({ receipts, deposits, excludeReceiptIds = [], 
   for (const d of deposits || []) {
     if (skipD.has(d.id)) continue;
     if (!isApproved(d)) continue;
+    // External (other) deposits never reduce Shared Holding.
+    if (d.sourceKind === "external") continue;
+    // Display-only bank-receipt history rows are not custody deposits.
+    if (d.sourceKind === "bank" || d.fromBankReceipt === true) continue;
     deposited += toSafeFils(d.amountFils);
   }
   return cash - deposited;
@@ -261,6 +267,8 @@ export function holdingByEmployee({ receipts, deposits }) {
   }
   for (const d of deposits || []) {
     if (!isApproved(d)) continue;
+    if (d.sourceKind === "external") continue;
+    if (d.sourceKind === "bank" || d.fromBankReceipt === true) continue;
     const who = d.employeeId;
     if (!who) continue;
     submitted.set(who, (submitted.get(who) || 0) + toSafeFils(d.amountFils));
@@ -344,19 +352,33 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
   const views = obs.map((o) => obligationView(o, receipts, asOfDate));
   const liveObIds = new Set(obs.map((o) => o.id));
 
-  const targetFils = views.reduce((s, v) => s + v.dueFils, 0);
-  const tenantPaidFils = views.reduce((s, v) => s + v.paidFils, 0);
-  const tenantUnpaidFils = targetFils - tenantPaidFils;
+  const obligationTargetFils = views.reduce((s, v) => s + v.dueFils, 0);
+  const obligationPaidFils = views.reduce((s, v) => s + v.paidFils, 0);
+
+  // Daily booking receipts (no obligation doc) — count as tenant paid / cash in pool.
+  // Unpaid daily target is layered in buildDashboard from uiPeriods extras.
+  const dailyPaidFils = (receipts || [])
+    .filter((r) => isRecognizedReceipt(r) && r.sourceType === "daily_booking")
+    .reduce((s, r) => s + toSafeFils(r.amountFils), 0);
+  const dailyCashFils = (receipts || [])
+    .filter((r) => isRecognizedReceipt(r) && r.sourceType === "daily_booking" && r.method === "cash")
+    .reduce((s, r) => s + toSafeFils(r.amountFils), 0);
+
+  // Include paid daily in target so TARGET = COLLECTED + UNPAID still holds until
+  // buildDashboard adds the unpaid daily remainder.
+  const targetFils = obligationTargetFils + dailyPaidFils;
+  const tenantPaidFils = obligationPaidFils + dailyPaidFils;
+  const tenantUnpaidFils = obligationTargetFils - obligationPaidFils;
 
   const cashOnObligationsFils = (receipts || [])
     .filter((r) => isRecognizedReceipt(r) && r.method === "cash" && liveObIds.has(r.obligationId))
-    .reduce((s, r) => s + toSafeFils(r.amountFils), 0);
+    .reduce((s, r) => s + toSafeFils(r.amountFils), 0) + dailyCashFils;
   const bankRecognizedFils = (receipts || [])
     .filter((r) => isRecognizedReceipt(r) && r.method === "bank" && liveObIds.has(r.obligationId))
     .reduce((s, r) => s + toSafeFils(r.amountFils), 0);
 
   const approvedDepositsFils = (deposits || [])
-    .filter(isApproved)
+    .filter((d) => isApproved(d) && d.sourceKind !== "bank" && d.fromBankReceipt !== true)
     .reduce((s, d) => s + toSafeFils(d.amountFils), 0);
 
   // Deposits may draw from the shared global pool; for THIS month's rent split,
@@ -410,6 +432,7 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
     sharedEmployeeHoldingFils: holdingFils,
     custody,
     expensesFils,
+    dailyPaidFils,
     counts,
     views,
   };
@@ -427,8 +450,9 @@ export function checkInvariants(summary) {
     problems.push({ code: "TARGET_MISMATCH", detail: "Target ≠ Collected + Remaining" });
   }
   const cashCollected = summary.custody.reduce((s, r) => s + r.cashCollectedFils, 0);
-  const approvedDeposits = summary.approvedDepositsFils ?? 0;
-  if (summary.holdingFils !== cashCollected - approvedDeposits) {
+  // Holding-reducing deposits only (external deposits are skipped in custody.depositedFils).
+  const holdingDeposits = summary.custody.reduce((s, r) => s + (r.depositedFils || 0), 0);
+  if (summary.holdingFils !== cashCollected - holdingDeposits) {
     problems.push({ code: "HOLDING_MISMATCH", detail: "Shared Holding ≠ recognized cash − approved deposits" });
   }
   if (summary.holdingFils < 0) {

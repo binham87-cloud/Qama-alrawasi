@@ -1,0 +1,39 @@
+QAMA NEW SYSTEM — CURSOR HANDOFF
+
+Continue the NEW QAMA system from the exact current state left by Cloud.
+Do not restart or redesign the project and do not touch the legacy QAMA system yet.
+
+Confirmed by Cloud before credit exhaustion:
+- Domain/financial tests passed.
+- Command/security/concurrency tests passed.
+- UI DOM interaction tests reached 22/22 PASS.
+- Firebase Emulator could not run in Cloud because firebase-tools/firebase-admin installation was blocked by proxy 403.
+
+Cursor task:
+1. Inspect these files and the existing NEW QAMA repository/worktree.
+2. Preserve the event-based receipt architecture and server-side authorization model.
+3. Run the full existing test suite.
+4. Install Firebase tooling/dependencies if available.
+5. Run real Firestore/Auth/Functions/Hosting emulators.
+6. Run Firestore Rules and real Firebase integration tests.
+7. Open the actual frontend in a browser and test owner/employee workflows and Arabic RTL/mobile behavior.
+8. Fix only real defects found; do not weaken financial/security rules to make tests pass.
+9. Keep the legacy Production system untouched until the new system passes acceptance.
+10. Before any replacement/cutover, make a complete rollback backup of legacy code/config and do not delete legacy Firestore data.
+
+Critical regression that must remain impossible:
+Rent 9,200 AED + recognized receipts 9,000 AED => Paid 9,000, Remaining 200, Status Partial.
+A client-supplied status="collected" must be rejected/ignored and must never create financial truth.
+
+At the end report only:
+READY / NOT READY
+- existing tests X/X
+- UI X/X
+- Firestore Rules X/X
+- Firebase integration X/X
+- security X/X
+- concurrency X/X
+- actual remaining blockers
+- exact next command/action to publish the NEW system
+
+Do not stop for intermediate approval unless an action would permanently delete or overwrite Production data.

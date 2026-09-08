@@ -329,10 +329,11 @@ export const PERMISSIONS = Object.freeze({
   // Operational structure matches the old QAMA screens: employees who can edit a month
   // could already add partitions / change occupancy by writing the month document.
   createSpace: BOTH, updateSpace: BOTH, setSpaceOccupancy: BOTH,
-  createRental: BOTH, updateRentalRent: BOTH, updateRentalTenant: BOTH, updateRentalSchedule: OWNER, closeRental: BOTH,
+  createRental: BOTH, updateRentalRent: BOTH, updateRentalTenant: BOTH, updateRentalSchedule: BOTH, closeRental: BOTH,
   renewRentalCycle: BOTH, endTenancy: BOTH,
-  generateObligations: OWNER, cancelObligation: OWNER,
+  generateObligations: BOTH, cancelObligation: OWNER,
   createCashReceipt: BOTH,
+  createDailyCashReceipt: BOTH,
   submitBankReceipt: BOTH, approveBankReceipt: OWNER, rejectBankReceipt: OWNER,
   reverseReceipt: OWNER,
   submitDeposit: BOTH, approveDeposit: OWNER, rejectDeposit: OWNER, reverseDeposit: OWNER,
@@ -343,6 +344,7 @@ export const PERMISSIONS = Object.freeze({
   // Not financial truth — money still only moves through receipt/deposit/expense commands.
   upsertUiConfig: OWNER,
   payInstallment: OWNER,
+  reverseInstallment: OWNER,
   submitWorkRequest: BOTH,
   resolveWorkRequest: OWNER,
   commitWorkRequest: OWNER,
@@ -410,6 +412,10 @@ export const SCHEMAS = Object.freeze({
     obligationId: S.id(), amountFils: S.fils(), collectionDate: S.date(), note: S.opt(S.str(300)),
     collectorUserId: S.opt(S.id()),
   },
+  createDailyCashReceipt: {
+    bookingId: S.str(120), amountFils: S.fils(), collectionDate: S.date(),
+    collectorUserId: S.opt(S.id()), note: S.opt(S.str(300)), period: S.period(),
+  },
   submitBankReceipt: {
     obligationId: S.id(), amountFils: S.fils(), collectionDate: S.date(), bankReference: S.str(120),
     collectorUserId: S.opt(S.id()),
@@ -421,6 +427,7 @@ export const SCHEMAS = Object.freeze({
   submitDeposit: {
     amountFils: S.fils(), depositDate: S.date(), destinationAccountId: S.id(),
     note: S.opt(S.str(300)), reference: S.opt(S.str(120)), employeeId: S.opt(S.id()),
+    sourceKind: S.opt(S.enum(["holding", "external"])),
   },
   approveDeposit: { depositId: S.id() },
   rejectDeposit: { depositId: S.id(), reason: S.str(300) },
@@ -430,6 +437,7 @@ export const SCHEMAS = Object.freeze({
     amountFils: S.fils(), reason: S.str(300), category: S.str(60), expenseDate: S.date(),
     paidFromAccountId: S.id(),
     maintenanceLinkId: S.opt(S.str(120)),
+    requestedBy: S.opt(S.id()),
   },
   approveExpense: { expenseId: S.id() },
   rejectExpense: { expenseId: S.id(), reason: S.str(300) },
@@ -445,6 +453,7 @@ export const SCHEMAS = Object.freeze({
 
   upsertUiConfig: { configId: S.enum(["locks", "permissions", "balances", "customUnits"]), json: S.str(200000) },
   payInstallment: { installmentDate: S.date(), amountFils: S.fils() },
+  reverseInstallment: { installmentDate: S.date() },
   submitWorkRequest: {
     requestId: S.id(), type: S.str(80), desc: S.str(800), payloadJson: S.str(100000),
     month: S.int(0, 11), year: S.int(2020, 2100),
@@ -1038,6 +1047,39 @@ const HANDLERS = {
       collectorUserId,
     });
   },
+  /**
+   * Daily booking cash — no obligation document. Synthetic obligationId "daily:"+bookingId
+   * so Holding/Collected still count recognized cash via sharedHoldingFils / periodSummary.
+   */
+  async createDailyCashReceipt(ctx) {
+    await assertEmployeePeriodOpen(ctx, ctx.payload.period);
+    const collectorUserId = await collectorFor(ctx);
+    const bookingId = ctx.payload.bookingId;
+    const id = newId("rcpt", ctx);
+    ctx.tx.create("receipts", id, {
+      id,
+      obligationId: `daily:${bookingId}`,
+      rentalId: null,
+      propertyId: null,
+      unitId: null,
+      spaceId: null,
+      period: ctx.payload.period,
+      tenantNameSnapshot: ctx.payload.note || "حجز يومي",
+      amountFils: ctx.payload.amountFils,
+      collectionDate: ctx.payload.collectionDate,
+      note: ctx.payload.note || null,
+      method: "cash",
+      state: RECEIPT_STATE.RECOGNIZED,
+      collectorUserId,
+      sourceType: "daily_booking",
+      bookingId,
+      ...base(ctx),
+    });
+    audit(ctx, "daily_cash_receipt_created", "receipt", id, {
+      amountFils: ctx.payload.amountFils, bookingId, method: "cash",
+    });
+    return { receiptId: id, state: RECEIPT_STATE.RECOGNIZED, method: "cash", bookingId };
+  },
   async submitBankReceipt(ctx) {
     const collectorUserId = await collectorFor(ctx);
     return createReceipt(ctx, {
@@ -1169,14 +1211,15 @@ const HANDLERS = {
     if (!account || account.active === false) throw new DomainError("ACCOUNT_NOT_FOUND");
 
     const employeeId = await depositEmployeeFor(ctx);
+    const sourceKind = ctx.payload.sourceKind || "holding";
     const receipts = await ctx.tx.query("receipts", []);
     const deposits = await ctx.tx.query("deposits", []);
-    // EVERY approved/pending deposit that will reduce Shared Holding must fit
-    // current cash custody. Owner auto-approve used to skip this and could
-    // drive Holding negative (e.g. book deposit with no live cash).
-    assertDepositFitsCustody({
-      employeeId, amountFils: ctx.payload.amountFils, receipts, deposits,
-    });
+    // Holding deposits must fit Shared Holding. External (other) deposits do not reduce Holding.
+    if (sourceKind !== "external") {
+      assertDepositFitsCustody({
+        employeeId, amountFils: ctx.payload.amountFils, receipts, deposits,
+      });
+    }
 
     const id = newId("dep", ctx);
     const approved = ctx.actor.role === "owner";
@@ -1188,11 +1231,12 @@ const HANDLERS = {
       period: periodOf(ctx.payload.depositDate),
       destinationAccountId: account.id,
       note: ctx.payload.note || null, reference: ctx.payload.reference || null,
+      sourceKind,
       state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING,
       ...(approved ? { approvedBy: ctx.actor.userId, approvedAt: ctx.now } : {}),
       ...base(ctx),
     });
-    audit(ctx, "deposit_submitted", "deposit", id, { amountFils: ctx.payload.amountFils });
+    audit(ctx, "deposit_submitted", "deposit", id, { amountFils: ctx.payload.amountFils, sourceKind });
     if (approved) {
       await creditRevenueAccount(ctx, {
         amountFils: ctx.payload.amountFils,
@@ -1210,12 +1254,15 @@ const HANDLERS = {
     if (dep.state !== APPROVAL_STATE.PENDING) throw new DomainError("DEPOSIT_NOT_PENDING", { state: dep.state });
 
     // Same Firestore transaction: refuse if amount exceeds current Shared Holding.
-    const receipts = await ctx.tx.query("receipts", []);
-    const deposits = await ctx.tx.query("deposits", []);
-    assertDepositFitsCustody({
-      employeeId: dep.employeeId, amountFils: dep.amountFils,
-      receipts, deposits: deposits.filter((d) => d.id !== dep.id),
-    });
+    // External deposits never drew from Holding — skip custody check.
+    if (dep.sourceKind !== "external") {
+      const receipts = await ctx.tx.query("receipts", []);
+      const deposits = await ctx.tx.query("deposits", []);
+      assertDepositFitsCustody({
+        employeeId: dep.employeeId, amountFils: dep.amountFils,
+        receipts, deposits: deposits.filter((d) => d.id !== dep.id),
+      });
+    }
 
     ctx.tx.update("deposits", dep.id, {
       state: APPROVAL_STATE.APPROVED, approvedBy: ctx.actor.userId, approvedAt: ctx.now,
@@ -1273,17 +1320,19 @@ const HANDLERS = {
     const id = newId("exp", ctx);
     const approved = ctx.actor.role === "owner";
     const maintenanceLinkId = ctx.payload.maintenanceLinkId || null;
+    const requestedBy = ctx.payload.requestedBy || null;
     ctx.tx.create("expenses", id, {
       id, amountFils: ctx.payload.amountFils, reason: ctx.payload.reason,
       category: ctx.payload.category, expenseDate: ctx.payload.expenseDate,
       period: periodOf(ctx.payload.expenseDate),
       paidFromAccountId: account.id, submittedBy: ctx.actor.userId,
       maintenanceLinkId,
+      requestedBy,
       state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING,
       ...(approved ? { approvedBy: ctx.actor.userId, approvedAt: ctx.now } : {}),
       ...base(ctx),
     });
-    audit(ctx, "expense_submitted", "expense", id, { amountFils: ctx.payload.amountFils, maintenanceLinkId });
+    audit(ctx, "expense_submitted", "expense", id, { amountFils: ctx.payload.amountFils, maintenanceLinkId, requestedBy });
     // Recognized expenses are paid from حساب الإيرادات exactly once.
     if (approved) {
       await debitRevenueAccount(ctx, {
@@ -1441,6 +1490,7 @@ const HANDLERS = {
   /**
    * Atomic installment pay: mark one schedule row paid + debit installmentBalance.
    * Concurrent sessions / lost-response retries are safe via operationId + paid guard.
+   * Plan is open-ended: after paying the last unpaid row, append the next quarterly row.
    */
   async payInstallment(ctx) {
     const date = ctx.payload.installmentDate;
@@ -1466,6 +1516,7 @@ const HANDLERS = {
         installmentDate: date,
         installmentBalance: Number(obj.installmentBalance || 0),
         paidCount: sched.filter((x) => x && x.paid).length,
+        installmentSchedule: sched,
       };
     }
     const bal = Number(obj.installmentBalance || 0);
@@ -1481,7 +1532,18 @@ const HANDLERS = {
       paidAt: ctx.now,
       paidBy: ctx.actor.userId,
       evidence: row.evidence || "payInstallment",
+      reversedAt: null,
+      reversedBy: null,
     };
+    // Open-ended: always keep at least one future unpaid installment.
+    if (!sched.some((x) => x && !x.paid)) {
+      const last = sched[sched.length - 1] || row;
+      sched.push({
+        date: nextQuarterEndDate(String(last.date || date)),
+        amount: Number(last.amount) || amountAed,
+        paid: false,
+      });
+    }
     obj.installmentSchedule = sched;
     obj.installmentBalance = nextBal;
     obj.updatedAt = ctx.now;
@@ -1499,6 +1561,59 @@ const HANDLERS = {
       installmentDate: date,
       installmentBalance: nextBal,
       paidCount: sched.filter((x) => x && x.paid).length,
+      installmentSchedule: sched,
+    };
+  },
+
+  /** Undo a paid installment: restore balance once; unpaid rows no longer count. */
+  async reverseInstallment(ctx) {
+    const date = ctx.payload.installmentDate;
+    const existing = await ctx.tx.get("uiConfig", "balances");
+    if (!existing) throw new DomainError("BALANCES_NOT_FOUND");
+    let obj = {};
+    try { obj = JSON.parse(existing.json || "{}"); } catch { obj = {}; }
+    const sched = Array.isArray(obj.installmentSchedule) ? obj.installmentSchedule.slice() : [];
+    const idx = sched.findIndex((x) => String(x && x.date) === date);
+    if (idx < 0) throw new DomainError("INSTALLMENT_NOT_FOUND", { installmentDate: date });
+    const row = sched[idx] || {};
+    if (!row.paid) {
+      return {
+        alreadyApplied: true,
+        installmentDate: date,
+        installmentBalance: Number(obj.installmentBalance || 0),
+        paidCount: sched.filter((x) => x && x.paid).length,
+        installmentSchedule: sched,
+      };
+    }
+    const amountAed = Number(row.amount) || 0;
+    const nextBal = Math.round((Number(obj.installmentBalance || 0) + amountAed) * 100) / 100;
+    sched[idx] = {
+      ...row,
+      paid: false,
+      paidAt: null,
+      paidBy: null,
+      evidence: null,
+      reversedAt: ctx.now,
+      reversedBy: ctx.actor.userId,
+    };
+    obj.installmentSchedule = sched;
+    obj.installmentBalance = nextBal;
+    obj.updatedAt = ctx.now;
+    ctx.tx.update("uiConfig", "balances", {
+      json: JSON.stringify(obj),
+      updatedAt: ctx.now,
+      updatedBy: ctx.actor.userId,
+      schemaVersion: 1,
+    });
+    audit(ctx, "installment_reversed", "uiConfig", `balances:installment:${date}`, {
+      amountAed, balanceAfterAed: nextBal,
+    });
+    return {
+      alreadyApplied: false,
+      installmentDate: date,
+      installmentBalance: nextBal,
+      paidCount: sched.filter((x) => x && x.paid).length,
+      installmentSchedule: sched,
     };
   },
 
@@ -1665,6 +1780,19 @@ function actorKey(actor) {
   if (id.includes("nader")) return "nader";
   if (id.includes("yahia")) return "yahia";
   return "saeed";
+}
+
+/** Next calendar quarter-end date after an ISO date (open-ended installment cadence). */
+function nextQuarterEndDate(isoDate) {
+  const s = String(isoDate || "").slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) throw new DomainError("INVALID_DATE", { isoDate });
+  let y = Number(m[1]);
+  let month = Number(m[2]); // 1-12
+  month += 3;
+  while (month > 12) { month -= 12; y += 1; }
+  const lastDay = new Date(Date.UTC(y, month, 0)).getUTCDate();
+  return `${y}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 }
 
 function parseJsonField(value, field) {

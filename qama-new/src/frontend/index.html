@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <meta name="theme-color" content="#0a0a0a"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<title>قمة الرواسي v2.1</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
+<meta name="qama-ui-build" content="HOLDING-INST-20260908T0135Z"/>
+<title>قمة الرواسي · HOLDING-INST-20260908T0135Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -104,11 +108,18 @@ function uncollectOpKey(obligationId, alreadyFils, receipts) {
   if (!list.length && alreadyFils > 0) return opId("uncol-" + shortOb(obligationId));
   return (`uncol-${shortOb(obligationId)}-p${alreadyFils}-L${live}-A${all}`).slice(0, 120);
 }
+/** Money-mutating commands — never auto-retry on IDEMPOTENCY_PAYLOAD_MISMATCH. */
+const MONEY_MUTATION_COMMANDS = new Set([
+  "createCashReceipt", "createDailyCashReceipt", "submitBankReceipt", "approveBankReceipt",
+  "uncollectObligation", "reverseReceipt",
+  "submitDeposit", "approveDeposit", "reverseDeposit", "rejectDeposit",
+  "submitExpense", "reverseExpense", "rejectExpense",
+]);
 /**
  * Run a command with an optional stable operationId.
- * If the server reports IDEMPOTENCY_PAYLOAD_MISMATCH (stale opId reused for a
- * NEW edit), retry once with a fresh unique opId so legitimate UI saves never
- * die with «تعذر الحفظ أونلاين».
+ * Non-money IDEMPOTENCY_PAYLOAD_MISMATCH (stale opId reused for a NEW edit)
+ * retries once with a fresh opId. Money commands surface the error — a blind
+ * retry must never mint a second receipt/deposit.
  */
 async function engineCommand(command, payload, intent) {
   const first = (intent && String(intent).slice(0, 120)) || opId(command);
@@ -117,6 +128,7 @@ async function engineCommand(command, payload, intent) {
   } catch (e) {
     const msg = String((e && (e.message || e.code)) || e);
     if (!/IDEMPOTENCY_PAYLOAD_MISMATCH/i.test(msg)) throw e;
+    if (MONEY_MUTATION_COMMANDS.has(String(command))) throw e;
     const fresh = opId((intent || command) + "-n");
     console.warn("opId stale → retry fresh", command, first, "→", fresh);
     return callFn("command", { command, payload, operationId: fresh });
@@ -150,7 +162,12 @@ function formatEngineError(err) {
   }
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/TENANT_REQUIRED/i.test(raw)) return "اسم المستأجر مطلوب قبل التأجير";
+  if (/PARTIAL_AMOUNT_REQUIRED/i.test(raw)) return "مبلغ الدفع الجزئي مطلوب وأكبر من صفر";
+  if (/RENT_REQUIRED/i.test(raw)) return "قيمة الإيجار مطلوبة قبل التأجير";
+  if (/START_DATE_REQUIRED/i.test(raw)) return "تاريخ بداية العقد مطلوب";
+  if (/ARREARS_CONFIRMATION_REQUIRED/i.test(raw)) return "توجد متأخرات — أعد الإخلاء (يُحتفظ بالمتأخرات دون عكس التحصيل)";
   if (/INVALID_AMOUNT/i.test(raw)) return "المبلغ غير صالح — أدخل مبلغاً أكبر من صفر";
+  if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/FORBIDDEN/i.test(raw)) return "غير مسموح لهذه الصلاحية";
   if (/ALREADY_REVERSED/i.test(raw)) return "تم العكس مسبقاً";
   if (/DEPOSIT_NOT_APPROVED/i.test(raw)) return "الإيداع غير معتمد — لا يمكن عكسه بهذا المسار";
@@ -159,6 +176,33 @@ function formatEngineError(err) {
   if (/network|unavailable|Failed to fetch|internal/i.test(raw)) return "تعذر الاتصال بالخادم — تحقق من الشبكة";
   const short = raw.replace(/^FirebaseError:\s*/i, "").replace(/^functions\//i, "").slice(0, 160);
   return short || "تعذر الحفظ أونلاين";
+}
+
+/** Strip false «محصّل» paint after a failed money command — keep non-money draft. */
+function stripFailedCollectPaint(item, dashSp) {
+  if (!item) return;
+  const enginePaid = dashSp ? filsToAed(dashSp.paidFils) : Number(item._enginePaid || 0);
+  const hasLive = (Array.isArray(item._receipts) ? item._receipts : (dashSp && dashSp.spaceReceipts) || [])
+    .some((r) => r && r.state === "recognized");
+  if (hasLive || enginePaid > 0) return;
+  if (item.status === "collected" || item._collectDraft || item.partial) {
+    const due = item.due_date || item.start_date || "";
+    const today = engineToday();
+    item.status = (due && due > today) ? "pending" : "late";
+  }
+  item._collectDraft = false;
+  item.collectionMethod = "";
+  item.collectedBy = "";
+  if (!item.partial) item.paid_amount = 0;
+}
+
+function stripFailedCollectPaintInData(data) {
+  const visit = (x) => {
+    if (!x || !x._spaceId) return;
+    stripFailedCollectPaint(x, dashSpaceById(x._spaceId));
+  };
+  (data.units || []).forEach((u) => (u.partitions || []).forEach(visit));
+  (data.full || []).forEach(visit);
 }
 function periodOfMonth(y, m) {
   return Number(y) + "-" + String(Number(m) + 1).padStart(2, "0");
@@ -211,10 +255,14 @@ function unitMeta(name) {
 }
 function spacePartId(space) {
   const n = String(space.name || "");
-  const m = n.match(/\/\s*(\d+)\s*$/);
+  // Prefer "/ 1", "/1", trailing digits, or bare numeric name — never return a non-numeric spaceId
+  // (Number(spaceId) === NaN broke partition sort so 2 could appear before 1).
+  const m = n.match(/\/\s*(\d+)\s*$/) || n.match(/(?:بارتشن|partition)\s*#?\s*(\d+)/i) || n.match(/(\d+)\s*$/);
   if (m) return Number(m[1]);
-  if (/^\d+$/.test(n)) return n;
-  return space.spaceId;
+  if (/^\d+$/.test(n)) return Number(n);
+  const idm = String(space.spaceId || "").match(/(\d+)\s*$/);
+  if (idm) return Number(idm[1]);
+  return 9999;
 }
 function wholeDisplayId(unit) {
   const n = String(unit.name || "");
@@ -313,12 +361,9 @@ function mergeDraftStatus(mapped, extra, sp) {
       // Pre-uncollect «محصّل» extras must not reopen as collect draft.
       return out;
     }
+    // Keep editor intent via _collectDraft only — NEVER force status:"collected"
+    // without a recognized receipt (that caused Yahya محصّل vs Manager متأخر).
     out._collectDraft = true;
-    if (eng === "vacant" || eng === "staff") {
-      out.status = "late";
-    } else {
-      out.status = "collected";
-    }
     return out;
   }
 
@@ -367,6 +412,8 @@ function applyUiConfig(ui) {
 function isVacateResidueExtra(extra, sp, mapped) {
   if (!extra) return false;
   if (sp && sp.rentalId) return false;
+  // Real vacate with retained arrears: keep card money/tenant snapshot from engine.
+  if (sp && sp.obligationId && Number(sp.remainingFils || 0) > 0) return false;
   if (!(mapped && (mapped.status === "vacant" || mapped.status === "staff"))) return false;
   if (!["collected", "late", "pending"].includes(String(extra.status || ""))) return false;
   if (extra.draftClearedByVacate) return true;
@@ -532,14 +579,24 @@ function mapDashboardToMonth(dash) {
 
   const depToTx = (d) => ({
     id: d.id,
-    type: "عام",
-    desc: d.reference || d.accountName || "إيداع",
+    type: d.sourceKind === "bank" ? "تحويل بنكي" : "عام",
+    desc: d.reference || d.accountName || (d.sourceKind === "bank" ? "تحويل بنكي" : "إيداع"),
     amount: filsToAed(d.amountFils),
     date: d.depositDate,
-    notes: d.employeeName || "",
-    by: "saeed",
+    notes: d.note || d.employeeName || "",
+    by: d.employeeId || "saeed",
+    sourceKind: d.sourceKind || "holding",
+    sourceLabel: d.sourceKind === "bank"
+      ? "تحويل بنكي"
+      : (d.sourceKind === "external" ? "إيداع آخر" : "من العهدة"),
     _engineId: d.id,
-    _state: d.state
+    _state: d.state,
+    _fromBankReceipt: !!d.fromBankReceipt,
+    _receiptId: d.receiptId || null,
+    _approvedBy: d.approvedBy || null,
+    _approvedAt: d.approvedAt || null,
+    _accountName: d.accountName || null,
+    _tenantName: d.tenantName || null,
   });
   const expToOld = (e) => ({
     id: e.id,
@@ -547,7 +604,8 @@ function mapDashboardToMonth(dash) {
     amount: filsToAed(e.amountFils),
     category: e.category || "عام",
     date: e.expenseDate,
-    by: "saeed",
+    by: e.requestedBy || e.submittedBy || "saeed",
+    requestedBy: e.requestedBy || null,
     _engineId: e.id,
     _state: e.state,
     _maintenanceLinkId: e.maintenanceLinkId || null,
@@ -662,9 +720,28 @@ function dashSpaceById(spaceId) {
 async function applyCollection(item, dashSp) {
   const already = dashSp ? Number(dashSp.paidFils || 0) : aedToFils(item._enginePaid || 0);
   let want = 0;
-  if (item.partial) want = aedToFils(item.paid_amount);
-  else if (item.status === "collected") want = aedToFils(item.rent || item.paid_amount);
-  else return;
+  if (item.partial) {
+    want = aedToFils(item.paid_amount);
+    if (want <= 0) {
+      const err = new Error("PARTIAL_AMOUNT_REQUIRED");
+      err.code = "PARTIAL_AMOUNT_REQUIRED";
+      err.field = "paid_amount";
+      throw err;
+    }
+    const due = dashSp ? Number(dashSp.dueFils || 0) : aedToFils(item.rent);
+    if (due > 0 && want > due) {
+      const err = new Error("AMOUNT_EXCEEDS_REMAINING");
+      err.code = "AMOUNT_EXCEEDS_REMAINING";
+      err.field = "paid_amount";
+      throw err;
+    }
+  } else if (item.status === "collected" || item._collectDraft) {
+    // كامل: amount field may be 0/blank — use exact remaining obligation, never UI paid_amount.
+    const remaining = (dashSp && dashSp.remainingFils != null)
+      ? Number(dashSp.remainingFils)
+      : Math.max(0, aedToFils(item.rent) - already);
+    want = already + remaining;
+  } else return;
   const delta = want - already;
   if (delta <= 0) return;
   // Full and partial collect both require an explicit method. Otherwise selecting
@@ -728,12 +805,12 @@ async function renewCycleForItem(item, dashSp) {
   return engineCommand("renewRentalCycle", { rentalId, asOfDate: asOf, earlyWindowDays: 7 }, key);
 }
 
-async function endTenancyForItem(item, dashSp, { retainArrears = false, reason = "إخلاء من الشاشة" } = {}) {
+async function endTenancyForItem(item, dashSp, { retainArrears = true, reason = "إخلاء من الشاشة" } = {}) {
   const rentalId = item._rentalId || dashSp?.rentalId;
   if (!rentalId) throw new Error("NO_RENTAL_TO_END");
   const remaining = Number(dashSp?.remainingFils || 0);
-  const decision = retainArrears || remaining > 0 ? "retain" : "none";
-  if (remaining > 0 && !retainArrears) {
+  const decision = "retain"; // real vacate always retains unpaid debt — never cancel via closeRental
+  if (remaining > 0 && retainArrears === false) {
     const err = new Error("ARREARS_CONFIRMATION_REQUIRED");
     err.code = "ARREARS_CONFIRMATION_REQUIRED";
     err.arrearsFils = remaining;
@@ -747,24 +824,58 @@ async function endTenancyForItem(item, dashSp, { retainArrears = false, reason =
   }, intentKey("end-tenancy", rentalId, decision));
 }
 
+/** CASE A — mistaken rental that should never have existed. Cancels unpaid obligations. */
+async function cancelErroneousRentalForItem(item, dashSp, { reason = "إلغاء إيجار خاطئ من الشاشة" } = {}) {
+  const rentalId = item._rentalId || dashSp?.rentalId;
+  if (!rentalId) throw new Error("NO_RENTAL_TO_CANCEL");
+  const livePaid = Number(dashSp?.paidFils || 0);
+  if (livePaid > 0) {
+    const err = new Error("ERRONEOUS_CANCEL_REQUIRES_UNCOLLECT_FIRST");
+    err.code = "ERRONEOUS_CANCEL_REQUIRES_UNCOLLECT_FIRST";
+    throw err;
+  }
+  return engineCommand("closeRental", {
+    rentalId,
+    endDate: engineToday(),
+    reason: String(reason).slice(0, 300),
+    setVacant: true,
+  }, intentKey("cancel-erroneous", rentalId, "unpaid"));
+}
+
 async function syncOccupancyAndTenant(item, dashSp) {
   if (!item._spaceId) return;
   const occ = item.status === "staff" ? "staff" : item.status === "vacant" ? "vacant" : "rented";
   const engineOcc = dashSp ? (dashSp.occupancy || "vacant") : null;
   let rentalId = item._rentalId || dashSp?.rentalId || null;
 
-  // Vacant/staff must end live tenancy WITHOUT reversing collections (use endTenancy).
+  // Collecting retained arrears on an already-vacant space must NOT mint a new rental.
+  const collectingRetainedVacateDebt =
+    dashSp
+    && (dashSp.occupancy === "vacant" || dashSp.occupancy === "staff")
+    && dashSp.obligationId
+    && Number(dashSp.remainingFils || 0) > 0
+    && (item.status === "collected" || item.partial || (!!item._collectDraft && !!item.collectionMethod));
+  if (collectingRetainedVacateDebt) {
+    item._obligationId = item._obligationId || dashSp.obligationId;
+    return;
+  }
+
+  // Vacant/staff must end live tenancy WITHOUT reversing collections (use endTenancy+retain).
+  // Real move-out keeps unpaid debt collectible. CASE A (erroneous cancel) uses
+  // cancelErroneousRentalForItem / closeRental explicitly — never this path.
+  // MUST NOT wipe draft tenant/rent the user typed while the card is still vacant
+  // (start-date / quiet saves used to clear item.tenant="" → TENANT_REQUIRED).
   if (occ === "vacant" || occ === "staff") {
     const mustClose = (engineOcc && engineOcc !== occ) || !!rentalId;
     if (rentalId) {
-      const remaining = Number(dashSp?.remainingFils || 0);
       try {
+        // CASE B — real vacate/evict: always retain arrears when unpaid debt exists.
         await engineCommand("endTenancy", {
           rentalId,
           endDate: engineToday(),
           reason: occ === "staff" ? "تحويل لموظفين من الشاشة" : "إخلاء وتحويل لفارغ من الشاشة",
-          arrearsDecision: remaining > 0 ? "retain" : "none",
-        }, intentKey("end-tenancy", rentalId, remaining > 0 ? "retain" : "none"));
+          arrearsDecision: "retain",
+        }, intentKey("end-tenancy", rentalId, "retain"));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/RENTAL_ALREADY_CLOSED|RENTAL_NOT_ACTIVE|RENTAL_NOT_FOUND/.test(code)) throw e;
@@ -786,9 +897,22 @@ async function syncOccupancyAndTenant(item, dashSp) {
       item._rentalId = null;
       item._obligationId = null;
       item.tenant = "";
+      item.phone = "";
       item.paid_amount = 0;
       item.partial = false;
+      item.collectionMethod = "";
+      item.collectedBy = "";
+      item._collectDraft = false;
+      item.rent = 0;
+      item.start_date = "";
+      item.end_date = "";
+      item.due_date = "";
+      item.draftClearedByVacate = true;
+      item.draftSessionId = "";
+      item.draftForRentalId = "";
+      item.note = occ === "staff" ? "موظفين" : "فارغ";
     } else {
+      // Already vacant/staff with no live rental: keep draft fields for the next rent save.
       item._rentalId = null;
       item._obligationId = null;
     }
@@ -801,11 +925,26 @@ async function syncOccupancyAndTenant(item, dashSp) {
   // Do NOT setSpaceOccupancy(rented) first — that left partial occupancy when tenant
   // was missing, and createRental itself sets occupancy=rented on success.
   if (!rentalId && occ === "rented") {
-    const tenant = String(item.tenant || "").trim();
+    // iPhone Safari: typed tenant can sit in the DOM while a quiet save races with
+    // an older in-memory item. Prefer live input when model tenant is empty.
+    let tenant = String(item.tenant || "").trim();
+    if (!tenant || tenant === "—" || tenant === "-" || tenant === "–") {
+      try {
+        const el = typeof document !== "undefined" && document.querySelector('[data-testid="partition-tenant"],[data-testid="full-tenant"]');
+        const domTenant = el && String(el.value || "").trim();
+        if (domTenant && domTenant !== "—" && domTenant !== "-" && domTenant !== "–" && domTenant !== "فارغ") {
+          tenant = domTenant;
+          item.tenant = domTenant;
+        }
+      } catch (_dom) {}
+    }
     const rentFils = aedToFils(item.rent);
     if (rentFils > 0) {
       if (!tenant || tenant === "—" || tenant === "-" || tenant === "–") {
-        throw new Error("TENANT_REQUIRED");
+        const err = new Error("TENANT_REQUIRED");
+        err.code = "TENANT_REQUIRED";
+        err.field = "tenant";
+        throw err;
       }
       const start = item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date) ? item.start_date : engineToday();
       const dueDay = start ? Number(start.slice(8, 10)) || 1 : 1;
@@ -972,6 +1111,7 @@ async function applyUiDeposits(data) {
   const known = S._hydratedDepositIds || new Set();
   for (const tx of (data.transactions || [])) {
     if (tx._engineId || tx._state) continue;
+    if (tx._fromBankReceipt || tx.sourceKind === "bank") continue; // display-only bank history
     if (tx.requestId || tx.depositId) continue; // work-request sourced — never double-submit
     // Fingerprint guard: if an identical live deposit already exists, link it.
     const fils = aedToFils(tx.amount);
@@ -993,7 +1133,8 @@ async function applyUiDeposits(data) {
       depositDate: date,
       destinationAccountId: acc,
       note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
-      reference: String(tx.desc || tx.id || "إيداع").slice(0, 120)
+      reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
+      sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
     }, ("uiddep-" + String(tx.id || Date.now()) + "-" + fils).slice(0, 120));
     if (r && r.depositId) {
       tx._engineId = r.depositId;
@@ -1087,6 +1228,9 @@ async function applyEngineDiff(data) {
   const errors = [];
   for (const item of items) {
     if (!item._spaceId) continue;
+    // Explicit partition/full Save sets _commitIntent. Expense/deposit/maintenance
+    // (and other month writes) must NOT re-run occupancy/collection for leftover drafts.
+    if (!item._commitIntent) continue;
     const dashSp = dashSpaceById(item._spaceId);
     try {
       await maybeUncollect(item, dashSp);
@@ -1118,10 +1262,21 @@ async function applyEngineDiff(data) {
         // applyCollection keys off status/partial — promote draft collect for this call only.
         const payItem = (item.status === "collected" || item.partial) ? item
           : { ...item, status: "collected" };
-        await applyCollection(payItem, fresh);
+        try {
+          await applyCollection(payItem, fresh);
+        } catch (payErr) {
+          stripFailedCollectPaint(item, fresh);
+          throw payErr;
+        }
       }
+      item._commitIntent = false;
     } catch (e) {
+      item._commitIntent = false;
       console.error("applyEngineDiff item failed", item._spaceId, e);
+      const code = String((e && (e.message || e.code)) || e);
+      if (/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|TENANT_REQUIRED|RENT_REQUIRED/i.test(code)) {
+        stripFailedCollectPaint(item, dashSpaceById(item._spaceId));
+      }
       errors.push(e);
     }
   }
@@ -1274,6 +1429,7 @@ async function setDoc(ref, data) {
                   destinationAccountId: acc,
                   note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
                   reference: String(tx.desc || data.id || "إيداع").slice(0, 120),
+                  sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
                 }, ("reqdep-" + (data.id || ref._id)).slice(0, 120));
                 if (dep && dep.depositId) {
                   payload = { ...payload, depositId: dep.depositId, transaction: { ...tx, depositId: dep.depositId } };
@@ -1356,11 +1512,16 @@ async function setDoc(ref, data) {
       } catch (e) {
         console.error(e);
         const code = String((e && (e.message || e.code)) || e);
-        const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT/i.test(code);
+        const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED/i.test(code);
+        const moneyFail = /PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|createCash|submitBank|uncollect|AMOUNT_EXCEEDS_HOLDING/i.test(code);
         if (keepDraft && draftJson) {
           try {
-            localStorage.setItem("qama_month_" + y + "_" + m, draftJson);
+            const draft = JSON.parse(draftJson);
+            if (moneyFail) stripFailedCollectPaintInData(draft);
+            localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(draft));
             S._preserveDraftUntil = Date.now() + 120000;
+            // Re-read canonical money into S._dash without wiping the restored draft localStorage.
+            try { await refreshEngine(y, m, true); } catch (_re) {}
           } catch (_e2) {}
         } else {
           try { await hydrateMonthFromEngine(y, m); } catch (e2) {}
@@ -1408,7 +1569,7 @@ if (typeof window !== "undefined" && typeof __QAMA_EMULATOR__ !== "undefined" &&
   window.__qamaTest = {
     collectionOpKey, uncollectOpKey, shortOb, receiptCounts, formatEngineError, intentKey, opId,
     engineCommand, refreshEngine, applyEngineDiff, applyCollection, maybeUncollect,
-    renewCycleForItem, endTenancyForItem,
+    renewCycleForItem, endTenancyForItem, cancelErroneousRentalForItem,
     authState() {
       return {
         screen: typeof S !== "undefined" ? S.screen : null,
@@ -1475,11 +1636,11 @@ function saveLocks(){
   const locksSnapshot=JSON.parse(JSON.stringify(S.lockedMonths||{}));
   // localStorage فوري
   try{localStorage.setItem("qama_locks",JSON.stringify(locksSnapshot));}catch(e){}
-  // Firebase: استخدم الـ imports الموجودة مباشرة (لا dynamic import)
-  // بدون merge — الاستبدال الكامل ضروري حتى يُحذف القفل فعلياً من Firebase عند الفتح
-  // (merge:true كانت تدمج الخرائط فلا يُحذف المفتاح أبداً → القفل لا يفتح)
-  try{setDoc(doc(db,"config","locks"),{data:locksSnapshot,updatedAt:serverTimestamp()})
-    .catch(e=>console.error("saveLocks Firebase error:",e));}catch(e){}
+  // Return Promise so UI can await ONE lock/unlock command (no optimistic success).
+  try{
+    return Promise.resolve(setDoc(doc(db,"config","locks"),{data:locksSnapshot,updatedAt:serverTimestamp()}))
+      .catch(e=>{console.error("saveLocks Firebase error:",e);throw e;});
+  }catch(e){return Promise.reject(e);}
 }
 function loadLocks(){
   // localStorage هو المصدر الموثوق دائماً — saveLocks يكتبه فوراً قبل Firebase
@@ -1547,24 +1708,79 @@ async function submitRequest(type, desc, payload){
   };
   try{
     await setDoc(doc(db,"requests",req.id),req);
-    showMsg("✓ تم إرسال الطلب لاعتماد المدير");
+    // Keep request visible immediately in طلباتي (pending) before refresh settles.
+    if(!Array.isArray(S.pendingRequests)) S.pendingRequests=[];
+    if(!S.pendingRequests.some(r=>r&&r.id===req.id)) S.pendingRequests=[req,...S.pendingRequests];
+    showMsg("تم إرسال الطلب — قيد الاعتماد");
   }catch(e){
     const msg=String((e&&(e.message||e.code))||e);
     if(/DUPLICATE_PENDING_REQUEST/i.test(msg)) showMsg("⏳ لديك طلب معلق بنفس البيانات بالفعل");
     else showMsg("⚠ تعذر إرسال الطلب");
   }
   await loadRequests();
+  // After refresh, switch employee to myrequests so they see قيد الاعتماد.
+  if(USERS[S.user]?.role==="emp" && (S.tab==="expenses"||S.tab==="transactions"||S.tab==="units")){
+    try{ set({tab:"myrequests"}); }catch(_e){}
+  }
   }finally{
     S.submitting=false;
     try{R();}catch(_e){}
   }
 }
 
+/** True if a request belongs to the signed-in user (handles by / byKey / mig:user ids). */
+function isMyRequest(r){
+  if(!r || !S.user) return false;
+  const uid = (typeof NEW_UID!=="undefined" && NEW_UID[S.user]) || (S._actor && S._actor.userId) || null;
+  const keys = new Set([S.user, uid, r.by, r.byKey, r.byUid].filter(Boolean).map(String));
+  if(keys.has(String(S.user))) return true;
+  if(uid && keys.has(String(uid))) return true;
+  if(typeof UID_TO_KEY!=="undefined"){
+    const mapped = UID_TO_KEY[String(r.by||"")] || UID_TO_KEY[String(r.byUid||"")];
+    if(mapped && mapped===S.user) return true;
+  }
+  return String(r.by||"")===String(S.user) || String(r.byKey||"")===String(S.user) || String(r.byUid||"")===String(S.user);
+}
+
+function enrichDepositRequestFields(r, dash){
+  if(!r) return r;
+  const p = r.payload || {};
+  const tx = p.transaction || {};
+  const depId = p.depositId || tx.depositId || r.depositId || null;
+  const deps = (dash && dash.deposits) || [];
+  const dep = depId ? deps.find((d) => d && d.id === depId) : null;
+  if(dep){
+    r._sourceKind = dep.sourceKind || r._sourceKind || tx.sourceKind || "holding";
+    r._sourceLabel = dep.sourceLabel || r._sourceLabel || null;
+    r._depositDate = dep.depositDate || r._depositDate || tx.date || null;
+    r._note = dep.note || r._note || tx.notes || tx.desc || null;
+    r._reference = dep.reference || r._reference || null;
+    r._accountName = dep.accountName || r._accountName || null;
+    r._employeeName = dep.employeeName || r._employeeName || r.byName || null;
+    r.amountFils = dep.amountFils != null ? dep.amountFils : r.amountFils;
+    r._depositId = dep.id;
+    r._depositState = dep.state;
+    r._approvedAt = dep.approvedAt || r.approvedAt || r.resolvedAt || null;
+    if(r.status === "pending" && (dep.state === "approved" || dep.state === "rejected")){
+      // Engine decision landed before work-request status flip — keep history terminal.
+      r.status = dep.state === "approved" ? "approved" : "rejected";
+    }
+  } else {
+    r._sourceKind = r._sourceKind || tx.sourceKind || "holding";
+    r._depositDate = r._depositDate || tx.date || null;
+    r._depositId = depId;
+    r._approvedAt = r.approvedAt || r.resolvedAt || null;
+  }
+  if(dash && dash.summary && r._sharedHoldingFils == null){
+    r._sharedHoldingFils = dash.summary.sharedEmployeeHoldingFils ?? dash.summary.holdingFils ?? null;
+  }
+  return r;
+}
+
 async function loadRequests(){
   try{
-    // Engine is the source of work requests (uiRequests). Do NOT also list
-    // pendingApprovals for the same deposit — that duplicated Manager cards.
-    if (S._loadingRequests) return;
+    // Queue instead of drop — a submit that overlaps login refresh must not vanish.
+    if (S._loadingRequests) { S._loadRequestsQueued = true; return; }
     S._loadingRequests = true;
     try {
       if (typeof refreshEngine === "function") await refreshEngine(S.year, S.month, true);
@@ -1578,10 +1794,34 @@ async function loadRequests(){
       if (!r || !r.id) continue;
       if (byReqId.has(r.id)) continue;
       const p = r.payload || {};
-      const depId = p.depositId || (p.transaction && p.transaction.depositId) || null;
+      const depId = p.depositId || (p.transaction && p.transaction.depositId) || r.depositId || null;
       if (depId && r.status === "pending" && byDepositId.has(depId)) continue;
+      // Enrich deposit work requests — pending + terminal — so history never loses detail.
+      if (r.type === "add_transaction") {
+        if (r.status === "pending") {
+          const match = (dash && dash.pendingApprovals || []).find((pa) =>
+            pa.approveCommand === "approveDeposit" && (
+              (pa.approvePayload && pa.approvePayload.depositId && (pa.approvePayload.depositId === depId || pa.approvePayload.depositId === pa.id))
+              || pa.id === depId
+            )
+          );
+          if (match) {
+            r._sourceKind = match.sourceKind || (p.transaction && p.transaction.sourceKind) || "holding";
+            r._sourceLabel = match.sourceLabel || null;
+            r._depositDate = match.depositDate || (p.transaction && p.transaction.date) || null;
+            r._note = match.note || null;
+            r._reference = match.reference || null;
+            r._accountName = match.accountName || null;
+            r._employeeName = match.employeeName || r.byName || null;
+            r._sharedHoldingFils = match.sharedHoldingFils ?? (dash && dash.summary && (dash.summary.sharedEmployeeHoldingFils ?? dash.summary.holdingFils)) ?? null;
+            r.amountFils = match.amountFils != null ? match.amountFils : r.amountFils;
+          }
+        }
+        enrichDepositRequestFields(r, dash);
+      }
       byReqId.set(r.id, r);
       if (depId && r.status === "pending") byDepositId.set(depId, r.id);
+      if (depId && (r.status === "approved" || r.status === "rejected")) byDepositId.set(depId, r.id);
     }
     // Orphan engine approvals (bank/deposit/expense) with NO linked work request.
     const linkedDep = new Set(byDepositId.keys());
@@ -1609,24 +1849,92 @@ async function loadRequests(){
         type: "engine_approval",
         desc: p.title,
         by: "engine",
-        byName: p.subtitle || "",
+        byName: p.employeeName || p.subtitle || "",
         month: S.month,
         year: S.year,
         status: "pending",
         createdAt: "",
-        payload: { depositId: p.approvePayload?.depositId, expenseId: p.approvePayload?.expenseId, receiptId: p.approvePayload?.receiptId },
+        payload: {
+          depositId: p.approvePayload?.depositId,
+          expenseId: p.approvePayload?.expenseId,
+          receiptId: p.approvePayload?.receiptId,
+          amount: typeof p.amountFils === "number" ? (p.amountFils / 100) : null,
+          sourceKind: p.sourceKind || null,
+          sourceLabel: p.sourceLabel || null,
+          depositDate: p.depositDate || null,
+          note: p.note || null,
+          reference: p.reference || null,
+          accountName: p.accountName || null,
+          employeeName: p.employeeName || null,
+          sharedHoldingFils: p.sharedHoldingFils ?? null,
+        },
         _approveCommand: p.approveCommand,
         _approvePayload: p.approvePayload,
         _rejectCommand: p.rejectCommand,
         _rejectPayload: p.rejectPayload,
         amountFils: p.amountFils,
-        _canonicalId: p.id
+        _canonicalId: p.id,
+        _kind: p.kind || null,
+        _sourceKind: p.sourceKind || null,
+        _sourceLabel: p.sourceLabel || null,
+        _depositDate: p.depositDate || null,
+        _note: p.note || null,
+        _reference: p.reference || null,
+        _accountName: p.accountName || null,
+        _employeeName: p.employeeName || null,
+        _sharedHoldingFils: p.sharedHoldingFils ?? null,
       }));
-    S.pendingRequests = [...byReqId.values(), ...enginePending];
+    // Permanent bank/deposit history cards — approval must not erase visible detail.
+    // Display-only: linked by receipt/deposit ID; never creates a second financial effect.
+    const terminalBank = ((dash && dash.deposits) || [])
+      .filter((d) => d && d.fromBankReceipt === true && d.state === "approved")
+      .filter((d) => !byReqId.has("bankhist:" + d.id) && !byReqId.has("eng:" + d.id))
+      .map((d) => ({
+        id: "bankhist:" + d.id,
+        type: "bank_history",
+        desc: d.note || d.reference || "تحويل بنكي",
+        by: (typeof UID_TO_KEY !== "undefined" && UID_TO_KEY[d.employeeId]) || d.employeeId || "engine",
+        byKey: (typeof UID_TO_KEY !== "undefined" && UID_TO_KEY[d.employeeId]) || null,
+        byUid: d.employeeId || null,
+        byName: d.employeeName || "",
+        month: S.month,
+        year: S.year,
+        status: "approved",
+        createdAt: d.approvedAt || d.depositDate || "",
+        approvedAt: d.approvedAt || null,
+        resolvedAt: d.approvedAt || null,
+        amountFils: d.amountFils,
+        payload: {
+          receiptId: d.receiptId || d.id,
+          amount: typeof d.amountFils === "number" ? d.amountFils / 100 : null,
+          sourceKind: "bank",
+          sourceLabel: "تحويل بنكي",
+          depositDate: d.depositDate,
+          note: d.note,
+          reference: d.reference,
+          employeeName: d.employeeName,
+        },
+        _kind: "bank",
+        _sourceKind: "bank",
+        _sourceLabel: "تحويل بنكي",
+        _depositDate: d.depositDate,
+        _note: d.note,
+        _reference: d.reference,
+        _employeeName: d.employeeName,
+        _receiptId: d.receiptId || d.id,
+        _approvedAt: d.approvedAt || null,
+      }));
+    S.pendingRequests = [...byReqId.values(), ...enginePending, ...terminalBank];
     S.notifCount = S.pendingRequests.filter((r) => r.status === "pending").length;
     R();
   }catch(e){console.error(e);}
-  finally{S._loadingRequests=false;}
+  finally{
+    S._loadingRequests=false;
+    if(S._loadRequestsQueued){
+      S._loadRequestsQueued=false;
+      try{ await loadRequests(); }catch(_e){}
+    }
+  }
 }
 
 async function approveRequest(req){
@@ -3689,9 +3997,68 @@ function tenantNameOk(name){
   return !!(t && t!=="—" && t!=="-" && t!=="–" && t!=="فارغ");
 }
 
+function clearFieldErrors(){ S._fieldErrors=null; }
+function setFieldError(testId, msg){
+  S._fieldErrors=Object.assign({}, S._fieldErrors||{}, {[testId]:msg});
+  showMsg("⚠ "+msg, 6000);
+  setTimeout(()=>{
+    try{
+      const el=document.querySelector('[data-testid="'+testId+'"]');
+      if(el){
+        el.scrollIntoView({behavior:"smooth",block:"center"});
+        if(typeof el.focus==="function") el.focus();
+        el.style.border="1px solid #b91c1c";
+        el.style.boxShadow="0 0 0 2px #7f1d1d55";
+      }
+    }catch(_e){}
+  }, 80);
+}
+function fieldErrorNote(testId){
+  const msg=S._fieldErrors&&S._fieldErrors[testId];
+  if(!msg) return null;
+  return h("div",{"data-testid":"field-error-"+testId,style:{marginTop:"4px",padding:"6px 8px",background:"#2e0505",border:"1px solid #b91c1c",borderRadius:"6px",fontSize:"12px",color:"#f87171",fontWeight:"600"}},[msg]);
+}
+function fieldErrBorder(testId, okBorder){
+  return (S._fieldErrors&&S._fieldErrors[testId])?"1px solid #b91c1c":(okBorder||"1px solid #2a2a2a");
+}
+
+/** Client-side intent check before owner save / employee submit — never wipe form. */
+function validateRentCollectIntent(item, opts){
+  opts=opts||{};
+  clearFieldErrors();
+  const renting=item && item.status!=="vacant" && item.status!=="staff";
+  const collecting=!!(item && (item.status==="collected" || item.partial || item._collectDraft) && item.collectionMethod);
+  if(renting || collecting || opts.requireTenant){
+    if(!tenantNameOk(item&&item.tenant)){
+      setFieldError(opts.tenantTestId||"partition-tenant","اسم المستأجر مطلوب");
+      return false;
+    }
+  }
+  if(renting && !(Number(item.rent)>0) && opts.requireRent!==false){
+    // Allow draft mid-edit with rent 0 only when not collecting.
+    if(collecting){
+      setFieldError(opts.rentTestId||"partition-rent","قيمة الإيجار مطلوبة");
+      return false;
+    }
+  }
+  if(item && item.partial && collecting){
+    const paid=Number(item.paid_amount||0);
+    const rem=Math.max(0, Number(item.rent||0)-Number(item._enginePaid||0));
+    if(!(paid>0)){
+      setFieldError(opts.paidTestId||"partition-paid-amount","مبلغ الدفع الجزئي مطلوب وأكبر من صفر");
+      return false;
+    }
+    if(rem>0 && paid>rem+0.001){
+      setFieldError(opts.paidTestId||"partition-paid-amount","المبلغ يتجاوز المتبقي ("+rem.toLocaleString()+" د.إ)");
+      return false;
+    }
+  }
+  return true;
+}
+
 function requireTenantBeforeRent(item,actionLabel){
   if(tenantNameOk(item && item.tenant)) return true;
-  showMsg("⚠ أدخل اسم المستأجر قبل "+(actionLabel||"التأجير أو التحصيل")+" — الإيجار يبقى مسودة",6000);
+  setFieldError("partition-tenant","أدخل اسم المستأجر قبل "+(actionLabel||"التأجير أو التحصيل")+" — الإيجار يبقى مسودة");
   return false;
 }
 
@@ -3958,8 +4325,16 @@ function saveMonthData(y,m,data,quiet=false){
   data=normalizeData(data);
   const k=getMonthKey(y,m);
   try{localStorage.setItem("qama_month_"+k,JSON.stringify(data));}catch(e){}
+  // Return a Promise so callers can await ONE explicit submit → ONE server result.
+  // Never toast success before this settles.
+  return new Promise((resolve,reject)=>{
   // Always keep the latest intent; older in-flight saves must not win over newer edits.
-  saveMonthData._pending={y,m,data,quiet:!!quiet};
+  // Superseded jobs reject softly so awaiters do not hang forever.
+  const prev=saveMonthData._pending;
+  if(prev&&typeof prev.reject==="function"&&prev.resolve!==resolve){
+    try{prev.reject(Object.assign(new Error("SAVE_SUPERSEDED"),{code:"SAVE_SUPERSEDED"}));}catch(_e){}
+  }
+  saveMonthData._pending={y,m,data,quiet:!!quiet,resolve,reject};
   clearTimeout(saveMonthData._t);
   saveMonthData._t=null;
   const publishSaveState=()=>{
@@ -3972,6 +4347,9 @@ function saveMonthData(y,m,data,quiet=false){
         saveOpStatus:S._saveOpStatus||null,
         syncMsg:S.syncMsg||"",
         msg:S.msg||"",
+        t0:S._saveT0||null,
+        tCmd:S._saveTCmd||null,
+        tDone:S._saveTDone||null,
       };
     }catch(_e){}
   };
@@ -3979,10 +4357,14 @@ function saveMonthData(y,m,data,quiet=false){
     if(S._saveInFlight){ S._saveQueued=true; return; }
     const job=saveMonthData._pending;
     if(!job) return;
+    saveMonthData._pending=null;
     const opId=(S._saveOpSeq=(S._saveOpSeq||0)+1);
     S._saveOpId=opId;
     S._saveOpStatus="pending";
     S._saveInFlight=true;
+    S._saveT0=Date.now();
+    S._saveTCmd=null;
+    S._saveTDone=null;
     const sy=job.y, sm=job.m, snap=job.data;
     const sk=getMonthKey(sy,sm);
     S.syncMsg="جاري الحفظ...";
@@ -3990,51 +4372,70 @@ function saveMonthData(y,m,data,quiet=false){
     if(!job.quiet)R();
     Promise.resolve(setDoc(doc(db,"months",sk),{data:snap,updatedAt:serverTimestamp()},{merge:true}))
     .then(async ()=>{
-      if(opId!==S._saveOpId) return; // superseded by a newer queued save
+      S._saveTCmd=Date.now();
+      if(opId!==S._saveOpId){
+        try{job.reject(Object.assign(new Error("SAVE_SUPERSEDED"),{code:"SAVE_SUPERSEDED"}));}catch(_e){}
+        return;
+      }
       S._preserveDraftUntil=0;
-      try { await hydrateMonthFromEngine(sy, sm); } catch (e) { console.error(e); }
-      if(opId!==S._saveOpId) return;
+      // setDoc(months) already hydrated once inside the bridge — do NOT hydrate again.
       S._saveOpStatus="ok";
       S._saveOpDoneId=opId;
-      S.syncMsg="تم الحفظ أونلاين";
+      S._saveTDone=Date.now();
+      S.syncMsg="تم الحفظ";
       publishSaveState();
       if(!job.quiet)R();
+      try{job.resolve({ok:true,opId,ms:(S._saveTDone-S._saveT0)});}catch(_e){}
     })
     .catch(async e=>{
-      if(opId!==S._saveOpId) return;
+      if(opId!==S._saveOpId){
+        try{job.reject(Object.assign(new Error("SAVE_SUPERSEDED"),{code:"SAVE_SUPERSEDED"}));}catch(_e){}
+        return;
+      }
       console.error(e);
       const code=String((e&&(e.message||e.code))||e);
-      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED/i.test(code);
+      if(code==="SAVE_SUPERSEDED"){ try{job.reject(e);}catch(_e){} return; }
+      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED|FORBIDDEN/i.test(code);
+      const moneyFail=/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|AMOUNT_EXCEEDS_HOLDING/i.test(code);
       if(!keepDraft){
         try { await hydrateMonthFromEngine(sy, sm); } catch (e2) {}
       } else {
         try {
-          localStorage.setItem("qama_month_"+sk, JSON.stringify(snap));
-          // Local restore aid only — not used as abandonment proof.
+          let snapKeep=snap;
+          if(moneyFail && typeof stripFailedCollectPaintInData==="function"){
+            try{ snapKeep=JSON.parse(JSON.stringify(snap)); stripFailedCollectPaintInData(snapKeep); }catch(_sf){ snapKeep=snap; }
+          }
+          localStorage.setItem("qama_month_"+sk, JSON.stringify(snapKeep));
           S._preserveDraftUntil = Date.now() + 120000;
+          try { await refreshEngine(sy, sm, true); } catch (_re) {}
         } catch (_e3) {}
       }
       S._saveOpStatus="fail";
       S._saveOpDoneId=opId;
-      S.syncMsg="تعذر الحفظ أونلاين";
+      S._saveTDone=Date.now();
+      const ar=(typeof formatEngineError==="function"?formatEngineError(e):code);
+      S.syncMsg=ar;
       publishSaveState();
-      if(!job.quiet){try{showMsg("⚠ لم يُحفظ: "+(typeof formatEngineError==="function"?formatEngineError(e):code));}catch(_e){}}
+      if(!job.quiet){try{showMsg("⚠ "+ar);}catch(_e){}}
       if(!job.quiet)R();
+      try{job.reject(e);}catch(_e){}
     })
     .finally(()=>{
       if(opId!==S._saveOpId) return;
       S._saveInFlight=false;
       publishSaveState();
-      if(S._saveQueued){
+      if(S._saveQueued || saveMonthData._pending){
         S._saveQueued=false;
         kick();
       }
     });
   };
-  // Non-quiet cancels quiet debounce so the latest rented/collect intent runs now.
+  // Quiet debounce is ONLY for local draft coalescing of non-money keystrokes.
+  // Explicit submits (quiet=false) kick immediately — one intentional save.
   if(quiet){
     saveMonthData._t=setTimeout(kick, 700);
   } else kick();
+  });
 }
 
 function changeMonth(m,y){
@@ -4043,7 +4444,7 @@ function changeMonth(m,y){
 }
 
 function getCurData(){return normalizeData(getMonthData(S.year,S.month));}
-function saveCurData(data,quiet=false){saveMonthData(S.year,S.month,data,quiet);}
+function saveCurData(data,quiet=false){return saveMonthData(S.year,S.month,data,quiet);}
 
 function set(o){Object.assign(S,o);R();}
 function showMsg(t,ms){
@@ -4133,6 +4534,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI HOLDING-INST-20260908T0135Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -4208,6 +4610,25 @@ function renderApp(){
   const dangerBtnStyle={background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"8px",fontSize:"14px",fontWeight:"700"};
   async function cancelEngineDeposit(item){
     if(!isOwner){showMsg("🔒 إلغاء الإيداع للمدير فقط");return;}
+    // Bank-transfer history rows are recognized receipts — reverse the receipt, not a deposit doc.
+    if(item._fromBankReceipt || item.sourceKind==="bank"){
+      const rid=item._receiptId||item._engineId||item.id;
+      if(!rid){showMsg("⚠ لا يوجد تحويل بنكي");return;}
+      if(!confirm("إلغاء هذا التحويل البنكي؟ سيتم عكس التحصيل والإيداع دون حذف السجل."))return;
+      try{
+        await engineCommand("reverseReceipt",{receiptId:rid,reason:"إلغاء تحويل بنكي من شاشة الإيداعات"},"revbank-"+rid);
+        showMsg("✓ تم إلغاء التحويل البنكي");
+        await loadMonthOnline(S.year,S.month);
+        await loadBalances();
+        R();
+      }catch(e){
+        const msg=String((e&&(e.message||e.code))||e);
+        if(/ALREADY_REVERSED/i.test(msg)) showMsg("✓ ملغى مسبقاً");
+        else if(/FORBIDDEN|OWNER/i.test(msg)) showMsg("🔒 غير مسموح");
+        else showMsg("⚠ تعذر الإلغاء: "+msg);
+      }
+      return;
+    }
     const depId=item._engineId||item.id;
     if(!depId){showMsg("⚠ لا يوجد إيداع معتمد");return;}
     if(!confirm("إلغاء هذا الإيداع؟ سيتم عكس الأثر المالي دون حذف السجل."))return;
@@ -4272,10 +4693,16 @@ function renderApp(){
     const prefix=opts.prefix||"";
     const saveField=(field,val)=>{
       if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
-      const old=item[field];
       item[field]=field==="amount"?Number(val):val;
-      if(old!==item[field])addLog(data,(USERS[S.user]?.name||S.user)+" عدّل "+(opts.logName||title));
-      saveCurData(data);showMsg("✓ تم التعديل");
+      // Local draft only — no online write / no full R() (preserves date picker + focus).
+      try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
+    };
+    const saveMoneyExplicit=async()=>{
+      if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+      addLog(data,(USERS[S.user]?.name||S.user)+" عدّل "+(opts.logName||title));
+      await saveCurData(data,false);
+      showMsg("✓ تم التعديل");
+      set({editPart:null});
     };
     const del=()=>{
       if(listName==="transactions"){
@@ -4295,30 +4722,32 @@ function renderApp(){
     const cancelLabel=listName==="transactions"?"إلغاء الإيداع":(listName==="expenses"?"إلغاء":"حذف");
     const editForm=isEd?h("div",{style:{borderTop:"1px solid #222",paddingTop:"10px",marginTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}},[
       listName==="transactions"?(()=>{const sel=h("select",{},["عام","إيجار شهري","إيجار يومي","كاش"].map(v=>{const o=h("option",{value:v},[v]);if((item.type||"عام")===v)o.selected=true;return o;}));sel.addEventListener("change",ev=>saveField("type",ev.target.value));return sel;})():null,
-      opts.hasDesc?(()=>{const inp=h("input",{type:"text",value:item.desc||"",placeholder:"الوصف"});inp.addEventListener("change",ev=>saveField("desc",ev.target.value));return inp;})():null,
+      opts.hasDesc?(()=>{const inp=h("input",{type:"text",value:item.desc||"",placeholder:"الوصف"});inp.addEventListener("input",ev=>saveField("desc",ev.target.value));return inp;})():null,
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
-        (()=>{const inp=h("input",{type:"number",value:item.amount||0,placeholder:"المبلغ"});inp.addEventListener("change",ev=>saveField("amount",ev.target.value));return inp;})(),
-        (()=>{const inp=h("input",{type:"date",value:item.date||""});inp.addEventListener("change",ev=>saveField("date",ev.target.value));return inp;})()
+        (()=>{const inp=h("input",{type:"number",value:item.amount||0,placeholder:"المبلغ"});inp.addEventListener("input",ev=>saveField("amount",ev.target.value));return inp;})(),
+        (()=>{const inp=h("input",{"data-testid":"money-edit-date",type:"date",value:item.date||""});inp.addEventListener("change",ev=>saveField("date",ev.target.value));return inp;})()
       ]),
-      opts.hasNotes?(()=>{const inp=h("input",{type:"text",value:item.notes||"",placeholder:"ملاحظات"});inp.addEventListener("change",ev=>saveField("notes",ev.target.value));return inp;})():null,
-      opts.hasNote?(()=>{const inp=h("input",{type:"text",value:item.note||"",placeholder:"ملاحظة"});inp.addEventListener("change",ev=>saveField("note",ev.target.value));return inp;})():null,
+      opts.hasNotes?(()=>{const inp=h("input",{type:"text",value:item.notes||"",placeholder:"ملاحظات"});inp.addEventListener("input",ev=>saveField("notes",ev.target.value));return inp;})():null,
+      opts.hasNote?(()=>{const inp=h("input",{type:"text",value:item.note||"",placeholder:"ملاحظة"});inp.addEventListener("input",ev=>saveField("note",ev.target.value));return inp;})():null,
       item._state?h("div",{style:{fontSize:"13px",color:"#888"}},["الحالة: "+item._state]):null,
       h("div",{style:{display:"flex",gap:"8px"}},[
+        h("button",{class:"btn",style:{flex:"1",background:"#4ade80",color:"#000",borderRadius:"8px",padding:"8px",fontSize:"14px",fontWeight:"700"},onClick:()=>saveMoneyExplicit()},["حفظ"]),
         h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>set({editPart:null})},["إغلاق"]),
         isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:del},[cancelLabel]):null
       ])
     ]):null;
-    return h("div",{class:"card",style:{padding:"12px",marginBottom:"8px"}},[
+    return h("div",{"data-testid":(item._fromBankReceipt?"bank-history-row":(listName==="transactions"?"deposit-history-row":undefined)),class:"card",style:{padding:"12px",marginBottom:"8px"}},[
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"10px"}},[
         h("div",{style:{flex:"1"}},[
           h("div",{style:{fontSize:"15px",color:"#fff",fontWeight:"500"}},[title]),
-          h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[((item.type&&item.type!=="عام")?item.type+" · ":"")+(item.date||"")+(item.notes?" · "+item.notes:"")+(item.note?" · "+item.note:"")+(item._state==="pending"?" · قيد الاعتماد":"")])
+          h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[((item.type&&item.type!=="عام")?item.type+" · ":"")+(item.date||"")+(item.notes?" · "+item.notes:"")+(item.note?" · "+item.note:"")+(item._state==="pending"?" · قيد الاعتماد":(item._state==="approved"||item._fromBankReceipt?" · معتمد":""))+(item._receiptId?" · "+item._receiptId:(item._engineId && listName==="transactions"?" · "+item._engineId:""))])
         ]),
         h("div",{style:{display:"flex",alignItems:"center",gap:"8px"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color,whiteSpace:"nowrap"}},[prefix+Number(item.amount||0).toLocaleString()]),
           canEdit()?h("button",{class:"btn",style:smallBtnStyle,onClick:()=>set({editPart:isEd?null:key})},[isEd?"▲":"تعديل"]):null
         ])
       ]),
+      opts.afterTitle?opts.afterTitle(item):null,
       editForm
     ]);
   }
@@ -4331,11 +4760,28 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI HOLDING-INST-20260908T0135Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
-        isOwner?h("button",{"data-testid":"btn-month-lock",class:"btn",style:{background:isMonthLocked(S.year,S.month)?"#450a0a":"#0a2010",border:"1px solid "+(isMonthLocked(S.year,S.month)?"#7f1d1d":"#14532d"),borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:isMonthLocked(S.year,S.month)?"#f87171":"#4ade80"},onClick:()=>{const k=getMonthKey(S.year,S.month);const nowLocked=!!(S.lockedMonths&&S.lockedMonths[k]);if(nowLocked){S.lockedMonths={...S.lockedMonths};delete S.lockedMonths[k];}else{S.lockedMonths={...S.lockedMonths,[k]:true};}saveLocks();R();showMsg(nowLocked?"🔓 تم فتح الشهر":"🔒 تم قفل الشهر");}},[isMonthLocked(S.year,S.month)?"🔒 مقفل":"🔓 قفل"]):null,
+        isOwner?h("button",{"data-testid":"btn-month-lock",class:"btn",style:{background:isMonthLocked(S.year,S.month)?"#450a0a":"#0a2010",border:"1px solid "+(isMonthLocked(S.year,S.month)?"#7f1d1d":"#14532d"),borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:isMonthLocked(S.year,S.month)?"#f87171":"#4ade80"},onClick:async()=>{
+          if(S._lockingMonth){showMsg("جاري الحفظ...");return;}
+          const k=getMonthKey(S.year,S.month);
+          const nowLocked=!!(S.lockedMonths&&S.lockedMonths[k]);
+          const prev={...(S.lockedMonths||{})};
+          if(nowLocked){S.lockedMonths={...S.lockedMonths};delete S.lockedMonths[k];}
+          else{S.lockedMonths={...S.lockedMonths,[k]:true};}
+          S._lockingMonth=true;R();
+          try{
+            await saveLocks();
+            showMsg(nowLocked?"🔓 تم فتح الشهر":"🔒 تم قفل الشهر");
+          }catch(e){
+            S.lockedMonths=prev;
+            showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):(e&&e.message||e)));
+          }finally{
+            S._lockingMonth=false;R();
+          }
+        }},[S._lockingMonth?"جاري...":(isMonthLocked(S.year,S.month)?"🔒 مقفل":"🔓 قفل")]):null,
         h("button",{"data-testid":"btn-logout",class:"btn",style:{background:"#1a1a1a",border:"1px solid #222",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",color:"#666"},onClick:()=>set({screen:"home",user:null,selUnit:null,editPart:null,showAddExp:false,showAddTx:false,showAddProfit:false,showAddInstallment:false})},["خروج"])])]),
     h("div",{style:{display:"flex",gap:"4px",overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}},tabs.map(t=>
       h("button",{"data-testid":tabTestId[t]||("tab-"+t),class:"btn",style:{padding:"8px 14px",borderRadius:"8px",fontSize:"16px",flexShrink:"0",
@@ -4409,18 +4855,6 @@ function renderApp(){
         h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["الصافي"]),h("div",{style:{fontSize:"20px",fontWeight:"900",color:net>=0?"#60a5fa":"#f87171"}},[net.toLocaleString()]),h("div",{style:{fontSize:"14px",color:"#444"}},["بعد الأرباح والقسط"])]),
         h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["شواغر / متأخرات"]),h("div",{style:{fontSize:"18px",fontWeight:"900",color:"#fb923c"}},[vacantList.length+" / "+lateList.length]),h("div",{style:{fontSize:"14px",color:"#444"}},["بارتشن"])]),
       ]),
-      h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #854d0e"}},[
-        h("div",{style:{fontSize:"15px",color:"#854d0e",fontWeight:"600",marginBottom:"8px"}},["⏳ القسط القادم – 30 يونيو 2026"]),
-        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-          h("span",{style:{fontSize:"22px",fontWeight:"900",color:"#facc15"}},["179,294 د.إ"]),
-          h("button",{class:"btn",style:{background:"#facc15",color:"#000",borderRadius:"8px",padding:"6px 10px",fontSize:"14px",fontWeight:"700"},onClick:()=>set({showAddInstallment:true})},["+ دفع القسط"])]),
-        h("div",{style:{fontSize:"15px",color:"#4ade80"}},["مدفوع هذا الشهر: "+totalInstallments.toLocaleString()+" د.إ"])
-      ]),
-      S.showAddInstallment?addMoneyForm("installment"):null,
-      data.installments.length?h("div",{class:"card",style:{padding:"12px",marginBottom:"14px"}},[
-        h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fff",marginBottom:"10px"}},["سجل دفعات القسط"]),
-        ...data.installments.map((t,i)=>editDeleteMoneyCard("installments",t,i,{title:()=>"دفع قسط",fallback:"دفع قسط",logName:"دفع قسط",color:"#facc15",prefix:"",hasNote:true}))
-      ]):null,
       h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #1e3a2e"}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}},[
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},["تحويل أرباح لصاحب المبنى"]),
@@ -4470,11 +4904,14 @@ function renderApp(){
   // ======= YAHIA OVERVIEW =======
   else if(S.tab==="overview" && !isOwner){
     const engY = (S._dash && S._dash.summary) ? S._dash.summary : null;
+    // Same canonical fields Manager uses — never companyCollected for "المحصّل" label.
     const yhTarget = engY ? (Number(engY.targetFils)||0)/100 : 0;
-    const yhCollected = engY ? (Number(engY.companyCollectedFils ?? engY.depositedFils)||0)/100 : 0;
-    const yhAtEmp = engY ? (Number(engY.atEmployeesMonthFils)||0)/100 : 0;
-    const yhUnpaid = engY ? (Number(engY.tenantUnpaidFils ?? engY.remainingFils)||0)/100 : 0;
+    const yhCollected = engY ? (Number(engY.collectedFils ?? engY.tenantPaidFils)||0)/100 : 0;
+    // عند الموظفين = current GLOBAL shared custody (not monthly atEmployeesMonthFils).
     const yhHolding = engY ? (Number(engY.sharedEmployeeHoldingFils ?? engY.holdingFils)||0)/100 : 0;
+    const yhAtEmp = yhHolding;
+    const yhMonthCash = engY ? (Number(engY.atEmployeesMonthFils)||0)/100 : 0;
+    const yhUnpaid = engY ? (Number(engY.tenantUnpaidFils ?? engY.remainingFils)||0)/100 : 0;
     const yhPct=yhTarget>0?Math.min(100,Math.round(yhCollected/yhTarget*100)):0;
     const yhColor=yhPct>=100?"#4ade80":yhPct>=70?"#facc15":"#f87171";
     content=h("div",{},[
@@ -4502,7 +4939,8 @@ function renderApp(){
             h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["المتبقي للتحصيل"]),
             h("div",{style:{fontSize:"22px",fontWeight:"900",color:yhUnpaid===0?"#4ade80":"#f87171"}},[yhUnpaid.toLocaleString()]),
             h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])])]),
-        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"10px"}},["العهدة المشتركة الإجمالية: "+yhHolding.toLocaleString()+" د.إ"])])]);
+        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"10px"}},["العهدة المشتركة الإجمالية: "+yhHolding.toLocaleString()+" د.إ"]),
+        h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["نقد محصل هذا الشهر ولم يودع: "+yhMonthCash.toLocaleString()+" د.إ"])])]);
   }
 
   // ======= UNITS =======
@@ -4571,9 +5009,16 @@ function renderApp(){
 
     if(S.selUnit){
       const unit=units.find(u=>u.id===S.selUnit);
-      const total=unit.partitions.reduce((s,p)=>s+p.rent,0);
-      const coll=unit.partitions.reduce((sum,p)=>sum+paidValue(p),0);
-      const pCards=unit.partitions.map((p,pidx)=>{
+      // Presentation-only: always show partitions 1→2→3… and default-open partition 1.
+      const partsSorted=(unit.partitions||[]).slice().sort((a,b)=>
+        (Number(a.id)||0)-(Number(b.id)||0) || String(a.id).localeCompare(String(b.id),"ar",{numeric:true})
+      );
+      if(!S.editPart && partsSorted.length){
+        S.editPart=unit.id+"-"+partsSorted[0].id;
+      }
+      const total=partsSorted.reduce((s,p)=>s+p.rent,0);
+      const coll=partsSorted.reduce((sum,p)=>sum+paidValue(p),0);
+      const pCards=partsSorted.map((p,pidx)=>{
         const cfg=SC[displayStatus(p)]||SC.late;
         const isEd=S.editPart===unit.id+"-"+p.id;
         const updateP=(field,val,quiet=false)=>{
@@ -4591,8 +5036,7 @@ function renderApp(){
               p._collectDraft=false;
               set({editPart:unit.id+"-"+p.id});
               // Persist rent/other draft fields only (status stays vacant until tenant is set).
-              if(isOwner) saveCurData(data,true);
-              else { try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){} }
+              try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
               return;
             }
             if(val==="collected"){
@@ -4649,9 +5093,8 @@ function renderApp(){
               const liveContract=!!(p._rentalId || Number(p._enginePaid||0)>0);
               if(liveContract || (prevStatus!=="vacant" && prevStatus!=="staff" && tenantNameOk(prevTenant))){
                 if(quiet){
-                  // Local draft only while typing — do not persist empty over a live tenant.
+                  // Local draft only while typing — keep the DOM input; never R().
                   p.tenant=val;
-                  set({editPart:unit.id+"-"+p.id});
                   return;
                 }
                 showMsg("⚠ لتغيير الاسم اكتب الاسم الجديد مباشرة — للإخلاء اختر الحالة «فارغ» (لا يلغي التحصيل)",5000);
@@ -4683,25 +5126,49 @@ function renderApp(){
             if(!p.draftSessionId) p.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
           }
           if(field==="paid_amount"&&Number(val)>0&&!p.collectedBy) p.collectedBy=S.user;
-          // مسار الموظف: يحفظ في localStorage فقط (بدون Firebase، بدون audit log)
-          // Firebase يُحدَّث فقط عند اعتماد المدير للطلب
-          if(!isOwner){
-            try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
-            if(field==="status"||field==="collectionMethod"||field==="partial")
-              set({editPart:unit.id+"-"+p.id});
+          // FIELD EDITS = local draft only. Canonical online write happens on explicit «حفظ».
+          // CRITICAL (iPhone Safari): never R()/set() on every keystroke — that replaces the
+          // focused <input> and closes the keyboard after each character.
+          try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
+          const needsLayout=field==="status"||field==="collectionMethod"||field==="partial"||field==="rent_type";
+          if(needsLayout) set({editPart:unit.id+"-"+p.id});
+        };
+        const savePartitionExplicit=async()=>{
+          if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+          if(S._savingPartition){showMsg("جاري الحفظ...");return;}
+          try{const el=document.querySelector('[data-testid="partition-tenant"]');if(el)p.tenant=el.value;}catch(_e){}
+          if(!validateRentCollectIntent(p,{tenantTestId:"partition-tenant",paidTestId:"partition-paid-amount",rentTestId:"partition-rent"})){
+            set({editPart:unit.id+"-"+p.id});
             return;
           }
-          // مسار المدير: يحفظ في Firebase
-          const _old=p[field]; // ملاحظة: p[field] تغيّر أعلاه، نحفظ السجل فقط
-          if(field!=="status"&&field!=="collectionMethod"){ // تجنب تسجيل مرتين
-            const FL={status:"الحالة",rent:"الإيجار",tenant:"المستأجر",paid_amount:"المدفوع",start_date:"بداية العقد",due_date:"الاستحقاق",elec_paid:"الكهرباء",elec_amount:"مبلغ الكهرباء",note:"ملاحظة",phone:"الهاتف",deposit:"التأمين"};
-            if(val!==_old) addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل "+unit.name+" بارتشن "+p.id,{target:unit.name+" #"+p.id,field:FL[field]||field,oldVal:_old,newVal:val});
+          const wantsPay=p.status==="collected"||p.partial||p._collectDraft;
+          if(wantsPay){
+            if(!p.collectionMethod){setFieldError("partition-collection-method","اختر طريقة التحصيل قبل الحفظ");set({editPart:unit.id+"-"+p.id});return;}
+            if(p.collectionMethod==="cash"&&!p.collectedBy)p.collectedBy=S.user;
           }
-          saveCurData(data,quiet);
-          if(field==="status"||field==="collectionMethod"||field==="partial"){
-            set({editPart:unit.id+"-"+p.id});return;
+          if(!isOwner){
+            if(needsApproval){
+              submitRequest("update_partition",
+                `تعديل ${unit.name} / بارتشن ${p.id} — الحالة: ${({collected:"محصّل",late:"متأخر",vacant:"فارغ",partial:"جزئي",staff:"موظفين"})[p.status]||p.status} | الإيجار: ${p.rent} | المستأجر: ${p.tenant||"—"} | التحصيل: ${p.collectionMethod==="bank"?"تحويل بنكي":"نقداً"}`,
+                {unitId:unit.id, partId:p.id, fields:{...p}});
+              return;
+            }
           }
-          if(!quiet)showMsg("✓ تم الحفظ");
+          S._savingPartition=true;R();
+          try{
+            p._commitIntent=true;
+            addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل "+unit.name+" بارتشن "+p.id);
+            await saveCurData(data,false);
+            showMsg("تم الحفظ");
+            set({editPart:unit.id+"-"+p.id});
+          }catch(e){
+            p._commitIntent=false;
+            const code=String((e&&(e.message||e.code))||e);
+            if(code==="SAVE_SUPERSEDED")return;
+            showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+          }finally{
+            S._savingPartition=false;R();
+          }
         };
         const deleteP=()=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
@@ -4753,40 +5220,67 @@ function renderApp(){
                   return op;
                 })));
               if(!p.collectionMethod)cm.value="";
-              cm.addEventListener("change",e=>{updateP("collectionMethod",e.target.value);cm.style.border="1px solid #2a2a2a";set({editPart:S.editPart});});
+              cm.addEventListener("change",e=>{updateP("collectionMethod",e.target.value);cm.style.border="1px solid #2a2a2a";});
               return cm;
             })(),
             p.collectionMethod==="bank"?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",fontSize:"12px",color:"#93c5fd"}},
-              ["🏦 تحويل بنكي — سيُعدّ مودَعاً مباشرةً. تأكد من تسجيل إيداع مطابق في تبويب الإيداعات."]):null,
+              ["🏦 تحويل بنكي — بعد الاعتماد يُحتسب محصّلاً ومودَعاً ويظهر تلقائياً في سجل الإيداعات. لا حاجة لإيداع يدوي ثانٍ."]):null,
             (!p.collectionMethod)?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#2e0505",border:"1px solid #b91c1c",borderRadius:"6px",fontSize:"12px",color:"#f87171",fontWeight:"600"}},
               ["⚠ اختر طريقة التحصيل قبل إرسال الطلب"]):null]):null,
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الإيجار"]),
-              (()=>{const s=h("select",{},[["monthly","شهري"],["daily","يومي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(rentType(p)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{p.rent_type=e.target.value;if(e.target.value==="monthly"){p.end_date="";p.due_date=p.start_date||"";} if(isOwner){saveCurData(data);}else{try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_e){}}set({editPart:unit.id+"-"+p.id});});return s;})()]),
+              (()=>{const s=h("select",{},[["monthly","شهري"],["daily","يومي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(rentType(p)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{p.rent_type=e.target.value;if(e.target.value==="monthly"){p.end_date="";p.due_date=p.start_date||"";} try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_e){}set({editPart:unit.id+"-"+p.id});});return s;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},[rentType(p)==="daily"?"تاريخ الدخول":"بداية من"]),
-              (()=>{const inp=h("input",{type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{p.start_date=e.target.value;if(rentType(p)==="monthly")p.due_date=e.target.value||"";if(isOwner){addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ "+unit.name+" بارتشن "+p.id);saveCurData(data);}else{try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_e){}}set({editPart:unit.id+"-"+p.id});});return inp;})()])
+              (()=>{const inp=h("input",{"data-testid":"partition-start-date",type:"date",value:p.start_date||""});inp.addEventListener("change",e=>{
+                // Keep exact YYYY-MM-DD from the picker. Do NOT R() — iPhone date inputs
+                // jump/revert when the node is replaced after selection.
+                const v=String(e.target.value||"");
+                p.start_date=v;
+                if(rentType(p)==="monthly"){
+                  p.due_date=v||"";
+                  try{
+                    const due=e.target.closest("div")?.parentElement?.parentElement?.querySelector('input[type="date"][disabled]');
+                    if(due) due.value=p.due_date;
+                  }catch(_d){}
+                }
+                try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_e){}
+              });return inp;})()])
           ]),
           rentType(p)==="daily"?h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الخروج"]),
-            (()=>{const inp=h("input",{type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{p.end_date=e.target.value;addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ خروج "+unit.name+" بارتشن "+p.id);saveCurData(data);set({editPart:unit.id+"-"+p.id});});return inp;})()
+            (()=>{const inp=h("input",{"data-testid":"partition-end-date",type:"date",value:p.end_date||""});inp.addEventListener("change",e=>{
+              p.end_date=String(e.target.value||"");
+              try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_e){}
+            });return inp;})()
           ]):h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق التلقائي"]),
-            h("input",{type:"date",value:dueDateOf(p)||"",disabled:"true"})
+            h("input",{"data-testid":"partition-due-date",type:"date",value:dueDateOf(p)||"",disabled:"true"})
           ]),
           h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["ملاحظة"]),
             (()=>{const inp=h("input",{type:"text",placeholder:"ملاحظة...",value:p.note||""});inp.addEventListener("input",e=>updateP("note",e.target.value,true));return inp;})()]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الدفع"]),
-              (()=>{const s=h("select",{"data-testid":"partition-partial"},[["false","كامل"],["true","جزئي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(p.partial)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{updateP("partial",e.target.value==="true");});return s;})()]),
-            h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
-              (()=>{const inp=h("input",{"data-testid":"partition-paid-amount",type:"number",placeholder:"0",value:p.paid_amount||0});inp.addEventListener("input",e=>updateP("paid_amount",Number(e.target.value),true));inp.addEventListener("change",e=>updateP("paid_amount",Number(e.target.value)));return inp;})()])]),
-          h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المستأجر *"]),
-            (()=>{const inp=h("input",{"data-testid":"partition-tenant",type:"text",placeholder:"إلزامي قبل التأجير/التحصيل",value:p.tenant||""});inp.addEventListener("input",e=>updateP("tenant",e.target.value,true));inp.addEventListener("change",e=>updateP("tenant",e.target.value));return inp;})()]),
+              (()=>{const s=h("select",{"data-testid":"partition-partial"},[["false","كامل"],["true","جزئي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(!!p.partial)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{updateP("partial",e.target.value==="true");});return s;})()]),
+            p.partial?h("div",{},[
+              h("div",{style:{fontSize:"15px",color:(S._fieldErrors&&S._fieldErrors["partition-paid-amount"])?"#ef4444":"#555",marginBottom:"3px",fontWeight:(S._fieldErrors&&S._fieldErrors["partition-paid-amount"])?"700":"400"}},["المبلغ المدفوع *"]),
+              (()=>{const inp=h("input",{"data-testid":"partition-paid-amount",type:"number",placeholder:"مطلوب للجزئي",value:p.paid_amount||"",style:{border:fieldErrBorder("partition-paid-amount")}});inp.addEventListener("input",e=>{clearFieldErrors();updateP("paid_amount",Number(e.target.value),true);});inp.addEventListener("change",e=>updateP("paid_amount",Number(e.target.value)));return inp;})(),
+              fieldErrorNote("partition-paid-amount"),
+              h("div",{style:{fontSize:"11px",color:"#888",marginTop:"3px"}},["المتبقي: "+Math.max(0,(Number(p.rent)||0)-Number(p._enginePaid||0)).toLocaleString()+" د.إ"])
+            ]):h("div",{},[
+              h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
+              h("input",{"data-testid":"partition-paid-amount-full",type:"text",disabled:"true",value:"كامل = المتبقي تلقائياً ("+Math.max(0,(Number(p.rent)||0)-Number(p._enginePaid||0)).toLocaleString()+" د.إ)",style:{opacity:"0.7",background:"#141414"}}),
+              h("div",{style:{fontSize:"11px",color:"#888",marginTop:"3px"}},["لا حاجة لإدخال المبلغ عند الدفع الكامل"])
+            ])]),
+          h("div",{},[
+            h("div",{style:{fontSize:"15px",color:(S._fieldErrors&&S._fieldErrors["partition-tenant"])?"#ef4444":"#555",marginBottom:"3px",fontWeight:(S._fieldErrors&&S._fieldErrors["partition-tenant"])?"700":"400"}},["المستأجر *"]),
+            (()=>{const inp=h("input",{"data-testid":"partition-tenant",type:"text",placeholder:"إلزامي قبل التأجير/التحصيل",value:p.tenant||"",style:{border:fieldErrBorder("partition-tenant")}});inp.addEventListener("input",e=>{clearFieldErrors();updateP("tenant",e.target.value,true);});inp.addEventListener("change",e=>updateP("tenant",e.target.value));return inp;})(),
+            fieldErrorNote("partition-tenant")
+          ]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📱 الهاتف"]),
-              (()=>{const inp=h("input",{type:"tel",placeholder:"05...",value:p.phone||""});inp.addEventListener("input",e=>updateP("phone",e.target.value,true));inp.addEventListener("change",e=>updateP("phone",e.target.value));return inp;})()]),
+              (()=>{const inp=h("input",{"data-testid":"partition-phone",type:"tel",placeholder:"05...",value:p.phone||""});inp.addEventListener("input",e=>updateP("phone",e.target.value,true));inp.addEventListener("change",e=>updateP("phone",e.target.value));return inp;})()]),
             h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["🔐 التأمين"]),
-              (()=>{const inp=h("input",{type:"number",placeholder:"مبلغ التأمين",value:p.deposit||""});inp.addEventListener("input",e=>updateP("deposit",e.target.value,true));inp.addEventListener("change",e=>updateP("deposit",e.target.value));return inp;})()])]),
+              (()=>{const inp=h("input",{"data-testid":"partition-deposit",type:"number",placeholder:"مبلغ التأمين",value:p.deposit||""});inp.addEventListener("input",e=>updateP("deposit",e.target.value,true));inp.addEventListener("change",e=>updateP("deposit",e.target.value));return inp;})()])]),
           h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📝 ملاحظات"]),
-            (()=>{const inp=h("input",{type:"text",placeholder:"ملاحظات عن المستأجر...",value:p.note||""});inp.addEventListener("input",e=>updateP("note",e.target.value,true));inp.addEventListener("change",e=>updateP("note",e.target.value));return inp;})()]),
+            (()=>{const inp=h("input",{"data-testid":"partition-notes",type:"text",placeholder:"ملاحظات عن المستأجر...",value:p.note||""});inp.addEventListener("input",e=>updateP("note",e.target.value,true));inp.addEventListener("change",e=>updateP("note",e.target.value));return inp;})()]),
           // Manager حذف الإيصال — linked reversal via canonical engine (never hard-delete).
           isOwner&&(p._receipts||[]).length?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px"}},[
             h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#ddd",marginBottom:"8px"}},["الإيصالات"]),
@@ -4850,36 +5344,44 @@ function renderApp(){
               if(rem>0) msg+="• متأخرات ستبقى: "+rem.toLocaleString()+" د.إ\n";
               if(!confirm(msg+"متابعة؟"))return;
               try{
-                const decision=rem>0?"retain":"none";
-                const key=typeof intentKey==="function"?intentKey("end-tenancy",p._rentalId,decision):("end-"+p._rentalId).slice(0,120);
-                await engineCommand("endTenancy",{rentalId:p._rentalId,endDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),reason:"إخلاء من زر مستقل",arrearsDecision:decision},key);
-                p.status="vacant";p.tenant="";p.paid_amount=0;p.partial=false;p._collectDraft=false;p.draftClearedByVacate=true;
+                // CASE B — real move-out: always endTenancy+retain (debt stays collectible).
+                const key=typeof intentKey==="function"?intentKey("end-tenancy",p._rentalId,"retain"):("end-"+p._rentalId+"-retain").slice(0,120);
+                await engineCommand("endTenancy",{rentalId:p._rentalId,endDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),reason:"إخلاء من زر مستقل",arrearsDecision:"retain"},key);
+                p.status="vacant";p.tenant="";p.phone="";p.rent=0;p.paid_amount=0;p.partial=false;p._collectDraft=false;p.draftClearedByVacate=true;p.start_date="";p.due_date="";p.end_date="";p.collectionMethod="";p.note="فارغ";p._rentalId=null;p._obligationId=null;
                 showMsg("✓ تم الإخلاء");
                 try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
                 set({editPart:null});
               }catch(e){showMsg("⛔ "+(e&&e.message||e));}
-            }},["إخلاء وتحويل لفارغ"])
+            }},["إخلاء وتحويل لفارغ"]),
+            // CASE A — erroneous rental cancel (unpaid only). Distinct from real vacate.
+            (isOwner && Number(p._enginePaid||0)<=0)?h("button",{"data-testid":"btn-cancel-erroneous-rental",class:"btn",style:{width:"100%",background:"#3f1d1d",border:"1px solid #7f1d1d",color:"#fca5a5",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"700"},onClick:async()=>{
+              if(!isOwner){showMsg("🔒 إلغاء الإيجار الخاطئ للمدير فقط");return;}
+              if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+              if(!p._rentalId){showMsg("لا يوجد إيجار لإلغائه");return;}
+              const paidNow=Number(p._enginePaid||0);
+              if(paidNow>0){
+                showMsg("⛔ يوجد تحصيل معترف به — ألغِ التحصيل أولاً، ثم ألغِ الإيجار الخاطئ. هذا ليس إخلاءً.");
+                return;
+              }
+              const rem=Math.max(0,Number(p.rent)||0);
+              if(!confirm("⚠ إلغاء إيجار خاطئ (ليس إخلاء مستأجر)\n\nهذا مسار إلغاء إدخال خاطئ فقط.\nليس «فارغ» / ليس إخلاء مستأجر حقيقي.\n\n• يُلغى الالتزام غير المدفوع نهائياً\n• يُزال أثر الهدف/المتبقي\n• لا تُحتفظ بمتأخّرات للتحصيل لاحقاً\n"+(rem>0?"• مبلغ الالتزام: "+rem.toLocaleString()+" د.إ\n":"")+"\nاكتب تأكيدك بالمتابعة فقط إذا كان الإيجار خطأ بيانات."))return;
+              if(!confirm("تأكيد أخير: إلغاء إيجار خاطئ بدون الاحتفاظ بأي دين؟"))return;
+              try{
+                const key=typeof intentKey==="function"?intentKey("cancel-erroneous",p._rentalId,"unpaid"):("cancel-err-"+p._rentalId).slice(0,120);
+                await engineCommand("closeRental",{rentalId:p._rentalId,endDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),reason:"إلغاء إيجار خاطئ من الشاشة",setVacant:true},key);
+                p.status="vacant";p.tenant="";p.phone="";p.rent=0;p.paid_amount=0;p.partial=false;p._collectDraft=false;p.draftClearedByVacate=true;p.start_date="";p.due_date="";p.end_date="";p.collectionMethod="";p.note="فارغ";p._rentalId=null;p._obligationId=null;
+                showMsg("✓ أُلغي الإيجار الخاطئ");
+                try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
+                set({editPart:null});
+              }catch(e){showMsg("⛔ "+(e&&e.message||e));}
+            }},["إلغاء إيجار خاطئ (بدون دين)"]):null
           ]):null,
           canEdit()?h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>set({editPart:null})},["إغلاق"]),
             isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteP},["حذف البارتشن"]):null,
-            !isOwner?h("button",{class:"btn",style:{flex:"2",background:needsApproval?"#fff":"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
-              const pDs=displayStatus(p);
-              if(pDs==="collected"||pDs==="partial"){
-                if(!p.collectionMethod){showMsg("⚠ اختر طريقة التحصيل قبل الإرسال");return;}
-                if(p.collectionMethod==="cash"&&!p.collectedBy){showMsg("⚠ التحصيل النقدي يستوجب تحديد الموظف");return;}
-              }
-              if(needsApproval){
-                submitRequest("update_partition",
-                  `تعديل ${unit.name} / بارتشن ${p.id} — الحالة: ${({collected:"محصّل",late:"متأخر",vacant:"فارغ",partial:"جزئي",staff:"موظفين"})[p.status]||p.status} | الإيجار: ${p.rent} | المستأجر: ${p.tenant||"—"} | التحصيل: ${p.collectionMethod==="bank"?"تحويل بنكي":"نقداً"}`,
-                  {unitId:unit.id, partId:p.id, fields:{...p}});
-              } else {
-                addLog&&addLog(data,nm+" عدّل "+unit.name+" بارتشن "+p.id);
-                saveCurData(data);
-                showMsg("✓ تم الحفظ مباشرة");
-              }
-              set({editPart:null});
-            }},[needsApproval?"📤 إرسال للاعتماد":"✓ حفظ مباشر"]):null
+            h("button",{"data-testid":"btn-save-partition",class:"btn",style:{flex:"2",background:(!isOwner&&needsApproval)?"#fff":"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>savePartitionExplicit()},[
+              S._savingPartition?"جاري الحفظ...":((!isOwner&&needsApproval)?"📤 إرسال للاعتماد":"حفظ")
+            ])
           ]):null
         ]):null;
         return h("div",{"data-testid":"partition-card","data-part-id":String(p.id),style:{background:cfg.bg,border:"1px solid "+cfg.border,borderRadius:"10px",overflow:"hidden",marginBottom:"8px"}},[
@@ -4957,7 +5459,11 @@ function renderApp(){
         if(lp.length)badges.push(h("span",{style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#fca5a5",borderRadius:"5px",padding:"2px 7px",fontSize:"15px"}},["⚠ "+lp.length+" متأخر"]));
         if(vp.length)badges.push(h("span",{style:{background:"#1c1917",border:"1px solid #333",color:"#a8a29e",borderRadius:"5px",padding:"2px 7px",fontSize:"15px"}},["○ "+vp.length+" فارغ"]));
         if(!lp.length&&!vp.length&&!partials.length)badges.push(h("span",{style:{background:"#052e16",border:"1px solid #166534",color:"#4ade80",borderRadius:"5px",padding:"2px 7px",fontSize:"15px"}},["✓ مكتمل"]));
-        return h("div",{"data-testid":"unit-card","data-unit-id":String(u.id),class:"card btn",style:{padding:"14px",marginBottom:"10px"},onClick:()=>set({selUnit:u.id})},[
+        return h("div",{"data-testid":"unit-card","data-unit-id":String(u.id),class:"card btn",style:{padding:"14px",marginBottom:"10px"},onClick:()=>{
+          const sorted=(u.partitions||[]).slice().sort((a,b)=>(Number(a.id)||0)-(Number(b.id)||0)||String(a.id).localeCompare(String(b.id),"ar",{numeric:true}));
+          const first=sorted[0];
+          set({selUnit:u.id, editPart:first?(u.id+"-"+first.id):null});
+        }},[
           h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[u.name]),h("div",{style:{fontSize:"15px",color:"#555"}},[u.type+" · "+u.partitions.length+" بارتشن"])]),
             h("div",{style:{textAlign:"left"}},[h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[coll.toLocaleString()]),h("div",{style:{fontSize:"15px",color:"#555"}},["من "+total.toLocaleString()])])]),
@@ -4980,8 +5486,7 @@ function renderApp(){
               u.collectionMethod=prevMethod||"";
               u._collectDraft=false;
               set({editPart:"full-"+u.id});
-              if(isOwner) saveCurData(data,true);
-              else { try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){} }
+              try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
               return;
             }
             if(val==="collected"){
@@ -5031,7 +5536,6 @@ function renderApp(){
               if(liveContract || (prevStatus!=="vacant" && prevStatus!=="staff" && tenantNameOk(prevTenant))){
                 if(quiet){
                   u.tenant=val;
-                  set({editPart:"full-"+u.id});
                   return;
                 }
                 showMsg("⚠ لتغيير الاسم اكتب الاسم الجديد مباشرة — للإخلاء اختر الحالة «فارغ» (لا يلغي التحصيل)",5000);
@@ -5063,19 +5567,44 @@ function renderApp(){
             if(!u.draftSessionId) u.draftSessionId="draft-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
           }
           if(field==="paid_amount"&&Number(val)>0&&!u.collectedBy) u.collectedBy=S.user;
-          if(!isOwner){
-            // مسار الموظف: يحفظ في localStorage فقط (بدون Firebase)
-            try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
-            if(field==="status"||field==="collectionMethod"||field==="partial")
-              set({editPart:"full-"+u.id});
+          // FIELD EDITS = local draft only. Explicit Save performs the online write.
+          // iPhone Safari: do NOT full-rerender on every keystroke (destroys focus/keyboard).
+          try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e){}
+          const needsLayout=field==="status"||field==="collectionMethod"||field==="partial"||field==="rent_type";
+          if(needsLayout) set({editPart:"full-"+u.id});
+        };
+        const saveFullExplicit=async()=>{
+          if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
+          if(S._savingFull){showMsg("جاري الحفظ...");return;}
+          try{const el=document.querySelector('[data-testid="full-tenant"]');if(el)u.tenant=el.value;}catch(_e){}
+          if(!validateRentCollectIntent(u,{tenantTestId:"full-tenant",paidTestId:"full-paid-amount",rentTestId:"full-rent"})){
+            set({editPart:"full-"+u.id});
             return;
           }
-          // مسار المدير: الحقول ضُبطت أعلاه، احفظ وأعد رسم إن لزم
-          saveCurData(data,quiet);
-          if(field==="status"||field==="collectionMethod"||field==="partial"){
-            set({editPart:"full-"+u.id});return;
+          const wantsPay=u.status==="collected"||u.partial||u._collectDraft;
+          if(wantsPay){
+            if(!u.collectionMethod){setFieldError("full-collection-method","اختر طريقة التحصيل قبل الحفظ");set({editPart:"full-"+u.id});return;}
+            if(u.collectionMethod==="cash"&&!u.collectedBy)u.collectedBy=S.user;
           }
-          if(!quiet)showMsg("✓ تم الحفظ");
+          if(!isOwner&&needsApproval){
+            submitRequest("update_full",`تعديل شقة ${u.id}`,{unitId:u.id,fields:{...u}});
+            return;
+          }
+          S._savingFull=true;R();
+          try{
+            u._commitIntent=true;
+            addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل شقة "+u.id);
+            await saveCurData(data,false);
+            showMsg("تم الحفظ");
+            set({editPart:"full-"+u.id});
+          }catch(e){
+            u._commitIntent=false;
+            const code=String((e&&(e.message||e.code))||e);
+            if(code==="SAVE_SUPERSEDED")return;
+            showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+          }finally{
+            S._savingFull=false;R();
+          }
         };
         const deleteFull=async()=>{
           if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
@@ -5116,20 +5645,28 @@ function renderApp(){
                       if(u.collectionMethod===o[0])op.selected=true;return op;
                     })));
                   if(!u.collectionMethod)cm.value="";
-                  cm.addEventListener("change",e=>{updateFull("collectionMethod",e.target.value);cm.style.border="1px solid #2a2a2a";R();});
+                  cm.addEventListener("change",e=>{updateFull("collectionMethod",e.target.value);cm.style.border="1px solid #2a2a2a";});
                   return cm;
                 })(),
                 u.collectionMethod==="bank"?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",fontSize:"12px",color:"#93c5fd"}},
-                  ["🏦 تحويل بنكي — سيُعدّ مودَعاً مباشرةً. تأكد من تسجيل إيداع مطابق."]):null,
+                  ["🏦 تحويل بنكي — بعد الاعتماد يُحتسب محصّلاً ومودَعاً ويظهر تلقائياً في سجل الإيداعات."]):null,
                 (!u.collectionMethod)?h("div",{style:{marginTop:"4px",padding:"6px 8px",background:"#2e0505",border:"1px solid #b91c1c",borderRadius:"6px",fontSize:"12px",color:"#f87171",fontWeight:"600"}},
                   ["⚠ اختر طريقة التحصيل قبل إرسال الطلب"]):null]):null,
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإيجار / شهر"]),
-              (()=>{const inp=h("input",{type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
+              (()=>{const inp=h("input",{"data-testid":"full-rent",type:"number",value:u.rent});inp.addEventListener("input",e=>updateFull("rent",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["بداية العقد"]),
-              (()=>{const inp=h("input",{type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{u.start_date=e.target.value;u.due_date=e.target.value||"";if(isOwner){addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" عدّل تاريخ شقة "+u.id);saveCurData(data);}else{try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e2){}}set({editPart:"full-"+u.id});});return inp;})()]),
+              (()=>{const inp=h("input",{"data-testid":"full-start-date",type:"date",value:u.start_date||""});inp.addEventListener("change",e=>{
+                const v=String(e.target.value||"");
+                u.start_date=v;u.due_date=v||"";
+                try{
+                  const due=e.target.closest("div")?.parentElement?.querySelector('input[type="date"][disabled]');
+                  if(due) due.value=u.due_date;
+                }catch(_d){}
+                try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(e2){}
+              });return inp;})()]),
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["تاريخ الاستحقاق"]),
-              h("input",{type:"date",value:dueDateOf(u)||"",disabled:"true"})])]),
+              h("input",{"data-testid":"full-due-date",type:"date",value:dueDateOf(u)||"",disabled:"true"})])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الكهرباء"]),
               (()=>{const s=h("select",{},[["false","لم تدفع"],["true","دفعت"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(u.elec_paid)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>updateFull("elec_paid",e.target.value==="true"));return s;})()]),
@@ -5137,18 +5674,27 @@ function renderApp(){
               (()=>{const inp=h("input",{type:"number",placeholder:"0",value:u.elec_amount||0});inp.addEventListener("input",e=>updateFull("elec_amount",Number(e.target.value),true));return inp;})()])]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["نوع الدفع"]),
-              (()=>{const s=h("select",{"data-testid":"full-partial"},[["false","كامل"],["true","جزئي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(u.partial)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{updateFull("partial",e.target.value==="true");});return s;})()]),
-            h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
-              (()=>{const inp=h("input",{"data-testid":"full-paid-amount",type:"number",placeholder:"0",value:u.paid_amount||0});inp.addEventListener("input",e=>updateFull("paid_amount",Number(e.target.value),true));inp.addEventListener("change",e=>updateFull("paid_amount",Number(e.target.value)));return inp;})()])]),
-          h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المستأجر"]),
-            (()=>{const inp=h("input",{"data-testid":"full-tenant",type:"text",placeholder:"إلزامي قبل التأجير/التحصيل",value:u.tenant||""});inp.addEventListener("input",e=>updateFull("tenant",e.target.value,true));inp.addEventListener("change",e=>updateFull("tenant",e.target.value));return inp;})()]),
+              (()=>{const s=h("select",{"data-testid":"full-partial"},[["false","كامل"],["true","جزئي"]].map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(String(!!u.partial)===o[0])op.selected=true;return op;}));s.addEventListener("change",e=>{updateFull("partial",e.target.value==="true");});return s;})()]),
+            u.partial?h("div",{},[
+              h("div",{style:{fontSize:"15px",color:(S._fieldErrors&&S._fieldErrors["full-paid-amount"])?"#ef4444":"#555",marginBottom:"3px"}},["المبلغ المدفوع *"]),
+              (()=>{const inp=h("input",{"data-testid":"full-paid-amount",type:"number",placeholder:"مطلوب للجزئي",value:u.paid_amount||"",style:{border:fieldErrBorder("full-paid-amount")}});inp.addEventListener("input",e=>{clearFieldErrors();updateFull("paid_amount",Number(e.target.value),true);});inp.addEventListener("change",e=>updateFull("paid_amount",Number(e.target.value)));return inp;})(),
+              fieldErrorNote("full-paid-amount")
+            ]):h("div",{},[
+              h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["المبلغ المدفوع"]),
+              h("input",{"data-testid":"full-paid-amount-full",type:"text",disabled:"true",value:"كامل = المتبقي تلقائياً ("+Math.max(0,(Number(u.rent)||0)-Number(u._enginePaid||0)).toLocaleString()+" د.إ)",style:{opacity:"0.7",background:"#141414"}})
+            ])]),
+          h("div",{},[
+            h("div",{style:{fontSize:"15px",color:(S._fieldErrors&&S._fieldErrors["full-tenant"])?"#ef4444":"#555",marginBottom:"3px"}},["المستأجر *"]),
+            (()=>{const inp=h("input",{"data-testid":"full-tenant",type:"text",placeholder:"إلزامي قبل التأجير/التحصيل",value:u.tenant||"",style:{border:fieldErrBorder("full-tenant")}});inp.addEventListener("input",e=>{clearFieldErrors();updateFull("tenant",e.target.value,true);});inp.addEventListener("change",e=>updateFull("tenant",e.target.value));return inp;})(),
+            fieldErrorNote("full-tenant")
+          ]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📱 الهاتف"]),
-              (()=>{const inp=h("input",{type:"tel",placeholder:"05...",value:u.phone||""});inp.addEventListener("input",e=>updateFull("phone",e.target.value,true));inp.addEventListener("change",e=>updateFull("phone",e.target.value));return inp;})()]),
+              (()=>{const inp=h("input",{"data-testid":"full-phone",type:"tel",placeholder:"05...",value:u.phone||""});inp.addEventListener("input",e=>updateFull("phone",e.target.value,true));inp.addEventListener("change",e=>updateFull("phone",e.target.value));return inp;})()]),
             h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["🔐 التأمين"]),
-              (()=>{const inp=h("input",{type:"number",placeholder:"مبلغ التأمين",value:u.deposit||""});inp.addEventListener("input",e=>updateFull("deposit",e.target.value,true));inp.addEventListener("change",e=>updateFull("deposit",e.target.value));return inp;})()])]),
+              (()=>{const inp=h("input",{"data-testid":"full-deposit",type:"number",placeholder:"مبلغ التأمين",value:u.deposit||""});inp.addEventListener("input",e=>updateFull("deposit",e.target.value,true));inp.addEventListener("change",e=>updateFull("deposit",e.target.value));return inp;})()])]),
           h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📝 ملاحظات"]),
-            (()=>{const inp=h("input",{type:"text",placeholder:"ملاحظات...",value:u.note||""});inp.addEventListener("input",e=>updateFull("note",e.target.value,true));inp.addEventListener("change",e=>updateFull("note",e.target.value));return inp;})()]),
+            (()=>{const inp=h("input",{"data-testid":"full-notes",type:"text",placeholder:"ملاحظات...",value:u.note||""});inp.addEventListener("input",e=>updateFull("note",e.target.value,true));inp.addEventListener("change",e=>updateFull("note",e.target.value));return inp;})()]),
           isOwner&&(u._receipts||[]).length?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px"}},[
             h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#ddd",marginBottom:"8px"}},["الإيصالات"]),
             ...(u._receipts||[]).map(rc=>{
@@ -5177,17 +5723,9 @@ function renderApp(){
           canEdit()?h("div",{style:{display:"flex",gap:"8px"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>set({editPart:null})},["إغلاق"]),
             isOwner?h("button",{class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteFull},["حذف الشقة"]):null,
-            !isOwner?h("button",{class:"btn",style:{flex:"2",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
-              const uDs=displayStatus(u);
-              if(uDs==="collected"||uDs==="partial"){
-                if(!u.collectionMethod){showMsg("⚠ اختر طريقة التحصيل قبل الإرسال");return;}
-                if(u.collectionMethod==="cash"&&!u.collectedBy){showMsg("⚠ التحصيل النقدي يستوجب تحديد الموظف");return;}
-              }
-              submitRequest("update_full",
-                `تعديل شقة ${u.id} — الحالة: ${({collected:"محصّل",late:"متأخر",vacant:"فارغ",partial:"جزئي",staff:"موظفين"})[u.status]||u.status} | الإيجار: ${u.rent} | المستأجر: ${u.tenant||"—"} | الكهرباء: ${u.elec_paid?"مدفوعة":"غير مدفوعة"} | التحصيل: ${u.collectionMethod==="bank"?"تحويل بنكي":"نقداً"}`,
-                {unitId:u.id, fields:{...u}});
-              set({editPart:null});
-            }},["📤 إرسال للاعتماد"]):null
+            h("button",{"data-testid":"btn-save-full",class:"btn",style:{flex:"2",background:(!isOwner&&needsApproval)?"#fff":"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>saveFullExplicit()},[
+              S._savingFull?"جاري الحفظ...":((!isOwner&&needsApproval)?"📤 إرسال للاعتماد":"حفظ")
+            ])
           ]):null
         ]):null;
         return h("div",{"data-testid":"full-unit-card","data-unit-id":String(u.id),style:{background:"#111",border:"1px solid #1e1e1e",borderRadius:"10px",overflow:"hidden",marginBottom:"8px"}},[
@@ -5311,11 +5849,12 @@ function renderApp(){
     const sched=ensureInstallmentSchedule(S.installmentSchedule);
     S.installmentSchedule=sched;
     const nextIdx=sched.findIndex(x=>!x.paid);
-    const nextInst=nextIdx>=0?sched[nextIdx]:(sched[sched.length-1]||{date:"2026-06-30",amount:179294,paid:false});
-    const nextDueDate=new Date(nextInst.date);
+    const nextInst=nextIdx>=0?sched[nextIdx]:null;
+    const nextDueDate=nextInst?new Date(nextInst.date):null;
     const todayFin=new Date(); todayFin.setHours(0,0,0,0);
-    const instDaysLeft=Math.ceil((nextDueDate-todayFin)/(1000*60*60*24));
+    const instDaysLeft=nextDueDate?Math.ceil((nextDueDate-todayFin)/(1000*60*60*24)):0;
     const instDaysColor=instDaysLeft>30?"#4ade80":instDaysLeft>14?"#facc15":"#f87171";
+    // Paid count from canonical schedule rows marked paid by payInstallment (open-ended; no fixed total).
     const paidCount=sched.filter(x=>x.paid).length;
     const saveBalancesFin=async()=>{
       await setDoc(doc(db,"config","balances"),{
@@ -5326,18 +5865,18 @@ function renderApp(){
         updatedAt:serverTimestamp()
       },{merge:true});
     };
-    const installmentCard=h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #854d0e"}},[
+    const installmentCard=h("div",{"data-testid":"financial-installment-card",class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #854d0e"}},[
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}},[
         h("div",{},[
           h("div",{style:{fontSize:"15px",color:"#854d0e",fontWeight:"600",marginBottom:"4px"}},["⏳ القسط القادم"]),
-          h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#facc15"}},[nextInst.amount.toLocaleString()+" د.إ"]),
-          h("div",{style:{fontSize:"15px",color:"#888",marginTop:"2px"}},[nextInst.date])]),
+          h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#facc15"}},[nextInst?(nextInst.amount.toLocaleString()+" د.إ"):"—"]),
+          h("div",{style:{fontSize:"15px",color:"#888",marginTop:"2px"}},["تاريخ الاستحقاق: "+(nextInst?nextInst.date:"—")])]),
         h("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"6px"}},[
-          h("span",{style:{background:"#1a1a1a",border:"1px solid #854d0e",borderRadius:"8px",padding:"4px 10px",fontSize:"15px",color:instDaysColor,fontWeight:"700"}},[instDaysLeft>0?instDaysLeft+" يوم":"انتهى الموعد"]),
+          nextInst?h("span",{style:{background:"#1a1a1a",border:"1px solid #854d0e",borderRadius:"8px",padding:"4px 10px",fontSize:"15px",color:instDaysColor,fontWeight:"700"}},["الأيام المتبقية: "+(instDaysLeft>0?instDaysLeft:"0")]):null,
           h("div",{style:{display:"flex",gap:"6px"}},[
-            h("button",{"data-testid":"btn-pay-installment",class:"btn",style:{background:nextInst.paid?"#555":"#4ade80",color:"#000",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
+            h("button",{"data-testid":"btn-pay-installment",class:"btn",style:{background:!nextInst||nextInst.paid?"#555":"#4ade80",color:"#000",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
               if(S._payingInstallment){showMsg("⏳ جاري تسجيل دفع القسط...");return;}
-              if(nextIdx<0 || nextInst.paid){showMsg("✓ لا توجد أقساط غير مدفوعة");return;}
+              if(nextIdx<0 || !nextInst || nextInst.paid){showMsg("✓ لا توجد أقساط غير مدفوعة");return;}
               const amt=Number(nextInst.amount)||0;
               if(amt<=0){showMsg("⚠ مبلغ القسط غير صالح");return;}
               if(Number(S.installmentBalance)<amt){showMsg("⚠ رصيد الاقتطاع غير كافٍ ("+Number(S.installmentBalance).toLocaleString()+" من "+amt.toLocaleString()+" د.إ)");return;}
@@ -5346,9 +5885,8 @@ function renderApp(){
               if(S._lastInstPayToken===payToken && S._payingInstallment){showMsg("⏳ تم تسجيل هذا الدفع للتو");return;}
               S._payingInstallment=true;
               const prevBal=Number(S.installmentBalance);
-              const prevPaid=!!S.installmentSchedule[nextIdx].paid;
+              const prevSched=cloneInstallmentSchedule(S.installmentSchedule);
               try{
-                // Empty server schedule must be seeded before atomic pay (defaults are UI-only otherwise).
                 await ensureInstallmentScheduleOnServer();
                 const res=await engineCommand("payInstallment",{
                   installmentDate:nextInst.date,
@@ -5357,7 +5895,11 @@ function renderApp(){
                 S._lastInstPayToken=payToken;
                 if(res && res.installmentBalance!=null) S.installmentBalance=Number(res.installmentBalance);
                 else S.installmentBalance=Math.max(0,Math.round((prevBal-amt)*100)/100);
-                if(S.installmentSchedule[nextIdx]) S.installmentSchedule[nextIdx].paid=true;
+                if(Array.isArray(res&&res.installmentSchedule)&&res.installmentSchedule.length){
+                  S.installmentSchedule=cloneInstallmentSchedule(res.installmentSchedule);
+                } else if(S.installmentSchedule[nextIdx]) {
+                  S.installmentSchedule[nextIdx].paid=true;
+                }
                 try{await loadBalances();}catch(_e){}
                 if(!(res&&res.alreadyApplied)){
                   addLog&&addLog(mData,"تم دفع قسط "+nextInst.date+": "+amt.toLocaleString()+" د.إ من حساب الاقتطاع");
@@ -5368,36 +5910,52 @@ function renderApp(){
                   :"✓ تم الدفع – رصيد الاقتطاع: "+Number(S.installmentBalance).toLocaleString()+" د.إ");
                 R();
               }catch(e){
-                S.installmentSchedule[nextIdx].paid=prevPaid;
+                S.installmentSchedule=prevSched;
                 S.installmentBalance=prevBal;
                 showMsg("⚠ فشل حفظ دفع القسط — لم يُخصم الرصيد ولم يُسجَّل نجاح",5000);
                 R();
               }finally{
                 S._payingInstallment=false;
               }
-            }},[nextInst.paid?"✓ مدفوع":"✓ تم الدفع"]),
+            }},[nextInst&&nextInst.paid?"✓ مدفوع":"✓ تم الدفع"]),
             h("button",{class:"btn",style:{background:"transparent",border:"1px solid #854d0e",color:"#fbbf24",borderRadius:"8px",padding:"5px 8px",fontSize:"15px"},onClick:()=>set({showEditInstallment:!S.showEditInstallment})},["✏️"])])])]),
       h("div",{},[
-        h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"14px",color:"#555",marginBottom:"4px"}},[
-          h("span",{},["مدفوع: "+paidCount+" من "+sched.length+" أقساط"]),
-          h("span",{},[Math.round(paidCount/Math.max(1,sched.length)*100)+"%"])]),
-        h("div",{style:{background:"#1a1a1a",borderRadius:"4px",height:"5px",overflow:"hidden"}},[
-          h("div",{style:{height:"100%",width:Math.round(paidCount/Math.max(1,sched.length)*100)+"%",background:"linear-gradient(90deg,#16a34a,#4ade80)",borderRadius:"4px"}})])]),
+        h("div",{style:{fontSize:"14px",color:"#facc15",marginBottom:"4px",fontWeight:"700"}},["الأقساط المدفوعة: "+paidCount]),
+        h("div",{style:{fontSize:"12px",color:"#555"}},["خطة مفتوحة — بدون حد أقصى ثابت"])]),
       S.showEditInstallment?h("div",{style:{marginTop:"12px",paddingTop:"12px",borderTop:"1px solid #854d0e"}},[
         h("div",{style:{fontSize:"14px",fontWeight:"600",color:"#fff",marginBottom:"8px"}},["جدول الأقساط"]),
         h("div",{},sched.map((inst,i)=>h("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px",padding:"8px",background:"#111",borderRadius:"8px"}},[
           h("div",{style:{fontSize:"14px",color:inst.paid?"#4ade80":"#888",flexShrink:"0"}},[inst.paid?"✅":"⏳"]),
           h("div",{style:{flex:"1",fontSize:"14px",color:"#fff"}},[inst.date]),
           (()=>{const inp=h("input",{type:"number",value:inst.amount,style:{width:"90px",fontSize:"14px"}});inp.addEventListener("change",e=>{S.installmentSchedule[i].amount=Number(e.target.value);saveBalancesFin();showMsg("✓ تم التحديث");});return inp;})(),
-          h("button",{class:"btn",style:{fontSize:"15px",padding:"3px 8px",borderRadius:"6px",background:inst.paid?"#450a0a":"#052e16",color:inst.paid?"#f87171":"#4ade80"},
-            onClick:()=>{S.installmentSchedule[i].paid=!S.installmentSchedule[i].paid;saveBalancesFin();R();}},
-            [inst.paid?"↩ إلغاء":"✓ دفع"])]))),
+          inst.paid?h("button",{"data-testid":"btn-reverse-installment",class:"btn",style:{fontSize:"15px",padding:"3px 8px",borderRadius:"6px",background:"#450a0a",color:"#f87171"},
+            onClick:async()=>{
+              if(S._payingInstallment)return;
+              S._payingInstallment=true;
+              const prevBal=Number(S.installmentBalance);
+              const prevSched=cloneInstallmentSchedule(S.installmentSchedule);
+              try{
+                const res=await engineCommand("reverseInstallment",{installmentDate:inst.date},"instrev-"+inst.date);
+                if(res&&res.installmentBalance!=null) S.installmentBalance=Number(res.installmentBalance);
+                if(Array.isArray(res&&res.installmentSchedule)&&res.installmentSchedule.length){
+                  S.installmentSchedule=cloneInstallmentSchedule(res.installmentSchedule);
+                } else if(S.installmentSchedule[i]) S.installmentSchedule[i].paid=false;
+                try{await loadBalances();}catch(_e){}
+                showMsg("✓ تم إلغاء دفع القسط — الأقساط المدفوعة: "+(res&&res.paidCount!=null?res.paidCount:S.installmentSchedule.filter(x=>x.paid).length));
+                R();
+              }catch(e){
+                S.installmentSchedule=prevSched;
+                S.installmentBalance=prevBal;
+                showMsg("⚠ فشل إلغاء القسط");
+                R();
+              }finally{S._payingInstallment=false;}
+            }},["↩ إلغاء"]):h("span",{style:{fontSize:"12px",color:"#555"}},["غير مدفوع"])]))),
         h("button",{class:"btn",style:{width:"100%",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"8px",fontSize:"15px",marginTop:"8px"},onClick:()=>set({showEditInstallment:false})},["إغلاق"])]):null]);
     // ======= شاشة القسط البنكي: المتوفر والعجز =======
     const _instAvailable=Number(S.installmentBalance)||0;
     const _instNeeded=nextInst?Number(nextInst.amount)||0:0;
     const _instDeficit=Math.max(0,_instNeeded-_instAvailable);
-    const _instReady=_instAvailable>=_instNeeded;
+    const _instReady=_instNeeded>0 && _instAvailable>=_instNeeded;
     const installmentDeficitCard=nextInst?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:_instReady?"1px solid #166534":"2px solid #b45309",background:_instReady?"linear-gradient(135deg,#052e16,#111)":"linear-gradient(135deg,#1a1205,#111)"}},[
       h("div",{style:{fontSize:"14px",fontWeight:"700",color:_instReady?"#4ade80":"#fbbf24",marginBottom:"10px"}},["🏦 جاهزية القسط البنكي"]),
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"8px"}},[
@@ -5457,14 +6015,16 @@ function renderApp(){
     const _vCollected = eng ? (Number(eng.collectedFils ?? eng.tenantPaidFils)||0)/100 : _vReceived;
     const _vRemaining = eng ? (Number(eng.remainingFils ?? eng.tenantUnpaidFils)||0)/100 : Math.max(0,_vTarget-_vCollected);
     const _vCompany = eng ? (Number(eng.companyCollectedFils ?? eng.depositedFils)||0)/100 : _vDeposited;
-    const _vAtEmp = eng ? (Number(eng.atEmployeesMonthFils)||0)/100 : _vUndeposited;
+    const _vMonthAtEmp = eng ? (Number(eng.atEmployeesMonthFils)||0)/100 : _vUndeposited;
     const _vLateEng = eng ? (Number(eng.arrearsFils)||0)/100 : _vLate;
     const _vSum = _vCollected + _vRemaining;
     const _vDiff = Math.round((_vTarget - _vSum)*100)/100;
     const _vBalanced = Math.abs(_vDiff) < 1;
     const _vHolding = eng ? (Number(eng.sharedEmployeeHoldingFils ?? eng.holdingFils)||0)/100 : _vUndeposited;
-    const _vYahiaH = (()=>{ const c=(eng&&eng.custody)||[]; const r=c.find(x=>String(x.userId||"").includes("yahia")||x.displayName==="يحيى"); return r?Number(r.holdingFils||0)/100:0; })();
-    const _vNaderH = (()=>{ const c=(eng&&eng.custody)||[]; const r=c.find(x=>String(x.userId||"").includes("nader")||x.displayName==="نادر"); return r?Number(r.holdingFils||0)/100:0; })();
+    // عند الموظفين / محصل ولم يودع = current shared custody (same number everywhere).
+    const _vAtEmp = _vHolding;
+    const _vYahiaCollected = (()=>{ const c=(eng&&eng.custody)||[]; const r=c.find(x=>String(x.userId||"").includes("yahia")||x.displayName==="يحيى"); return r?Number(r.cashCollectedFils||0)/100:0; })();
+    const _vNaderCollected = (()=>{ const c=(eng&&eng.custody)||[]; const r=c.find(x=>String(x.userId||"").includes("nader")||x.displayName==="نادر"); return r?Number(r.cashCollectedFils||0)/100:0; })();
     content=h("div",{},[
       monthNav(),
       h("div",{class:"card",style:{padding:"12px",marginBottom:"12px",border:_vBalanced?"1px solid #166534":"2px solid #b91c1c",background:_vBalanced?"#052e16":"#2e0505"}},[
@@ -5477,7 +6037,8 @@ function renderApp(){
           h("div",{},[h("div",{style:{fontSize:"11px",color:"#888"}},["المتبقي"]),h("div",{style:{fontSize:"18px",fontWeight:"800",color:"#f87171"}},[_vRemaining.toLocaleString()])]),
           h("div",{},[h("div",{style:{fontSize:"11px",color:"#888"}},["عند الموظفين"]),h("div",{style:{fontSize:"18px",fontWeight:"800",color:"#60a5fa"}},[_vAtEmp.toLocaleString()])])]),
         h("div",{style:{fontSize:"11px",color:"#999",marginTop:"8px"}},["المستهدف = المحصل + المتبقي · المودع للشركة "+_vCompany.toLocaleString()+" · المتأخر "+_vLateEng.toLocaleString()]),
-        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"4px"}},["العهدة المشتركة "+_vHolding.toLocaleString()+" (يحيى "+_vYahiaH.toLocaleString()+" · نادر "+_vNaderH.toLocaleString()+")"])]),
+        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"4px"}},["العهدة المشتركة "+_vHolding.toLocaleString()+" د.إ (عهدة مجمّعة)"]),
+        h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["نقد محصل هذا الشهر ولم يودع: "+_vMonthAtEmp.toLocaleString()+" · إجمالي ما حصّله يحيى "+_vYahiaCollected.toLocaleString()+( _vNaderCollected?(" · نادر "+_vNaderCollected.toLocaleString()):"")])]),
       h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #166534",background:"linear-gradient(135deg,#052e16,#111)"}},[
         h("div",{style:{fontSize:"13px",color:"#4ade80",fontWeight:"600",marginBottom:"6px"}},["💰 إجمالي السيولة المالية"]),
         h("div",{style:{fontSize:"28px",fontWeight:"900",color:"#4ade80",marginBottom:"10px"}},[totalLiquidity.toLocaleString()+" د.إ"]),
@@ -5695,73 +6256,43 @@ function renderApp(){
                 h("div",{style:{fontSize:"12px",color:"#666"}},[x.tenant+" | دفع "+x.paid.toLocaleString()+" من "+x.rent.toLocaleString()])]),
               h("span",{style:{fontSize:"14px",fontWeight:"700",color:"#fbbf24"}},["متبقي "+x.remaining.toLocaleString()+" د.إ"])])))]):null]);
       })(),
-      // Undeposited amount card - محاسبياً: كل المقبوضات - الإيداعات
-      // المقبوضات = إيجار المحصّلة كاملاً + المدفوع من الجزئي + اليومي المحصّل
+      // Undeposited = current shared custody (same as عند الموظفين / العهدة المشتركة)
       (()=>{
-        let receivedTotal=0;
-        const _received=(x)=>{
-          // نفس معادلة بطاقة يحيى بالضبط — توحيد الحساب
-          // التحويل البنكي لا يمر بيد الموظف → مستثنى من المحصّل غير المودع
-          if(x.collectionMethod==="bank") return 0;
-          const ds=displayStatus(x);
-          const paid=Number(x.paid_amount)||0;
-          const rent=Number(x.rent)||0;
-          if(ds==="collected") return paid>0?paid:rent;
-          if(ds==="partial") return paid>0?paid:0;
-          return 0;
-        };
-        units.forEach(u=>u.partitions.forEach(p=>{ receivedTotal+=_received(p); }));
-        full.forEach(u=>{ receivedTotal+=_received(u); });
-        // اليومي يُعتبر محصّلاً (مقبوضاً)
-        receivedTotal+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
-        // Actual deposits
-        const deposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
-        const undeposited=Math.max(0,receivedTotal-deposited);
+        const engHold = (typeof S !== "undefined" && S._dash && S._dash.summary)
+          ? (Number(S._dash.summary.sharedEmployeeHoldingFils ?? S._dash.summary.holdingFils)||0)/100
+          : null;
+        const undeposited = engHold != null ? engHold : Math.max(0, _vHolding);
         if(undeposited<=0) return null;
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #1e3a5f",background:"linear-gradient(135deg,#0c1a2e,#111)"}},[
           h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
             h("div",{},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#60a5fa",marginBottom:"4px"}},["💼 محصّل ولم يُودع بعد"]),
-              h("div",{style:{fontSize:"12px",color:"#555"}},["إيجارات المحصّلة − الإيداعات الفعلية"])]),
+              h("div",{style:{fontSize:"12px",color:"#555"}},["العهدة المشتركة الحالية — نقد لا يزال عند الموظفين"])]),
             h("div",{style:{fontSize:"26px",fontWeight:"900",color:"#60a5fa"}},[undeposited.toLocaleString()+" د.إ"])]),
           h("div",{style:{fontSize:"12px",color:"#3b82f6",background:"#1e3a5f",borderRadius:"6px",padding:"6px 10px",marginTop:"4px"}},
-            ["هذا المبلغ يجب أن يكون عند الموظفين جاهزاً للإيداع"])]);
+            ["يساوي العهدة المشتركة / عند الموظفين (عهدة مجمّعة حالية)"])]);
       })(),
-      // ======= عهدة الموظفين =======
+      // ======= تحصيل الموظفين (تدقيق) — العهدة مجمّعة =======
       (()=>{
-        const emps=Object.keys(USERS).filter(k=>USERS[k].role!=="owner");
-        const custody=emps.map(emp=>{
-          let received=0;
-          units.forEach(u=>u.partitions.forEach(p=>{
-            if(p.collectedBy===emp){
-              const ds=displayStatus(p);
-              if(ds==="collected")received+=Number(p.rent)||0;
-              else if(ds==="partial")received+=Number(p.paid_amount)||0;
-            }
-          }));
-          full.forEach(u=>{
-            if(u.collectedBy===emp){
-              const ds=displayStatus(u);
-              if(ds==="collected")received+=Number(u.rent)||0;
-              else if(ds==="partial")received+=Number(u.paid_amount)||0;
-            }
-          });
-          const deposited=txList.filter(t=>t.by===emp).reduce((s,t)=>s+Number(t.amount||0),0);
-          const remaining=Math.round((received-deposited)*100)/100;
-          return {emp,name:USERS[emp].name,received,deposited,remaining};
-        }).filter(c=>c.received>0||c.deposited>0);
-        if(custody.length===0)return null;
+        const eng=(typeof S!=="undefined"&&S._dash&&S._dash.summary)?S._dash.summary:null;
+        const shared=eng?(Number(eng.sharedEmployeeHoldingFils??eng.holdingFils)||0)/100:0;
+        const rows=(eng&&Array.isArray(eng.custody)?eng.custody:[]).map(c=>({
+          name:c.displayName||c.userId||"—",
+          collected:(Number(c.cashCollectedFils)||0)/100,
+          submitted:(Number(c.submittedDepositFils??c.depositedFils)||0)/100,
+        })).filter(c=>c.collected>0||c.submitted>0);
+        if(rows.length===0 && shared<=0) return null;
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #3a2e0c",background:"linear-gradient(135deg,#1a1505,#111)"}},[
-          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24",marginBottom:"10px"}},["👥 عهدة الموظفين"]),
-          h("div",{},custody.map(c=>h("div",{style:{padding:"10px 0",borderBottom:"1px solid #1a1a1a"}},[
+          h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24",marginBottom:"6px"}},["👥 تحصيل الموظفين (تدقيق)"]),
+          h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"10px"}},["العهدة الحالية المشتركة: "+shared.toLocaleString()+" د.إ — ليست عهدة شخصية لكل موظف"]),
+          h("div",{},rows.map(c=>h("div",{style:{padding:"10px 0",borderBottom:"1px solid #1a1a1a"}},[
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
               h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[c.name]),
-              h("div",{style:{fontSize:"17px",fontWeight:"900",color:c.remaining>0?"#fbbf24":"#4ade80"}},[c.remaining.toLocaleString()+" د.إ"])]),
+              h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#888"}},["إجمالي ما حصّله: "+c.collected.toLocaleString()+" د.إ"])]),
             h("div",{style:{display:"flex",gap:"12px",fontSize:"13px"}},[
-              h("span",{style:{color:"#888"}},["استلم: "+c.received.toLocaleString()]),
-              h("span",{style:{color:"#4ade80"}},["أودع: "+c.deposited.toLocaleString()]),
-              h("span",{style:{color:c.remaining>0?"#fbbf24":"#555",fontWeight:"700"}},["المتبقي معه: "+c.remaining.toLocaleString()])])]))),
-          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["استلم = ما حصّله الموظف | أودع = ما سجّله كإيداع | المتبقي = الفرق الذي بحوزته"])]);
+              h("span",{style:{color:"#888"}},["إجمالي ما حصّله: "+c.collected.toLocaleString()]),
+              h("span",{style:{color:"#4ade80"}},["طلبات إيداعه المعتمدة: "+c.submitted.toLocaleString()])])]))),
+          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["الإيداع من العهدة المشتركة لا يُنسب كعهدة شخصية — لا يُعرض «المتبقي معه»"])]);
       })(),
       // Vacant units card
       vacantList.length>0?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1a1a1a"}},[
@@ -5781,9 +6312,20 @@ function renderApp(){
               onClick:()=>set({showAddTx:!S.showAddTx})},["+ إيداع"])]),
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},[totalIncome.toLocaleString()+" د.إ"])]),
         S.showAddTx?(()=>{
-          const tx2={desc:"",amount:"",date:new Date().toISOString().slice(0,10),notes:"",type:"cash"};
+          const tx2={sourceKind:"holding",desc:"",amount:"",date:new Date().toISOString().slice(0,10),notes:"",type:"cash"};
           const wrap=h("div",{style:{padding:"12px",background:"#0f0f0f",borderRadius:"8px",marginBottom:"10px"}});
-          wrap.appendChild(h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"8px"}},["إيداع من العهدة — تحويل نقد محصّل مسبقاً، ليس دخلاً جديداً"]));
+          const sourceSel=h("select",{"data-testid":"deposit-source",style:{marginBottom:"8px"}},[
+            h("option",{value:"holding"},["إيداع من العهدة"]),
+            h("option",{value:"external"},["إيداع آخر"])
+          ]);
+          const hint=h("div",{"data-testid":"deposit-source-hint",style:{fontSize:"12px",color:"#888",marginBottom:"8px"}},["من العهدة المشتركة — ينقص العهدة بعد الاعتماد"]);
+          sourceSel.addEventListener("change",e=>{
+            tx2.sourceKind=e.target.value==="external"?"external":"holding";
+            hint.textContent=tx2.sourceKind==="external"
+              ?"إيداع من مصدر آخر — لا ينقص عهدة الموظفين"
+              :"من العهدة المشتركة — ينقص العهدة بعد الاعتماد";
+          });
+          wrap.appendChild(sourceSel);wrap.appendChild(hint);
           const descI=h("input",{"data-testid":"deposit-desc",type:"text",placeholder:"الوصف",style:{marginBottom:"8px"}});
           descI.addEventListener("input",e=>tx2.desc=e.target.value);
           const amtI=h("input",{"data-testid":"deposit-amount",type:"number",placeholder:"المبلغ",style:{marginBottom:"8px"}});
@@ -5793,32 +6335,35 @@ function renderApp(){
           dateI.addEventListener("change",e=>tx2.date=e.target.value);
           const saveB=h("button",{"data-testid":"btn-save-deposit",class:"btn",style:{flex:"1",background:"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},
             onClick:async()=>{
-              if(S._savingDeposit){showMsg("⏳ جاري حفظ الإيداع...");return;}
+              if(S._savingDeposit){showMsg("جاري الحفظ...");return;}
               if(!String(tx2.desc||"").trim())return showMsg("⚠ أدخل وصف الإيداع");
               const amt=Number(tx2.amount);
               if(!Number.isFinite(amt)||amt<=0)return showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");
-              // Client hint only — server assertDepositFitsCustody(sharedHoldingFils) is authoritative.
-              const holdFils=Number((S._dash&&S._dash.summary&&(S._dash.summary.sharedEmployeeHoldingFils??S._dash.summary.holdingFils))||0);
-              if(Math.round(amt*100)>holdFils){
-                return showMsg("⚠ المبلغ يتجاوز العهدة المشتركة المتاحة ("+amt.toLocaleString()+" من "+(holdFils/100).toLocaleString()+" د.إ)");
+              if(tx2.sourceKind!=="external"){
+                const holdFils=Number((S._dash&&S._dash.summary&&(S._dash.summary.sharedEmployeeHoldingFils??S._dash.summary.holdingFils))||0);
+                if(Math.round(amt*100)>holdFils){
+                  return showMsg("⚠ المبلغ يتجاوز العهدة المشتركة المتاحة ("+amt.toLocaleString()+" من "+(holdFils/100).toLocaleString()+" د.إ)");
+                }
               }
-              const t={id:Date.now(),desc:tx2.desc,amount:amt,date:tx2.date,notes:tx2.notes,type:tx2.type,by:S.user};
+              const label=tx2.sourceKind==="external"?"إيداع آخر":"إيداع من العهدة";
+              const t={id:Date.now(),desc:tx2.desc,amount:amt,date:tx2.date,notes:tx2.notes,type:tx2.type,by:S.user,sourceKind:tx2.sourceKind,sourceLabel:label};
               S._savingDeposit=true;R();
               try{
                 mData.transactions.push(t);
-                addLog&&addLog(mData,nm+" أضاف إيداع: "+tx2.desc);
-                await Promise.resolve(saveCurData(mData));
+                addLog&&addLog(mData,nm+" أضاف "+label+": "+tx2.desc);
+                await saveCurData(mData,false);
                 set({showAddTx:false});
-                showMsg("✓ تم إضافة الإيداع: "+amt.toLocaleString()+" د.إ");
+                showMsg("تم الحفظ");
               }catch(e){
                 const ix=mData.transactions.indexOf(t);
                 if(ix>=0) mData.transactions.splice(ix,1);
-                showMsg("⚠ فشل حفظ الإيداع: "+(e&&e.message?e.message:e));
+                const code=String((e&&(e.message||e.code))||e);
+                if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
                 R();
               }finally{
                 S._savingDeposit=false;
               }
-            }},[S._savingDeposit?"⏳ جاري...":"حفظ"]);
+            }},[S._savingDeposit?"جاري الحفظ...":"حفظ"]);
           const cancelB=h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"14px"},
             onClick:()=>set({showAddTx:false})},["إلغاء"]);
           wrap.appendChild(descI);wrap.appendChild(amtI);wrap.appendChild(dateI);
@@ -5827,7 +6372,10 @@ function renderApp(){
         })():null,
         txList.length===0?h("div",{style:{padding:"16px",textAlign:"center",color:"#555",fontSize:"14px"}},["لا توجد إيداعات"]):
           h("div",{},txList.map((t,i)=>h("div",{style:{padding:"10px 14px",borderBottom:i<txList.length-1?"1px solid #161616":"none",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"10px"}},[
-            h("div",{style:{flex:"1",minWidth:"0"}},[h("div",{style:{fontSize:"15px",color:"#fff"}},[t.desc||""]),h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._state?" · "+t._state:"")])]),
+            h("div",{style:{flex:"1",minWidth:"0"}},[h("div",{style:{fontSize:"15px",color:"#fff"}},[
+              ((t.sourceKind==="bank"||t.sourceLabel==="تحويل بنكي"||t._fromBankReceipt)?"تحويل بنكي — ":
+              (t.sourceKind==="external"||t.sourceLabel==="إيداع آخر")?"إيداع آخر — ":"من العهدة — ")+(t.desc||"")
+            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._state==="pending"?" · قيد الاعتماد":(t._state==="approved"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:"")))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
             h("div",{style:{display:"flex",alignItems:"center",gap:"8px",flexShrink:"0"}},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#4ade80"}},[Number(t.amount||0).toLocaleString()+" د.إ"]),
               (t._engineId||t.id)?h("button",{class:"btn",style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"7px",padding:"5px 8px",fontSize:"12px",fontWeight:"700"},
@@ -5866,24 +6414,35 @@ function renderApp(){
         amtInp.addEventListener("input",e=>amount=e.target.value);
         const catSel=h("select",{style:{marginBottom:"8px"}},["عام","إنترنت","أثاث","كهرباء","رواتب","أخرى"].map(c=>{const o=h("option",{value:c},[c]);if(c===cat)o.selected=true;return o;}));
         catSel.addEventListener("change",e=>cat=e.target.value);
-        const dateInp=h("input",{type:"date",value:date,style:{marginBottom:"8px"}});
-        dateInp.addEventListener("input",e=>date=e.target.value);
+        const dateInp=h("input",{"data-testid":"expense-date",type:"date",value:date,style:{marginBottom:"8px"}});
+        dateInp.addEventListener("change",e=>date=e.target.value);
         const btnRow=h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{"data-testid":"expense-submit",class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},
-            onClick:()=>{
+            onClick:async()=>{
+              if(S._savingExpense){showMsg("جاري الحفظ...");return;}
               const amt=Number(amount);
               if(!String(desc||"").trim()){showMsg("⚠ أدخل وصف المصروف");return;}
               if(!Number.isFinite(amt)||amt<=0){showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");return;}
               const expense={id:Date.now(),desc:String(desc).trim(),amount:amt,category:cat,date,by:S.user};
               if(isOwner){
-                data.expenses.push(expense);
-                addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف مصروف: "+desc);
-                saveCurData(data);set({showAddExp:false});showMsg("✓ تم الحفظ — خُصم من حساب الإيرادات");
+                S._savingExpense=true;R();
+                try{
+                  data.expenses.push(expense);
+                  addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف مصروف: "+desc);
+                  await saveCurData(data,false);
+                  set({showAddExp:false});
+                  showMsg("تم الحفظ");
+                }catch(e){
+                  const ix=data.expenses.indexOf(expense);
+                  if(ix>=0) data.expenses.splice(ix,1);
+                  const code=String((e&&(e.message||e.code))||e);
+                  if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                }finally{S._savingExpense=false;R();}
               } else {
-                submitRequest("add_expense",`مصروف جديد: ${desc} - ${amt.toLocaleString()} د.إ`,{expense});
+                await submitRequest("add_expense",`مصروف جديد: ${desc} - ${amt.toLocaleString()} د.إ`,{expense});
                 set({showAddExp:false});
               }
-            }},[isOwner?"حفظ":"📤 إرسال للاعتماد"]),
+            }},[S._savingExpense?"جاري الحفظ...":(isOwner?"حفظ":"📤 إرسال للاعتماد")]),
           h("button",{"data-testid":"expense-cancel",class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"15px"},onClick:()=>set({showAddExp:false})},["إلغاء"])]);
         return h("div",{},[descInp,h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}},[amtInp,catSel]),dateInp,btnRow]);
       })()]):null;
@@ -5900,8 +6459,8 @@ function renderApp(){
         const row=h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}},[
           (()=>{const i=h("input",{type:"number",placeholder:"التكلفة"});i.addEventListener("input",e=>fm.amount=Number(e.target.value));return i;})(),
           (()=>{const i=h("input",{type:"text",placeholder:"المقاول/الشركة"});i.addEventListener("input",e=>fm.contractor=e.target.value);return i;})()]);
-        const dateInp=h("input",{type:"date",value:fm.date,style:{marginBottom:"8px"}});
-        dateInp.addEventListener("input",e=>fm.date=e.target.value);
+        const dateInp=h("input",{"data-testid":"maint-unit-date",type:"date",value:fm.date,style:{marginBottom:"8px"}});
+        dateInp.addEventListener("change",e=>fm.date=String(e.target.value||""));
         const btns=h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"700"},
             onClick:()=>{
@@ -5927,8 +6486,8 @@ function renderApp(){
         const row=h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}},[
           (()=>{const i=h("input",{type:"number",placeholder:"التكلفة"});i.addEventListener("input",e=>fm.amount=Number(e.target.value));return i;})(),
           (()=>{const i=h("input",{type:"text",placeholder:"المقاول/الشركة"});i.addEventListener("input",e=>fm.contractor=e.target.value);return i;})()]);
-        const dateInp=h("input",{type:"date",value:fm.date,style:{marginBottom:"8px"}});
-        dateInp.addEventListener("input",e=>fm.date=e.target.value);
+        const dateInp=h("input",{"data-testid":"maint-fac-date",type:"date",value:fm.date,style:{marginBottom:"8px"}});
+        dateInp.addEventListener("change",e=>fm.date=String(e.target.value||""));
         const btns=h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"13px",fontWeight:"700"},
             onClick:()=>{
@@ -6025,63 +6584,84 @@ function renderApp(){
   // ======= TRANSACTIONS =======
   else if(S.tab==="transactions"){
     const addForm=S.showAddTx?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
-      h("div",{style:{fontSize:"15px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["إيداع من العهدة"]),
-      h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"10px"}},["تحويل نقد سبق تحصيله من العهدة المشتركة إلى الحساب — ليس دخلاً إيجارياً جديداً"]),
+      h("div",{style:{fontSize:"15px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["إيداع"]),
       (()=>{
-        const tx={type:"عام",desc:"",amount:"",date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",notes:""};
+        const tx={sourceKind:"holding",type:"عام",desc:"",amount:"",date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",notes:""};
+        const sourceSel=h("select",{"data-testid":"deposit-source",style:{marginBottom:"8px"}},[
+          h("option",{value:"holding"},["إيداع من العهدة"]),
+          h("option",{value:"external"},["إيداع آخر"])
+        ]);
+        const hint=h("div",{"data-testid":"deposit-source-hint",style:{fontSize:"12px",color:"#888",marginBottom:"10px"}},["من العهدة المشتركة — ينقص العهدة بعد الاعتماد"]);
+        sourceSel.addEventListener("change",e=>{
+          tx.sourceKind=e.target.value==="external"?"external":"holding";
+          hint.textContent=tx.sourceKind==="external"
+            ?"إيداع من مصدر آخر — لا ينقص عهدة الموظفين"
+            :"من العهدة المشتركة — ينقص العهدة بعد الاعتماد";
+        });
         const typeSel=h("select",{"data-testid":"deposit-type",style:{marginBottom:"8px"}},["عام","إيجار شهري","إيجار يومي","كاش"].map(v=>h("option",{value:v},[v])));
         typeSel.addEventListener("change",e=>{tx.type=e.target.value;if(e.target.value==="إيجار يومي"&&!tx.desc){tx.desc="إيجار يومي";descInp.value="إيجار يومي";}});
-        const descInp=h("input",{"data-testid":"deposit-desc",type:"text",placeholder:"الوصف (مثال: تحويل عهدة إلى الحساب)",style:{marginBottom:"8px"}});
+        const descInp=h("input",{"data-testid":"deposit-desc",type:"text",placeholder:"الوصف",style:{marginBottom:"8px"}});
         descInp.addEventListener("input",e=>{tx.desc=e.target.value;});
         const amtInp=h("input",{"data-testid":"deposit-amount",type:"number",placeholder:"المبلغ",style:{marginBottom:"8px"}});
         amtInp.addEventListener("input",e=>{tx.amount=e.target.value;});
         const dateInp=h("input",{"data-testid":"deposit-date",type:"date",value:tx.date,style:{marginBottom:"8px"}});
         dateInp.addEventListener("input",e=>{tx.date=e.target.value;});
-        const notesInp=h("input",{"data-testid":"deposit-notes",type:"text",placeholder:"ملاحظات (اختياري)...",style:{marginBottom:"8px"}});
+        const notesInp=h("input",{"data-testid":"deposit-notes",type:"text",placeholder:"ملاحظات / مصدر الإيداع الآخر...",style:{marginBottom:"8px"}});
         notesInp.addEventListener("input",e=>{tx.notes=e.target.value;});
         const saveBtn=h("button",{"data-testid":"btn-save-deposit",class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},
           onClick:async()=>{
-            if(S._savingDeposit){showMsg("⏳ جاري حفظ الإيداع...");return;}
+            if(S._savingDeposit){showMsg("جاري الحفظ...");return;}
             if(!String(tx.desc||"").trim())return showMsg("⚠ أدخل وصف الإيداع");
             const amt=Number(tx.amount);
             if(!Number.isFinite(amt)||amt<=0)return showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");
-            // Client hint only — server assertDepositFitsCustody(sharedHoldingFils) is authoritative.
-            const holdFils=Number((S._dash&&S._dash.summary&&(S._dash.summary.sharedEmployeeHoldingFils??S._dash.summary.holdingFils))||0);
-            if(Math.round(amt*100)>holdFils){
-              return showMsg("⚠ المبلغ يتجاوز العهدة المشتركة المتاحة ("+amt.toLocaleString()+" من "+(holdFils/100).toLocaleString()+" د.إ)");
+            if(tx.sourceKind!=="external"){
+              const holdFils=Number((S._dash&&S._dash.summary&&(S._dash.summary.sharedEmployeeHoldingFils??S._dash.summary.holdingFils))||0);
+              if(Math.round(amt*100)>holdFils){
+                return showMsg("⚠ المبلغ يتجاوز العهدة المشتركة المتاحة ("+amt.toLocaleString()+" من "+(holdFils/100).toLocaleString()+" د.إ)");
+              }
             }
-            const transaction={id:Date.now(),type:tx.type,desc:tx.desc,amount:amt,date:tx.date,notes:tx.notes,by:S.user};
+            const label=tx.sourceKind==="external"?"إيداع آخر":"إيداع من العهدة";
+            const transaction={id:Date.now(),type:tx.type,desc:tx.desc,amount:amt,date:tx.date,notes:tx.notes,by:S.user,sourceKind:tx.sourceKind,sourceLabel:label};
             if(isOwner){
               S._savingDeposit=true;R();
               try{
                 data.transactions.push(transaction);
-                addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف إيداع: "+tx.desc);
-                await Promise.resolve(saveCurData(data));
+                addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" أضاف "+label+": "+tx.desc);
+                await saveCurData(data,false);
                 set({showAddTx:false});
-                showMsg("✓ تم إضافة الإيداع: "+amt.toLocaleString()+" د.إ");
+                showMsg("تم الحفظ");
               }catch(e){
                 const ix=data.transactions.indexOf(transaction);
                 if(ix>=0) data.transactions.splice(ix,1);
-                showMsg("⚠ فشل حفظ الإيداع: "+(e&&e.message?e.message:e));
+                const code=String((e&&(e.message||e.code))||e);
+                if(code==="SAVE_SUPERSEDED")return;
+                showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
                 R();
               }finally{
                 S._savingDeposit=false;
               }
             } else {
-              submitRequest("add_transaction",`إيداع: ${tx.desc} - ${amt.toLocaleString()} د.إ`,{transaction});
+              await submitRequest("add_transaction",`${label}: ${tx.desc} - ${amt.toLocaleString()} د.إ`,{transaction});
               set({showAddTx:false});
             }
-          }},[ S._savingDeposit||S.submitting?"⏳ جاري الإرسال...": isOwner?"حفظ":"📤 إرسال للاعتماد"]);
+          }},[ S._savingDeposit||S.submitting?"جاري الحفظ...": isOwner?"حفظ":"📤 إرسال للاعتماد"]);
         const cancelBtn=h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"15px"},
           onClick:()=>set({showAddTx:false})},["إلغاء"]);
-        return h("div",{},[typeSel,descInp,amtInp,dateInp,notesInp,h("div",{style:{display:"flex",gap:"8px"}},[saveBtn,cancelBtn])]);
+        return h("div",{},[sourceSel,hint,typeSel,descInp,amtInp,dateInp,notesInp,h("div",{style:{display:"flex",gap:"8px"}},[saveBtn,cancelBtn])]);
       })()]):null;
     const txCards=data.transactions.map((t,idx)=>editDeleteMoneyCard("transactions",t,idx,{
-      title:(x)=>x.desc||"إيداع",
+              title:(x)=>((x.sourceKind==="bank"||x.sourceLabel==="تحويل بنكي"||x._fromBankReceipt)?"تحويل بنكي — ":
+        (x.sourceKind==="external"||x.sourceLabel==="إيداع آخر")?"إيداع آخر — ":"من العهدة — ")+(x.desc||"إيداع"),
       fallback:"إيداع",
       logName:"إيداع",
       color:"#4ade80",
       prefix:"+ ",
+      // Keep approved bank/deposit rows permanently visible (never drop after refresh).
+      afterTitle:(x)=>h("div",{"data-testid":x._fromBankReceipt?"bank-history-row":"deposit-history-row",style:{fontSize:"11px",color:"#666",marginTop:"2px"}},[
+        (x._state==="pending"?"قيد الاعتماد":x._state==="approved"||x._fromBankReceipt?"معتمد":(x._state||""))
+        +(x._approvedAt?" · اعتماد "+String(x._approvedAt).slice(0,16).replace("T"," "):"")
+        +(x._receiptId?" · "+x._receiptId:(x._engineId?" · "+x._engineId:""))
+      ]),
       hasDesc:true,
       hasNotes:true
     }));
@@ -6173,13 +6753,22 @@ function renderApp(){
     const typeLabel={
       update_partition:"تعديل بارتشن",update_full:"تعديل شقة كاملة",
       add_transaction:"إيداع جديد",add_expense:"مصروف جديد",
+      bank_history:"تحويل بنكي",
       add_unit:"إضافة شقة بارتشنات",add_full_unit:"إضافة شقة كاملة",
       delete_partition:"حذف بارتشن",delete_full:"حذف شقة",
       add_unit_maintenance:"صيانة شقة",add_facility_maintenance:"صيانة مرافق",add_daily:"حجز يومي"
     };
     const statusColor={pending:"#fbbf24",approved:"#4ade80",rejected:"#f87171",revoked:"#f97316",cancelled:"#6b7280",processing:"#93c5fd"};
-    const statusLabel={pending:"⏳ معلق",approved:"✓ معتمد",rejected:"✗ مرفوض",processing:"🔄 قيد المعالجة"};
+    const statusLabel={pending:"قيد الاعتماد",approved:"✓ معتمد",rejected:"✗ مرفوض",processing:"🔄 قيد المعالجة"};
     const statusBg={pending:"#422006",approved:"#052e16",rejected:"#450a0a",revoked:"#431407",cancelled:"#1f2937",processing:"#0c1a2e"};
+
+    const detailRow=(label,value,opts)=>{
+      if(value==null||value===""||value===undefined) return null;
+      const big=!!(opts&&opts.big);
+      return h("div",{"data-testid":opts&&opts.testId||undefined,style:{display:"flex",justifyContent:"space-between",alignItems:big?"baseline":"center",padding:big?"8px 0":"4px 0",borderBottom:"1px solid #1a1a1a",gap:"10px"}},[
+        h("span",{style:{fontSize:big?"13px":"13px",color:"#888",flexShrink:"0"}},[label]),
+        h("span",{style:{fontSize:big?"22px":"14px",color:big?"#4ade80":"#fff",fontWeight:big?"900":"600",textAlign:"left",wordBreak:"break-word"}},[String(value)])]);
+    };
 
     const reqCard=(req,showActions)=>{
       const fields=req.payload?.fields||{};
@@ -6194,18 +6783,54 @@ function renderApp(){
             if(k==="status") display={"collected":"محصّل","late":"متأخر","vacant":"فارغ","staff":"موظفين"}[v]||v;
             if(k==="partial") display=v?"جزئي":"كامل";
             if(k==="elec_paid") display=v?"مدفوعة":"غير مدفوعة";
-            detailRows.push(h("div",{style:{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #1a1a1a"}},[
-              h("span",{style:{fontSize:"15px",color:"#666"}},[labels[k]]),
-              h("span",{style:{fontSize:"15px",color:"#fff",fontWeight:"600"}},[String(display)])]));
+            detailRows.push(detailRow(labels[k],display));
           }
         });
       }
-      if(req.type==="add_transaction") detailRows.push(h("div",{style:{fontSize:"14px",color:"#4ade80",marginTop:"4px"}},[
-        "💰 "+Number(req.payload?.transaction?.amount||0).toLocaleString()+" د.إ — "+( req.payload?.transaction?.desc||"")]));
-      if(req.type==="add_expense") detailRows.push(h("div",{style:{fontSize:"14px",color:"#f87171",marginTop:"4px"}},[
-        "💸 "+Number(req.payload?.expense?.amount||0).toLocaleString()+" د.إ — "+(req.payload?.expense?.desc||"")]));
+      // Deposit approval card — amount must be visually obvious before اعتماد.
+      if(req.type==="add_transaction"||req.type==="bank_history"||(req.type==="engine_approval"&&(req._approveCommand==="approveDeposit"||req._kind==="deposit"||req._approveCommand==="approveBankReceipt"||req._kind==="bank"))){
+        const tx=req.payload?.transaction||{};
+        const amt=(tx.amount!=null&&tx.amount!=="")?Number(tx.amount)
+          :(req.payload?.amount!=null?Number(req.payload.amount)
+          :(typeof req.amountFils==="number"?req.amountFils/100:null));
+        const src=tx.sourceKind||req.payload?.sourceKind||req._sourceKind||(req.type==="bank_history"?"bank":"holding");
+        const srcLbl=src==="external"?"إيداع آخر":(src==="bank"?"تحويل بنكي":"إيداع من العهدة");
+        const emp=req.byName||req._employeeName||req.payload?.employeeName||USERS[req.by]?.name||req.by||"—";
+        const depDate=tx.date||req.payload?.depositDate||req._depositDate||"—";
+        const note=tx.notes||tx.desc||req.payload?.note||req._note||req.desc||"—";
+        const ref=tx.reference||req.payload?.reference||req._reference||null;
+        const acct=req.payload?.accountName||req._accountName||null;
+        const holdFils=req.payload?.sharedHoldingFils??req._sharedHoldingFils;
+        const depId=req._depositId||req.payload?.depositId||tx.depositId||req._receiptId||req.payload?.receiptId||null;
+        const decided=String(req.approvedAt||req.rejectedAt||req.resolvedAt||req._approvedAt||"").slice(0,16).replace("T"," ");
+        const stLbl=req.status==="pending"?"قيد الاعتماد":req.status==="approved"?"معتمد":req.status==="rejected"?"مرفوض":(req.status||"—");
+        detailRows.push(detailRow("المبلغ", amt!=null&&!Number.isNaN(amt)?(amt.toLocaleString()+" د.إ"):"غير متوفر",{big:true,testId:"deposit-req-amount"}));
+        detailRows.push(detailRow("الموظف", emp,{testId:"deposit-req-employee"}));
+        detailRows.push(detailRow("المصدر", srcLbl,{testId:"deposit-req-source"}));
+        detailRows.push(detailRow("تاريخ الإيداع", depDate,{testId:"deposit-req-date"}));
+        detailRows.push(detailRow("الوصف / الملاحظة", note,{testId:"deposit-req-note"}));
+        if(ref) detailRows.push(detailRow("المرجع", ref));
+        if(acct) detailRows.push(detailRow("الحساب", acct));
+        detailRows.push(detailRow("حالة الطلب", stLbl));
+        if(decided) detailRows.push(detailRow(req.status==="rejected"?"تاريخ الرفض":"تاريخ الاعتماد", decided));
+        if(depId) detailRows.push(detailRow(src==="bank"?"معرّف التحويل":"معرّف الإيداع", depId));
+        if(req.status==="pending"&&src!=="external"&&src!=="bank"&&holdFils!=null){
+          detailRows.push(detailRow("العهدة الحالية", (Number(holdFils)/100).toLocaleString()+" د.إ",{testId:"deposit-req-holding"}));
+        }
+      } else if(false){
+        // legacy bank-only branch folded into deposit card above
+      }
+      if(req.type==="add_expense"||(req.type==="engine_approval"&&req._approveCommand==="approveExpense")){
+        const ex=req.payload?.expense||{};
+        const amt=(ex.amount!=null&&ex.amount!=="")?Number(ex.amount)
+          :(req.payload?.amount!=null?Number(req.payload.amount)
+          :(typeof req.amountFils==="number"?req.amountFils/100:null));
+        detailRows.push(detailRow("المبلغ", amt!=null&&!Number.isNaN(amt)?(amt.toLocaleString()+" د.إ"):"غير متوفر",{big:true,testId:"expense-req-amount"}));
+        detailRows.push(detailRow("الوصف", ex.desc||req.desc||"—"));
+        detailRows.push(detailRow("الموظف", req.byName||USERS[req.by]?.name||req.by||"—"));
+      }
 
-      return h("div",{class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(req.status==="pending"?"#854d0e":req.status==="approved"?"#166534":"#7f1d1d")}},[
+      return h("div",{"data-testid":"request-card",class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(req.status==="pending"?"#854d0e":req.status==="approved"?"#166534":"#7f1d1d")}},[
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
           h("div",{style:{flex:"1"}},[
             h("div",{style:{display:"flex",gap:"6px",alignItems:"center",marginBottom:"4px"}},[
@@ -6213,10 +6838,10 @@ function renderApp(){
                 [typeLabel[req.type]||req.type]),
               h("span",{style:{fontSize:"14px",color:"#555"}},[req.byName])]),
             h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff",marginBottom:"3px"}},[req.desc]),
-            h("div",{style:{fontSize:"15px",color:"#555"}},[MONTHS[req.month]+" "+req.year+" · "+req.createdAt.slice(0,10)])]),
+            h("div",{style:{fontSize:"15px",color:"#555"}},[MONTHS[req.month]+" "+req.year+" · "+String(req.createdAt||"").slice(0,16).replace("T"," ")])]),
           h("span",{style:{background:statusBg[req.status],color:statusColor[req.status],borderRadius:"6px",padding:"2px 8px",fontSize:"15px",fontWeight:"600",flexShrink:"0",marginRight:"4px"}},
-            [statusLabel[req.status]])]),
-        detailRows.length>0?h("div",{style:{background:"#0f0f0f",borderRadius:"8px",padding:"8px 10px",marginBottom:"10px"}},detailRows):null,
+            [statusLabel[req.status]||req.status])]),
+        detailRows.length>0?h("div",{"data-testid":"request-finance-details",style:{background:"#0f0f0f",borderRadius:"8px",padding:"8px 10px",marginBottom:"10px"}},detailRows.filter(Boolean)):null,
         showActions&&req.status==="pending"?h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{"data-testid":"req-approve","data-reqid":req.id,class:"btn",style:{flex:"1",background:S.approvingReqId===req.id?"#555":"#fff",color:"#000",borderRadius:"8px",padding:"8px",fontSize:"15px",fontWeight:"700"},
             onClick:()=>approveRequest(req)},[S.approvingReqId===req.id?"⏳ جاري...":"✓ اعتماد"]),
@@ -6366,17 +6991,48 @@ function renderApp(){
   // ======= MY REQUESTS (employee) =======
   
   if(S.tab==="myrequests"){
-    const myReqs=S.pendingRequests.filter(r=>r.by===S.user);
-    const reqCard=(req)=>h("div",{class:"card",style:{padding:"12px",marginBottom:"8px",border:"1px solid "+(req.status==="pending"?"#854d0e":req.status==="approved"?"#166534":"#7f1d1d")}},[
-      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},[
-        h("div",{},[
-          h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"500",marginBottom:"2px"}},[req.desc]),
-          h("div",{style:{fontSize:"11px",color:"#555"}},[MONTHS[req.month]+" "+req.year+" · "+req.createdAt.slice(0,10)])]),
-        h("span",{style:{
+    const myReqs=S.pendingRequests.filter(r=>isMyRequest(r));
+    const statusLbl=(st)=>st==="pending"?"قيد الاعتماد":st==="approved"?"معتمد":st==="rejected"?"مرفوض":(st||"—");
+    const typeLbl=(t)=>({add_expense:"مصروف",add_transaction:"إيداع",bank_history:"تحويل بنكي",add_daily:"حجز يومي",update_partition:"تعديل بارتشن",update_full:"تعديل شقة",add_unit_maintenance:"صيانة شقة",add_facility_maintenance:"صيانة مرافق",engine_approval:"اعتماد"}[t]||t||"طلب");
+    const detailLine=(label,value)=>value==null||value===""?null:h("div",{style:{display:"flex",justifyContent:"space-between",gap:"8px",padding:"2px 0"}},[
+      h("span",{style:{fontSize:"12px",color:"#888"}},[label]),
+      h("span",{style:{fontSize:"12px",color:"#ddd",textAlign:"left",wordBreak:"break-word"}},[String(value)])
+    ]);
+    const reqCard=(req)=>{
+      const created=String(req.createdAt||"").slice(0,16).replace("T"," ")||"—";
+      const decided=String(req.approvedAt||req.rejectedAt||req.resolvedAt||req._approvedAt||"").slice(0,16).replace("T"," ");
+      const tx=req.payload&&req.payload.transaction||{};
+      const amt=(tx.amount!=null&&tx.amount!=="")?Number(tx.amount)
+        :(req.payload&&req.payload.amount!=null?Number(req.payload.amount)
+        :(req.payload&&req.payload.expense&&req.payload.expense.amount!=null?Number(req.payload.expense.amount)
+        :(typeof req.amountFils==="number"?req.amountFils/100:null)));
+      const isDep=req.type==="add_transaction"||req.type==="bank_history"||(req.type==="engine_approval"&&(req._kind==="deposit"||req._kind==="bank"||req._approveCommand==="approveDeposit"||req._approveCommand==="approveBankReceipt"));
+      const src=tx.sourceKind||req.payload?.sourceKind||req._sourceKind||(req.type==="bank_history"?"bank":"holding");
+      const srcLbl=src==="external"?"إيداع آخر":(src==="bank"?"تحويل بنكي":"إيداع من العهدة");
+      const depId=req._depositId||req.payload?.depositId||tx.depositId||req._receiptId||req.payload?.receiptId||null;
+      return h("div",{"data-testid":"my-request-card","data-reqid":req.id,"data-status":req.status,class:"card",style:{padding:"12px",marginBottom:"8px",border:"1px solid "+(req.status==="pending"?"#854d0e":req.status==="approved"?"#166534":"#7f1d1d")}},[
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"8px",marginBottom:isDep?"6px":"0"}},[
+        h("div",{style:{flex:"1"}},[
+          h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"2px"}},[typeLbl(req.type)]),
+          h("div",{style:{fontSize:"13px",color:"#fff",fontWeight:"500",marginBottom:"2px"}},[req.desc||"—"]),
+          amt!=null?h("div",{"data-testid":"my-req-amount",style:{fontSize:"16px",fontWeight:"800",color:"#4ade80",marginBottom:"2px"}},[Number(amt).toLocaleString()+" د.إ"]):null,
+          h("div",{style:{fontSize:"11px",color:"#555"}},[MONTHS[req.month]+" "+req.year+" · أُرسل "+created])]),
+        h("span",{"data-testid":"my-req-status",style:{
           background:req.status==="pending"?"#422006":req.status==="approved"?"#052e16":"#450a0a",
           color:req.status==="pending"?"#fbbf24":req.status==="approved"?"#4ade80":"#f87171",
           borderRadius:"6px",padding:"2px 8px",fontSize:"11px",fontWeight:"600",flexShrink:"0"
-        }},[req.status==="pending"?"⏳ معلق":req.status==="approved"?"✓ معتمد":"✗ مرفوض"])])]);
+        }},[statusLbl(req.status)])]),
+      isDep?h("div",{"data-testid":"my-req-deposit-details",style:{background:"#0f0f0f",borderRadius:"8px",padding:"8px 10px",marginTop:"4px"}},[
+        detailLine("الموظف", req.byName||req._employeeName||USERS[req.by]?.name||req.by||"—"),
+        detailLine("المصدر", srcLbl),
+        detailLine("تاريخ الإرسال", created),
+        detailLine("تاريخ الإيداع", req._depositDate||tx.date||req.payload?.depositDate||"—"),
+        decided?detailLine(req.status==="rejected"?"تاريخ الرفض":"تاريخ الاعتماد", decided):null,
+        detailLine("الحالة", statusLbl(req.status)),
+        detailLine("مرجع / ملاحظة", req._reference||req._note||tx.notes||tx.desc||req.desc||null),
+        depId?detailLine(src==="bank"?"معرّف التحويل":"معرّف الإيداع", depId):null,
+      ].filter(Boolean)):null]);
+    };
     content=h("div",{},[
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}},[
         h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fff"}},["طلباتي"]),
@@ -6425,23 +7081,33 @@ function renderApp(){
       const totalInp=h("input",{"data-testid":"daily-total",type:"number",placeholder:"المبلغ الإجمالي",style:{marginBottom:"10px"}});
       totalInp.readOnly=true;
       totalInp.addEventListener("input",e=>b.total=e.target.value);
-      const saveBtn=h("button",{"data-testid":"daily-save",class:"btn",style:{flex:"2",background:needsApproval?"#fff":"#4ade80",color:"#000",borderRadius:"8px",padding:"11px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
+      const saveBtn=h("button",{"data-testid":"daily-save",class:"btn",style:{flex:"2",background:needsApproval?"#fff":"#4ade80",color:"#000",borderRadius:"8px",padding:"11px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
+        if(S._savingDaily){showMsg("جاري الحفظ...");return;}
         if(!b.partId)return showMsg("اختر البارتشن");
         if(!b.startDate||!b.endDate)return showMsg("أدخل التواريخ");
         if(!b.total||Number(b.total)<=0)return showMsg("أدخل المبلغ");
         const partLabel=allParts.find(p=>p.id===b.partId)?.label||b.partId;
-        const booking={id:Date.now(),partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user};
+        const booking={id:Date.now(),partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user,paymentStatus:"unpaid"};
         if(needsApproval){
-          submitRequest("add_daily","حجز يومي: "+partLabel+" — "+(b.guest||"—")+" ("+b.startDate+" إلى "+b.endDate+") "+Number(b.total).toLocaleString()+" د.إ",{booking});
+          await submitRequest("add_daily","حجز يومي: "+partLabel+" — "+(b.guest||"—")+" ("+b.startDate+" إلى "+b.endDate+") "+Number(b.total).toLocaleString()+" د.إ",{booking});
+          set({showAddDaily:false});
         } else {
-          if(!data.dailyBookings)data.dailyBookings=[];
-          data.dailyBookings.push(booking);
-          addLog&&addLog(data,nm+" أضاف حجز يومي: "+partLabel);
-          saveCurData(data);
-          showMsg("✓ تم إضافة الحجز");
+          S._savingDaily=true;R();
+          try{
+            if(!data.dailyBookings)data.dailyBookings=[];
+            data.dailyBookings.push(booking);
+            addLog&&addLog(data,nm+" أضاف حجز يومي: "+partLabel);
+            await saveCurData(data,false);
+            showMsg("تم الحفظ");
+            set({showAddDaily:false});
+          }catch(e){
+            const ix=(data.dailyBookings||[]).indexOf(booking);
+            if(ix>=0) data.dailyBookings.splice(ix,1);
+            const code=String((e&&(e.message||e.code))||e);
+            if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+          }finally{S._savingDaily=false;R();}
         }
-        set({showAddDaily:false});
-      }},[needsApproval?"📤 إرسال للاعتماد":"✓ حفظ"]);
+      }},[S._savingDaily?"جاري الحفظ...":(needsApproval?"📤 إرسال للاعتماد":"حفظ")]);
       const cancelBtn=h("button",{"data-testid":"daily-form-cancel",class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#888",borderRadius:"8px",padding:"11px",fontSize:"15px"},onClick:()=>set({showAddDaily:false})},["إلغاء"]);
       wrap.appendChild(title);wrap.appendChild(partSel);wrap.appendChild(guestInp);
       wrap.appendChild(startLbl);wrap.appendChild(startInp);
@@ -6508,17 +7174,48 @@ function renderApp(){
             h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#aaa",marginBottom:"8px"}},[
               h("span",{"data-testid":"daily-card-dates"},["📅 "+b.startDate+" ← "+b.endDate]),
               h("span",{},[b.nights>0?b.nights+" ليلة":""])]),
-            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:"8px",borderTop:"1px solid #1a1a1a"}},[
+            (()=>{
+              const pay=b.paymentStatus||"unpaid";
+              const payLbl=pay==="collected"?"محصّل / لم يودع":pay==="deposited"?"مودع":"غير محصّل";
+              const payColor=pay==="collected"?"#fbbf24":pay==="deposited"?"#4ade80":"#f87171";
+              return h("div",{"data-testid":"daily-pay-status",style:{fontSize:"12px",color:payColor,marginBottom:"8px",fontWeight:"600"}},[payLbl]);
+            })(),
+            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:"8px",borderTop:"1px solid #1a1a1a",flexWrap:"wrap",gap:"6px"}},[
               h("div",{"data-testid":"daily-card-total",style:{fontSize:"17px",fontWeight:"800",color:"#4ade80"}},[Number(b.total).toLocaleString()+" د.إ"]),
-              isOwner?h("div",{style:{display:"flex",gap:"6px"}},[
-                h("button",{"data-testid":"daily-edit",class:"btn",style:{fontSize:"13px",color:"#93c5fd",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",padding:"5px 10px"},
-                  onClick:()=>set({editingDaily:isEditing?null:b.id,showAddDaily:false})},[isEditing?"إغلاق":"تعديل"]),
-                h("button",{"data-testid":"daily-delete",class:"btn",style:{fontSize:"13px",color:"#f87171",background:"#450a0a",border:"1px solid #7f1d1d",borderRadius:"6px",padding:"5px 10px"},
-                  onClick:()=>{
+              h("div",{style:{display:"flex",gap:"6px",flexWrap:"wrap"}},[
+                (canEdit()&&(b.paymentStatus||"unpaid")==="unpaid")?h("button",{"data-testid":"daily-collect-cash",class:"btn",style:{fontSize:"13px",color:"#000",background:"#4ade80",borderRadius:"6px",padding:"5px 10px",fontWeight:"700"},
+                  onClick:async()=>{
+                    if(S._payingDaily){showMsg("جاري الحفظ...");return;}
+                    if(!confirm("تحصيل نقدي لهذا الحجز؟\nسيزيد المحصّل والعهدة بمبلغ "+Number(b.total).toLocaleString()+" د.إ"))return;
+                    S._payingDaily=true;R();
+                    try{
+                      const period=typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"));
+                      const fils=Math.round(Number(b.total)*100);
+                      const r=await engineCommand("createDailyCashReceipt",{
+                        bookingId:String(b.id),
+                        amountFils:fils,
+                        collectionDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),
+                        period,
+                        note:String(b.guest||"حجز يومي").slice(0,300),
+                        collectorUserId:S.user
+                      },("dailypay-"+b.id+"-"+fils).slice(0,120));
+                      b.paymentStatus="collected";
+                      b.receiptId=r&&r.receiptId;
+                      await saveCurData(data,false);
+                      showMsg("تم الحفظ — محصّل / لم يودع");
+                    }catch(e){
+                      showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):(e&&e.message||e)));
+                    }finally{S._payingDaily=false;R();}
+                  }},["تحصيل نقداً"]):null,
+                isOwner?h("button",{"data-testid":"daily-edit",class:"btn",style:{fontSize:"13px",color:"#93c5fd",background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"6px",padding:"5px 10px"},
+                  onClick:()=>set({editingDaily:isEditing?null:b.id,showAddDaily:false})},[isEditing?"إغلاق":"تعديل"]):null,
+                isOwner?h("button",{"data-testid":"daily-delete",class:"btn",style:{fontSize:"13px",color:"#f87171",background:"#450a0a",border:"1px solid #7f1d1d",borderRadius:"6px",padding:"5px 10px"},
+                  onClick:async()=>{
                     if(!confirm("حذف هذا الحجز اليومي؟"))return;
                     data.dailyBookings=data.dailyBookings.filter(x=>x.id!==b.id);
-                    saveCurData(data);set({editingDaily:null});showMsg("✓ تم الحذف");R();
-                  }},["حذف"])]):null]),
+                    try{await saveCurData(data,false);showMsg("تم الحفظ");}catch(e){showMsg("⚠ "+(e&&e.message||e));}
+                    set({editingDaily:null});
+                  }},["حذف"]):null])]),
             editForm]);
         }))]);
   }

@@ -33,7 +33,34 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   summary.holdingFils = shared;
   summary.sharedEmployeeHoldingFils = shared;
   summary.custody = collectedBy;
-  const approvedAll = allDeposits.filter((d) => d.state === "approved").reduce((s, d) => s + Number(d.amountFils || 0), 0);
+
+  // Daily booking targets live in uiPeriods extras (not obligations).
+  // periodSummary already folded recognized daily receipts into paid/collected/target(paid portion).
+  const ui = await buildUiBundle({ db, period });
+  const dailyBookings = (ui.extras && ui.extras.dailyBookings) || [];
+  const dailyTargetFils = dailyBookings.reduce((s, b) => {
+    const aed = Number(b.total || 0);
+    return s + (Number.isFinite(aed) ? Math.round(aed * 100) : 0);
+  }, 0);
+  const dailyPaidFils = Number(summary.dailyPaidFils || 0);
+  const dailyUnpaidFils = Math.max(0, dailyTargetFils - dailyPaidFils);
+  if (dailyUnpaidFils > 0) {
+    summary.targetFils += dailyUnpaidFils;
+    summary.tenantUnpaidFils += dailyUnpaidFils;
+    summary.remainingFils += dailyUnpaidFils;
+  }
+  // Recalc at-employees after cashOnObligations already includes daily cash in periodSummary.
+  const monthDepositCover = Math.min(
+    Number(summary.approvedDepositsFils || 0),
+    Number(summary.cashOnObligationsFils || 0),
+  );
+  summary.atEmployeesMonthFils = Number(summary.cashOnObligationsFils || 0) - monthDepositCover;
+  summary.companyCollectedFils = Number(summary.bankRecognizedFils || 0) + monthDepositCover;
+  summary.depositedFils = summary.companyCollectedFils;
+
+  const approvedAll = allDeposits
+    .filter((d) => d.state === "approved" && d.sourceKind !== "external")
+    .reduce((s, d) => s + Number(d.amountFils || 0), 0);
   const problems = checkInvariants({
     ...summary, approvedDepositsFils: approvedAll, custody: collectedBy, holdingFils: shared,
   }).problems;
@@ -48,13 +75,25 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   const myHolding = shared;
 
   const visibleDeposits = deposits.filter((d) => isOwner || d.employeeId === viewer.userId);
-  const visibleExpenses = expenses.filter((e) => isOwner || e.submittedBy === viewer.userId);
+  const visibleExpenses = expenses.filter((e) =>
+    isOwner
+    || e.state === "approved"
+    || e.submittedBy === viewer.userId
+    || e.requestedBy === viewer.userId
+  );
 
   const pendingApprovals = isOwner ? [
     ...receipts.filter((r) => r.state === "pending").map((r) => ({
       id: r.id, title: `تحويل بنكي — ${unitName(r.unitId)} / ${spaceName(r.spaceId)}`,
       subtitle: `${r.tenantNameSnapshot || "—"} · ${nameOf(r.collectorUserId)} · ${r.collectionDate}`,
       amountFils: r.amountFils,
+      kind: "bank",
+      employeeName: nameOf(r.collectorUserId),
+      depositDate: r.collectionDate,
+      note: r.note || null,
+      reference: r.bankReference || null,
+      sourceKind: "bank",
+      sourceLabel: "تحويل بنكي",
       approveCommand: "approveBankReceipt", approvePayload: { receiptId: r.id },
       rejectCommand: "rejectBankReceipt", rejectPayload: { receiptId: r.id },
     })),
@@ -62,6 +101,17 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       id: d.id, title: `إيداع — ${nameOf(d.employeeId)}`,
       subtitle: `${d.depositDate}${d.reference ? " · " + d.reference : ""}`,
       amountFils: d.amountFils,
+      kind: "deposit",
+      employeeName: nameOf(d.employeeId),
+      employeeId: d.employeeId,
+      depositDate: d.depositDate,
+      note: d.note || null,
+      reference: d.reference || null,
+      sourceKind: d.sourceKind || "holding",
+      sourceLabel: d.sourceKind === "external" ? "إيداع آخر" : "إيداع من العهدة",
+      destinationAccountId: d.destinationAccountId || null,
+      accountName: accounts.find((a) => a.id === d.destinationAccountId)?.name || null,
+      sharedHoldingFils: shared,
       approveCommand: "approveDeposit", approvePayload: { depositId: d.id },
       rejectCommand: "rejectDeposit", rejectPayload: { depositId: d.id },
     })),
@@ -69,6 +119,10 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       id: e.id, title: `مصروف — ${e.reason}`,
       subtitle: `${nameOf(e.submittedBy)} · ${e.expenseDate}`,
       amountFils: e.amountFils,
+      kind: "expense",
+      employeeName: nameOf(e.submittedBy),
+      depositDate: e.expenseDate,
+      note: e.reason || null,
       approveCommand: "approveExpense", approvePayload: { expenseId: e.id },
       rejectCommand: "rejectExpense", rejectPayload: { expenseId: e.id },
     })),
@@ -109,8 +163,10 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       }
       return null;
     }
-    // No active rental → no live obligation for the card (vacant/staff/orphan).
-    return null;
+    // No active rental: still surface retained-after-vacate arrears on the vacant card
+    // so Manager can see and collect historical debt without a live tenancy.
+    const retained = views.find((v) => v.spaceId === spaceId && Number(v.remainingFils || 0) > 0);
+    return retained || null;
   };
   const spacePartNum = (sp) => {
     const m = String(sp.name || "").match(/\/\s*(\d+)\s*$/);
@@ -175,8 +231,11 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
           // Per-space receipts for the current period — used by the receipt history
           // panel and the Manager حذف الإيصال control. We include ALL states so the
           // history panel can show reversed receipts as cancelled/audited.
+          // Operational UI hides archived pre-staff TEST receipts only.
+          // Legitimate reversed receipts remain visible for audit.
           const spaceReceipts = receipts
             .filter((r) => r.spaceId === sp.id)
+            .filter((r) => r.operationalHidden !== true && r.archivedOperational !== true)
             .map((r) => ({
               id: r.id,
               amountFils: r.amountFils,
@@ -249,11 +308,46 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       state: r.state, collectionDate: r.collectionDate, collectorName: nameOf(r.collectorUserId),
       tenantName: r.tenantNameSnapshot, spaceName: spaceName(r.spaceId), unitName: unitName(r.unitId),
     })),
-    deposits: visibleDeposits.map((d) => ({
-      id: d.id, amountFils: d.amountFils, state: d.state, depositDate: d.depositDate,
-      employeeName: nameOf(d.employeeId), reference: d.reference,
-      accountName: accounts.find((a) => a.id === d.destinationAccountId)?.name || "—",
-    })),
+    // Custody deposits + display-only bank-receipt history (already in Deposited via
+    // bankRecognizedFils — DO NOT create a second deposit doc / double-count).
+    deposits: [
+      ...visibleDeposits.map((d) => ({
+        id: d.id, amountFils: d.amountFils, state: d.state, depositDate: d.depositDate,
+        employeeName: nameOf(d.employeeId), employeeId: d.employeeId,
+        reference: d.reference, note: d.note || null,
+        sourceKind: d.sourceKind || "holding",
+        sourceLabel: d.sourceKind === "external" ? "إيداع آخر" : "إيداع من العهدة",
+        accountName: accounts.find((a) => a.id === d.destinationAccountId)?.name || "—",
+        destinationAccountId: d.destinationAccountId || null,
+        approvedBy: d.approvedBy || null, approvedAt: d.approvedAt || null,
+        fromBankReceipt: false,
+      })),
+      ...receipts
+        .filter((r) => r.state === "recognized" && r.method === "bank")
+        .filter((r) => isOwner || r.collectorUserId === viewer.userId)
+        .map((r) => ({
+          id: r.id,
+          amountFils: r.amountFils,
+          state: "approved",
+          depositDate: r.collectionDate || r.approvedAt?.slice?.(0, 10) || null,
+          employeeName: nameOf(r.collectorUserId),
+          employeeId: r.collectorUserId || null,
+          reference: r.bankReference || r.id,
+          note: r.note || `تحويل بنكي — ${r.tenantNameSnapshot || "—"} · ${unitName(r.unitId)} / ${spaceName(r.spaceId)}`,
+          sourceKind: "bank",
+          sourceLabel: "تحويل بنكي",
+          accountName: "إيرادات / بنك",
+          destinationAccountId: null,
+          approvedBy: r.approvedBy || null,
+          approvedAt: r.approvedAt || null,
+          fromBankReceipt: true,
+          receiptId: r.id,
+          tenantName: r.tenantNameSnapshot || null,
+          unitName: unitName(r.unitId),
+          spaceName: spaceName(r.spaceId),
+          paymentSource: "bank_transfer",
+        })),
+    ],
     expenses: visibleExpenses.map((e) => ({
       id: e.id, amountFils: e.amountFils, reason: e.reason, state: e.state,
       expenseDate: e.expenseDate, submittedByName: nameOf(e.submittedBy),
@@ -264,7 +358,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
     myHolding,
     pendingApprovals,
     availablePeriods: [...new Set((await db.list("obligations", [])).map((o) => o.period))].sort().reverse(),
-    ui: await buildUiBundle({ db, period }),
+    ui,
     audit: isOwner
       ? (await db.list("auditEvents", [])).slice(-60).reverse()
           .map((a) => ({ at: a.at, action: a.action, actorName: nameOf(a.actorUserId), amountFils: a.amountFils ?? null }))
@@ -280,17 +374,35 @@ function parseJsonSafe(raw, fallback) {
 
 /**
  * Occupancy wins for the card label. Money figures for a vacant/staff space still
- * surface historical period numbers when an obligation exists, but the status chip
- * is vacant/staff so move-out never looks "collected" after refresh.
+ * surface historical period numbers when a retained-after-vacate obligation exists,
+ * but the status chip stays vacant/staff so move-out never looks "collected" after refresh.
  * A rented space with no obligation yet this period shows late/not_due from rent,
  * never vacant.
  */
 function spaceDisplay({ space, view, rental, period, asOfDate }) {
   const occupancy = space.occupancy || "vacant";
   if (occupancy === "staff") {
+    if (view && Number(view.remainingFils || 0) > 0) {
+      return {
+        status: "staff",
+        dueFils: view.dueFils,
+        paidFils: view.paidFils,
+        remainingFils: view.remainingFils,
+        dueDate: view.dueDate,
+      };
+    }
     return { status: "staff", dueFils: 0, paidFils: 0, remainingFils: 0, dueDate: null };
   }
   if (occupancy === "vacant") {
+    if (view && Number(view.remainingFils || 0) > 0) {
+      return {
+        status: "vacant",
+        dueFils: view.dueFils,
+        paidFils: view.paidFils,
+        remainingFils: view.remainingFils,
+        dueDate: view.dueDate,
+      };
+    }
     return {
       status: "vacant",
       dueFils: 0,
@@ -329,18 +441,30 @@ async function buildUiBundle({ db, period }) {
   const extras = periods[0] ? parseJsonSafe(periods[0].extrasJson, periods[0].extras || {}) : {};
   const reqs = requests
     .filter((r) => r.type !== "pending_lock")
-    .map((r) => ({
-    id: r.id,
-    type: r.type,
-    desc: r.desc,
-    payload: parseJsonSafe(r.payloadJson, r.payload || {}),
-    by: r.byKey || r.by,
-    byName: r.byName,
-    month: r.month,
-    year: r.year,
-    status: r.status,
-    createdAt: r.createdAt,
-  })).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    .map((r) => {
+      const payload = parseJsonSafe(r.payloadJson, r.payload || {});
+      const byKey = r.byKey || null;
+      const byUid = r.by || null;
+      return {
+        id: r.id,
+        type: r.type,
+        desc: r.desc,
+        payload,
+        // Prefer short key for old-UI identity (yahia/nader/saeed), keep uid aliases.
+        by: byKey || byUid,
+        byKey,
+        byUid,
+        byName: r.byName,
+        month: r.month,
+        year: r.year,
+        status: r.status,
+        createdAt: r.createdAt,
+        resolvedAt: r.resolvedAt || null,
+        approvedAt: r.status === "approved" ? (r.resolvedAt || r.approvedAt || null) : null,
+        rejectedAt: r.status === "rejected" ? (r.resolvedAt || r.rejectedAt || null) : null,
+        depositId: payload.depositId || (payload.transaction && payload.transaction.depositId) || null,
+      };
+    }).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   return { config, requests: reqs, extras };
 }
 
@@ -373,7 +497,29 @@ export function buildDashboardFromDump(db, period, asOfDate) {
   summary.holdingFils = shared;
   summary.sharedEmployeeHoldingFils = shared;
   summary.custody = collectedBy;
-  const approvedAll = allDeposits.filter((d) => d.state === "approved").reduce((s, d) => s + Number(d.amountFils || 0), 0);
+
+  const uiPeriods = dump("uiPeriods").filter((p) => p.period === period);
+  const extras = uiPeriods[0]
+    ? (typeof uiPeriods[0].extrasJson === "string"
+      ? (() => { try { return JSON.parse(uiPeriods[0].extrasJson); } catch { return uiPeriods[0].extras || {}; } })()
+      : (uiPeriods[0].extras || {}))
+    : {};
+  const dailyBookings = extras.dailyBookings || [];
+  const dailyTargetFils = dailyBookings.reduce((s, b) => {
+    const aed = Number(b.total || 0);
+    return s + (Number.isFinite(aed) ? Math.round(aed * 100) : 0);
+  }, 0);
+  const dailyPaidFils = Number(summary.dailyPaidFils || 0);
+  const dailyUnpaidFils = Math.max(0, dailyTargetFils - dailyPaidFils);
+  if (dailyUnpaidFils > 0) {
+    summary.targetFils += dailyUnpaidFils;
+    summary.tenantUnpaidFils += dailyUnpaidFils;
+    summary.remainingFils += dailyUnpaidFils;
+  }
+
+  const approvedAll = allDeposits
+    .filter((d) => d.state === "approved" && d.sourceKind !== "external")
+    .reduce((s, d) => s + Number(d.amountFils || 0), 0);
   const problems = checkInvariants({
     ...summary, approvedDepositsFils: approvedAll, custody: collectedBy, holdingFils: shared,
   }).problems;

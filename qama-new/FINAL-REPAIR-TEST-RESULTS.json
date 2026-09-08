@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "completedAt": "2026-09-07T19:55:00.000Z",
+    "project": "qama-new-prod-2026",
+    "liveSite": "https://qama-new-prod-2026.web.app",
+    "sourceRoot": "/workspaces/Qama-alrawasi/qama-new",
+    "legacyProjectTouched": false,
+    "productionResetOrPurge": false,
+    "workComplete": true,
+    "finalStatus": "READY FOR OWNER PHYSICAL IPHONE RETEST",
+    "staffReady": false,
+    "failCount": 0,
+    "physicalIphoneSafari": "NOT TESTED BY AGENT",
+    "backupPath": "/workspaces/Qama-alrawasi/qama-new/artifacts/release/BACKUP-pre-physical-retest-2026-09-07T19-41-15-Z",
+    "physicalRetestArtifact": "/workspaces/Qama-alrawasi/qama-new/artifacts/PHYSICAL-RETEST-LATEST.json",
+    "physicalRetestPass": 33,
+    "physicalRetestFail": 0,
+    "physicalRetestTotal": 33,
+    "focusAcceptanceArtifact": "/workspaces/Qama-alrawasi/qama-new/artifacts/IPHONE-TYPING-FOCUS-LATEST.json",
+    "focusAcceptancePass": 20,
+    "focusAcceptanceFail": 0,
+    "totalTests": 53,
+    "pass": 53,
+    "fail": 0,
+    "humanReportPath": "/workspaces/Qama-alrawasi/qama-new/FINAL-REPAIR-REPORT.md",
+    "staffReadinessReportPath": "/workspaces/Qama-alrawasi/qama-new/STAFF-READINESS-REPORT.md",
+    "physicalRetestReportPath": "/workspaces/Qama-alrawasi/qama-new/PHYSICAL-RETEST-REMAINING-FIXES.md",
+    "progressPath": "/workspaces/Qama-alrawasi/qama-new/FINAL-REPAIR-PROGRESS.md"
+  },
+  "rootCauses": {
+    "depositRequestDisappearsAfterApproval": "Employee myrequests identity matching was brittle and terminal deposit cards lacked permanent enriched fields; fixed isMyRequest + enrichDepositRequestFields + enriched my-request-card (no second financial effect)",
+    "bankDetailDisappearsAfterApproval": "Engine pending card correctly removed after approve; permanent visibility required display-only bankhist cards + deposit/financial history row labels (ledger already correct via bankRecognizedFils)",
+    "oldTestReceiptsClutter": "Reversed CERT/BOT/STAFFREADY/TEMP receipts still listed in spaceReceipts; archived 70 proven TEST via operationalHidden",
+    "mz3PartitionGaps": "Not sort-only — clean-baseline authoritative 1-12 active; live had 1/5/8/10 inactive and invented 13-16 from testing"
+  },
+  "depositRequestHistory": {
+    "beforeApproval": "PASS",
+    "afterApprovalRemainsVisible": "PASS",
+    "approvedAfterRefresh": "PASS",
+    "approvedAfterLogoutLogin": "PASS",
+    "rejectedAfterRefresh": "PASS",
+    "managerSeesAmountBeforeApproval": "PASS"
+  },
+  "bankTransfer": {
+    "collectedOnce": "PASS",
+    "depositedOnce": "PASS",
+    "holding": "UNCHANGED",
+    "historyRemainsVisible": "PASS",
+    "doubleCount": "NO",
+    "case": "READ_MODEL_UI_HISTORY_ONLY"
+  },
+  "receipts": {
+    "oldTestReceiptsFound": 70,
+    "provenTestReceiptIdsCount": 70,
+    "testReceiptsCleanedArchived": 70,
+    "ambiguousLeftUnchanged": 14,
+    "legitimateReceiptsDeleted": 0,
+    "method": "operationalHidden flag — not hard delete"
+  },
+  "structure": {
+    "mz3CanonicalActive": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    "mz3Rendered": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    "mz3Fix": "reactivate 1,5,8,10; deactivate invented 13-16 per clean-baseline",
+    "allOtherUnitsAudited": true,
+    "structuralDiscrepanciesAfterRepair": "NONE",
+    "partitionDataLost": false,
+    "authoritativeEvidence": "artifacts/clean-baseline-backup-2026-09-04T21-34-33-785Z/spaces.json"
+  },
+  "iphoneRegression": {
+    "type123456OneTap": "PASS",
+    "dateSelectOnce": "PASS",
+    "serverWritesWhileTyping": 0,
+    "firstAttemptSave": "PASS",
+    "delegatedYahyaPermission": "PASS"
+  },
+  "productionSafety": {
+    "unrelatedRecordsChanged": 0,
+    "documentedIntentionalChanges": [
+      "70 TEST receipts operationalHidden=true",
+      "MZ3 spaces 1,5,8,10 active=true",
+      "MZ3 spaces 13-16 active=false"
+    ],
+    "fullResetOrPurge": false,
+    "qamaAlrawasiTouched": false
+  },
+  "deploy": {
+    "project": "qama-new-prod-2026",
+    "only": "functions,hosting + ID-scoped Firestore flag updates",
+    "hostingBodySha256": "fe6bca116c5fd93933684aeae04cbe8e5fa45cdd9dbd71866ca421918419a6c5",
+    "assembledIndexSha256": "fe6bca116c5fd93933684aeae04cbe8e5fa45cdd9dbd71866ca421918419a6c5",
+    "hostingMatchesWorkspace": true
+  }
+}

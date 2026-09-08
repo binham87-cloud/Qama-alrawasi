@@ -36,7 +36,7 @@ const spRev1 = {
   const s = mergeDraftStatus(late0, extra, spRev1);
   assert.equal(s._collectDraft, true);
   assert.equal(s.collectionMethod, "cash");
-  assert.equal(s.status, "collected");
+  assert.notEqual(s.status, "collected");
 }
 
 {

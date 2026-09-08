@@ -70,7 +70,7 @@ const late0 = { status: "late", partial: false, paid_amount: 0 };
   assert.equal(r.paid_amount, 0);
 }
 
-// Draft collected must NOT force status collected (no green confirmed card)
+// Draft collected must NOT force status collected (no green confirmed card / role divergence)
 {
   const r = mergeDraftStatus(
     { status: "vacant" },
@@ -78,7 +78,6 @@ const late0 = { status: "late", partial: false, paid_amount: 0 };
     {}
   );
   assert.equal(r._collectDraft, true);
-  assert.equal(r.status, "late");
   assert.notEqual(r.status, "collected");
 }
 
@@ -90,9 +89,8 @@ const late0 = { status: "late", partial: false, paid_amount: 0 };
   );
   assert.equal(r._collectDraft, true);
   assert.equal(r.collectionMethod, "cash");
-  // Form status must stay collected so recollect-after-uncollect still applies cash.
-  // Cards/KPIs remain unpaid via displayStatus/paidValue while _collectDraft is set.
-  assert.equal(r.status, "collected");
+  // Engine status stays authoritative; form select uses _collectDraft for محصّل paint.
+  assert.notEqual(r.status, "collected");
 }
 
 {

@@ -81,3 +81,34 @@ test("UI tenant field still maps to property tenant (اسم المستأجر)", 
   assert.match(bridge, /tenantName: tenant\.slice\(0, 160\)/);
   assert.match(bridge, /item\.tenant/);
 });
+
+test("vacate unpaid uses endTenancy retain; erroneous cancel uses closeRental", () => {
+  assert.match(bridge, /end-tenancy/);
+  assert.match(bridge, /arrearsDecision: "retain"/);
+  assert.match(bridge, /cancelErroneousRentalForItem/);
+  assert.match(bridge, /cancel-erroneous/);
+  assert.doesNotMatch(bridge, /Fully unpaid \/ fully reversed/);
+  assert.doesNotMatch(bridge, /close-vacate/);
+});
+
+test("full collect uses remaining obligation not UI paid_amount", () => {
+  assert.match(bridge, /remainingFils/);
+  assert.match(bridge, /exact remaining obligation/);
+  assert.match(bridge, /PARTIAL_AMOUNT_REQUIRED/);
+});
+
+test("money commands do not blind-retry IDEMPOTENCY_PAYLOAD_MISMATCH", () => {
+  assert.match(bridge, /MONEY_MUTATION_COMMANDS/);
+  assert.match(bridge, /createCashReceipt/);
+  assert.match(bridge, /if \(MONEY_MUTATION_COMMANDS\.has/);
+});
+
+test("failed collect strips false محصّل paint", () => {
+  assert.match(bridge, /stripFailedCollectPaint/);
+  assert.match(bridge, /stripFailedCollectPaintInData/);
+});
+
+test("DOM tenant fallback before createRental", () => {
+  assert.match(bridge, /partition-tenant/);
+  assert.match(bridge, /domTenant/);
+});

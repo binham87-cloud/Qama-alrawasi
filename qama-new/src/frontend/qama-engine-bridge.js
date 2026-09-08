@@ -77,11 +77,18 @@ function uncollectOpKey(obligationId, alreadyFils, receipts) {
   if (!list.length && alreadyFils > 0) return opId("uncol-" + shortOb(obligationId));
   return (`uncol-${shortOb(obligationId)}-p${alreadyFils}-L${live}-A${all}`).slice(0, 120);
 }
+/** Money-mutating commands — never auto-retry on IDEMPOTENCY_PAYLOAD_MISMATCH. */
+const MONEY_MUTATION_COMMANDS = new Set([
+  "createCashReceipt", "createDailyCashReceipt", "submitBankReceipt", "approveBankReceipt",
+  "uncollectObligation", "reverseReceipt",
+  "submitDeposit", "approveDeposit", "reverseDeposit", "rejectDeposit",
+  "submitExpense", "reverseExpense", "rejectExpense",
+]);
 /**
  * Run a command with an optional stable operationId.
- * If the server reports IDEMPOTENCY_PAYLOAD_MISMATCH (stale opId reused for a
- * NEW edit), retry once with a fresh unique opId so legitimate UI saves never
- * die with «تعذر الحفظ أونلاين».
+ * Non-money IDEMPOTENCY_PAYLOAD_MISMATCH (stale opId reused for a NEW edit)
+ * retries once with a fresh opId. Money commands surface the error — a blind
+ * retry must never mint a second receipt/deposit.
  */
 async function engineCommand(command, payload, intent) {
   const first = (intent && String(intent).slice(0, 120)) || opId(command);
@@ -90,6 +97,7 @@ async function engineCommand(command, payload, intent) {
   } catch (e) {
     const msg = String((e && (e.message || e.code)) || e);
     if (!/IDEMPOTENCY_PAYLOAD_MISMATCH/i.test(msg)) throw e;
+    if (MONEY_MUTATION_COMMANDS.has(String(command))) throw e;
     const fresh = opId((intent || command) + "-n");
     console.warn("opId stale → retry fresh", command, first, "→", fresh);
     return callFn("command", { command, payload, operationId: fresh });
@@ -123,7 +131,12 @@ function formatEngineError(err) {
   }
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/TENANT_REQUIRED/i.test(raw)) return "اسم المستأجر مطلوب قبل التأجير";
+  if (/PARTIAL_AMOUNT_REQUIRED/i.test(raw)) return "مبلغ الدفع الجزئي مطلوب وأكبر من صفر";
+  if (/RENT_REQUIRED/i.test(raw)) return "قيمة الإيجار مطلوبة قبل التأجير";
+  if (/START_DATE_REQUIRED/i.test(raw)) return "تاريخ بداية العقد مطلوب";
+  if (/ARREARS_CONFIRMATION_REQUIRED/i.test(raw)) return "توجد متأخرات — أعد الإخلاء (يُحتفظ بالمتأخرات دون عكس التحصيل)";
   if (/INVALID_AMOUNT/i.test(raw)) return "المبلغ غير صالح — أدخل مبلغاً أكبر من صفر";
+  if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/FORBIDDEN/i.test(raw)) return "غير مسموح لهذه الصلاحية";
   if (/ALREADY_REVERSED/i.test(raw)) return "تم العكس مسبقاً";
   if (/DEPOSIT_NOT_APPROVED/i.test(raw)) return "الإيداع غير معتمد — لا يمكن عكسه بهذا المسار";
@@ -132,6 +145,33 @@ function formatEngineError(err) {
   if (/network|unavailable|Failed to fetch|internal/i.test(raw)) return "تعذر الاتصال بالخادم — تحقق من الشبكة";
   const short = raw.replace(/^FirebaseError:\s*/i, "").replace(/^functions\//i, "").slice(0, 160);
   return short || "تعذر الحفظ أونلاين";
+}
+
+/** Strip false «محصّل» paint after a failed money command — keep non-money draft. */
+function stripFailedCollectPaint(item, dashSp) {
+  if (!item) return;
+  const enginePaid = dashSp ? filsToAed(dashSp.paidFils) : Number(item._enginePaid || 0);
+  const hasLive = (Array.isArray(item._receipts) ? item._receipts : (dashSp && dashSp.spaceReceipts) || [])
+    .some((r) => r && r.state === "recognized");
+  if (hasLive || enginePaid > 0) return;
+  if (item.status === "collected" || item._collectDraft || item.partial) {
+    const due = item.due_date || item.start_date || "";
+    const today = engineToday();
+    item.status = (due && due > today) ? "pending" : "late";
+  }
+  item._collectDraft = false;
+  item.collectionMethod = "";
+  item.collectedBy = "";
+  if (!item.partial) item.paid_amount = 0;
+}
+
+function stripFailedCollectPaintInData(data) {
+  const visit = (x) => {
+    if (!x || !x._spaceId) return;
+    stripFailedCollectPaint(x, dashSpaceById(x._spaceId));
+  };
+  (data.units || []).forEach((u) => (u.partitions || []).forEach(visit));
+  (data.full || []).forEach(visit);
 }
 function periodOfMonth(y, m) {
   return Number(y) + "-" + String(Number(m) + 1).padStart(2, "0");
@@ -184,10 +224,14 @@ function unitMeta(name) {
 }
 function spacePartId(space) {
   const n = String(space.name || "");
-  const m = n.match(/\/\s*(\d+)\s*$/);
+  // Prefer "/ 1", "/1", trailing digits, or bare numeric name — never return a non-numeric spaceId
+  // (Number(spaceId) === NaN broke partition sort so 2 could appear before 1).
+  const m = n.match(/\/\s*(\d+)\s*$/) || n.match(/(?:بارتشن|partition)\s*#?\s*(\d+)/i) || n.match(/(\d+)\s*$/);
   if (m) return Number(m[1]);
-  if (/^\d+$/.test(n)) return n;
-  return space.spaceId;
+  if (/^\d+$/.test(n)) return Number(n);
+  const idm = String(space.spaceId || "").match(/(\d+)\s*$/);
+  if (idm) return Number(idm[1]);
+  return 9999;
 }
 function wholeDisplayId(unit) {
   const n = String(unit.name || "");
@@ -273,8 +317,6 @@ function mergeDraftStatus(mapped, extra, sp) {
   if (draft === "collected") {
     if (isStaleCollectDraft(extra, sp)) return out;
     out._collectDraft = true;
-    if (eng === "vacant" || eng === "staff") out.status = "late";
-    else out.status = "collected";
     return out;
   }
   return out;
@@ -321,6 +363,8 @@ function applyUiConfig(ui) {
 function isVacateResidueExtra(extra, sp, mapped) {
   if (!extra) return false;
   if (sp && sp.rentalId) return false;
+  // Real vacate with retained arrears: keep card money/tenant snapshot from engine.
+  if (sp && sp.obligationId && Number(sp.remainingFils || 0) > 0) return false;
   if (!(mapped && (mapped.status === "vacant" || mapped.status === "staff"))) return false;
   if (!["collected", "late", "pending"].includes(String(extra.status || ""))) return false;
   if (extra.draftClearedByVacate) return true;
@@ -486,14 +530,24 @@ function mapDashboardToMonth(dash) {
 
   const depToTx = (d) => ({
     id: d.id,
-    type: "عام",
-    desc: d.reference || d.accountName || "إيداع",
+    type: d.sourceKind === "bank" ? "تحويل بنكي" : "عام",
+    desc: d.reference || d.accountName || (d.sourceKind === "bank" ? "تحويل بنكي" : "إيداع"),
     amount: filsToAed(d.amountFils),
     date: d.depositDate,
-    notes: d.employeeName || "",
-    by: "saeed",
+    notes: d.note || d.employeeName || "",
+    by: d.employeeId || "saeed",
+    sourceKind: d.sourceKind || "holding",
+    sourceLabel: d.sourceKind === "bank"
+      ? "تحويل بنكي"
+      : (d.sourceKind === "external" ? "إيداع آخر" : "من العهدة"),
     _engineId: d.id,
-    _state: d.state
+    _state: d.state,
+    _fromBankReceipt: !!d.fromBankReceipt,
+    _receiptId: d.receiptId || null,
+    _approvedBy: d.approvedBy || null,
+    _approvedAt: d.approvedAt || null,
+    _accountName: d.accountName || null,
+    _tenantName: d.tenantName || null,
   });
   const expToOld = (e) => ({
     id: e.id,
@@ -501,7 +555,8 @@ function mapDashboardToMonth(dash) {
     amount: filsToAed(e.amountFils),
     category: e.category || "عام",
     date: e.expenseDate,
-    by: "saeed",
+    by: e.requestedBy || e.submittedBy || "saeed",
+    requestedBy: e.requestedBy || null,
     _engineId: e.id,
     _state: e.state,
     _maintenanceLinkId: e.maintenanceLinkId || null,
@@ -616,9 +671,28 @@ function dashSpaceById(spaceId) {
 async function applyCollection(item, dashSp) {
   const already = dashSp ? Number(dashSp.paidFils || 0) : aedToFils(item._enginePaid || 0);
   let want = 0;
-  if (item.partial) want = aedToFils(item.paid_amount);
-  else if (item.status === "collected") want = aedToFils(item.rent || item.paid_amount);
-  else return;
+  if (item.partial) {
+    want = aedToFils(item.paid_amount);
+    if (want <= 0) {
+      const err = new Error("PARTIAL_AMOUNT_REQUIRED");
+      err.code = "PARTIAL_AMOUNT_REQUIRED";
+      err.field = "paid_amount";
+      throw err;
+    }
+    const due = dashSp ? Number(dashSp.dueFils || 0) : aedToFils(item.rent);
+    if (due > 0 && want > due) {
+      const err = new Error("AMOUNT_EXCEEDS_REMAINING");
+      err.code = "AMOUNT_EXCEEDS_REMAINING";
+      err.field = "paid_amount";
+      throw err;
+    }
+  } else if (item.status === "collected" || item._collectDraft) {
+    // كامل: amount field may be 0/blank — use exact remaining obligation, never UI paid_amount.
+    const remaining = (dashSp && dashSp.remainingFils != null)
+      ? Number(dashSp.remainingFils)
+      : Math.max(0, aedToFils(item.rent) - already);
+    want = already + remaining;
+  } else return;
   const delta = want - already;
   if (delta <= 0) return;
   // Full and partial collect both require an explicit method. Otherwise selecting
@@ -682,12 +756,12 @@ async function renewCycleForItem(item, dashSp) {
   return engineCommand("renewRentalCycle", { rentalId, asOfDate: asOf, earlyWindowDays: 7 }, key);
 }
 
-async function endTenancyForItem(item, dashSp, { retainArrears = false, reason = "إخلاء من الشاشة" } = {}) {
+async function endTenancyForItem(item, dashSp, { retainArrears = true, reason = "إخلاء من الشاشة" } = {}) {
   const rentalId = item._rentalId || dashSp?.rentalId;
   if (!rentalId) throw new Error("NO_RENTAL_TO_END");
   const remaining = Number(dashSp?.remainingFils || 0);
-  const decision = retainArrears || remaining > 0 ? "retain" : "none";
-  if (remaining > 0 && !retainArrears) {
+  const decision = "retain"; // real vacate always retains unpaid debt — never cancel via closeRental
+  if (remaining > 0 && retainArrears === false) {
     const err = new Error("ARREARS_CONFIRMATION_REQUIRED");
     err.code = "ARREARS_CONFIRMATION_REQUIRED";
     err.arrearsFils = remaining;
@@ -701,26 +775,58 @@ async function endTenancyForItem(item, dashSp, { retainArrears = false, reason =
   }, intentKey("end-tenancy", rentalId, decision));
 }
 
+/** CASE A — mistaken rental that should never have existed. Cancels unpaid obligations. */
+async function cancelErroneousRentalForItem(item, dashSp, { reason = "إلغاء إيجار خاطئ من الشاشة" } = {}) {
+  const rentalId = item._rentalId || dashSp?.rentalId;
+  if (!rentalId) throw new Error("NO_RENTAL_TO_CANCEL");
+  const livePaid = Number(dashSp?.paidFils || 0);
+  if (livePaid > 0) {
+    const err = new Error("ERRONEOUS_CANCEL_REQUIRES_UNCOLLECT_FIRST");
+    err.code = "ERRONEOUS_CANCEL_REQUIRES_UNCOLLECT_FIRST";
+    throw err;
+  }
+  return engineCommand("closeRental", {
+    rentalId,
+    endDate: engineToday(),
+    reason: String(reason).slice(0, 300),
+    setVacant: true,
+  }, intentKey("cancel-erroneous", rentalId, "unpaid"));
+}
+
 async function syncOccupancyAndTenant(item, dashSp) {
   if (!item._spaceId) return;
   const occ = item.status === "staff" ? "staff" : item.status === "vacant" ? "vacant" : "rented";
   const engineOcc = dashSp ? (dashSp.occupancy || "vacant") : null;
   let rentalId = item._rentalId || dashSp?.rentalId || null;
 
-  // Vacant/staff must end live tenancy WITHOUT reversing collections (use endTenancy).
+  // Collecting retained arrears on an already-vacant space must NOT mint a new rental.
+  const collectingRetainedVacateDebt =
+    dashSp
+    && (dashSp.occupancy === "vacant" || dashSp.occupancy === "staff")
+    && dashSp.obligationId
+    && Number(dashSp.remainingFils || 0) > 0
+    && (item.status === "collected" || item.partial || (!!item._collectDraft && !!item.collectionMethod));
+  if (collectingRetainedVacateDebt) {
+    item._obligationId = item._obligationId || dashSp.obligationId;
+    return;
+  }
+
+  // Vacant/staff must end live tenancy WITHOUT reversing collections (use endTenancy+retain).
+  // Real move-out keeps unpaid debt collectible. CASE A (erroneous cancel) uses
+  // cancelErroneousRentalForItem / closeRental explicitly — never this path.
   // MUST NOT wipe draft tenant/rent the user typed while the card is still vacant
   // (start-date / quiet saves used to clear item.tenant="" → TENANT_REQUIRED).
   if (occ === "vacant" || occ === "staff") {
     const mustClose = (engineOcc && engineOcc !== occ) || !!rentalId;
     if (rentalId) {
-      const remaining = Number(dashSp?.remainingFils || 0);
       try {
+        // CASE B — real vacate/evict: always retain arrears when unpaid debt exists.
         await engineCommand("endTenancy", {
           rentalId,
           endDate: engineToday(),
           reason: occ === "staff" ? "تحويل لموظفين من الشاشة" : "إخلاء وتحويل لفارغ من الشاشة",
-          arrearsDecision: remaining > 0 ? "retain" : "none",
-        }, intentKey("end-tenancy", rentalId, remaining > 0 ? "retain" : "none"));
+          arrearsDecision: "retain",
+        }, intentKey("end-tenancy", rentalId, "retain"));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/RENTAL_ALREADY_CLOSED|RENTAL_NOT_ACTIVE|RENTAL_NOT_FOUND/.test(code)) throw e;
@@ -742,8 +848,20 @@ async function syncOccupancyAndTenant(item, dashSp) {
       item._rentalId = null;
       item._obligationId = null;
       item.tenant = "";
+      item.phone = "";
       item.paid_amount = 0;
       item.partial = false;
+      item.collectionMethod = "";
+      item.collectedBy = "";
+      item._collectDraft = false;
+      item.rent = 0;
+      item.start_date = "";
+      item.end_date = "";
+      item.due_date = "";
+      item.draftClearedByVacate = true;
+      item.draftSessionId = "";
+      item.draftForRentalId = "";
+      item.note = occ === "staff" ? "موظفين" : "فارغ";
     } else {
       // Already vacant/staff with no live rental: keep draft fields for the next rent save.
       item._rentalId = null;
@@ -758,11 +876,26 @@ async function syncOccupancyAndTenant(item, dashSp) {
   // Do NOT setSpaceOccupancy(rented) first — that left partial occupancy when tenant
   // was missing, and createRental itself sets occupancy=rented on success.
   if (!rentalId && occ === "rented") {
-    const tenant = String(item.tenant || "").trim();
+    // iPhone Safari: typed tenant can sit in the DOM while a quiet save races with
+    // an older in-memory item. Prefer live input when model tenant is empty.
+    let tenant = String(item.tenant || "").trim();
+    if (!tenant || tenant === "—" || tenant === "-" || tenant === "–") {
+      try {
+        const el = typeof document !== "undefined" && document.querySelector('[data-testid="partition-tenant"],[data-testid="full-tenant"]');
+        const domTenant = el && String(el.value || "").trim();
+        if (domTenant && domTenant !== "—" && domTenant !== "-" && domTenant !== "–" && domTenant !== "فارغ") {
+          tenant = domTenant;
+          item.tenant = domTenant;
+        }
+      } catch (_dom) {}
+    }
     const rentFils = aedToFils(item.rent);
     if (rentFils > 0) {
       if (!tenant || tenant === "—" || tenant === "-" || tenant === "–") {
-        throw new Error("TENANT_REQUIRED");
+        const err = new Error("TENANT_REQUIRED");
+        err.code = "TENANT_REQUIRED";
+        err.field = "tenant";
+        throw err;
       }
       const start = item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date) ? item.start_date : engineToday();
       const dueDay = start ? Number(start.slice(8, 10)) || 1 : 1;
@@ -929,6 +1062,7 @@ async function applyUiDeposits(data) {
   const known = S._hydratedDepositIds || new Set();
   for (const tx of (data.transactions || [])) {
     if (tx._engineId || tx._state) continue;
+    if (tx._fromBankReceipt || tx.sourceKind === "bank") continue; // display-only bank history
     if (tx.requestId || tx.depositId) continue; // work-request sourced — never double-submit
     // Fingerprint guard: if an identical live deposit already exists, link it.
     const fils = aedToFils(tx.amount);
@@ -950,7 +1084,8 @@ async function applyUiDeposits(data) {
       depositDate: date,
       destinationAccountId: acc,
       note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
-      reference: String(tx.desc || tx.id || "إيداع").slice(0, 120)
+      reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
+      sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
     }, ("uiddep-" + String(tx.id || Date.now()) + "-" + fils).slice(0, 120));
     if (r && r.depositId) {
       tx._engineId = r.depositId;
@@ -1044,6 +1179,9 @@ async function applyEngineDiff(data) {
   const errors = [];
   for (const item of items) {
     if (!item._spaceId) continue;
+    // Explicit partition/full Save sets _commitIntent. Expense/deposit/maintenance
+    // (and other month writes) must NOT re-run occupancy/collection for leftover drafts.
+    if (!item._commitIntent) continue;
     const dashSp = dashSpaceById(item._spaceId);
     try {
       await maybeUncollect(item, dashSp);
@@ -1075,10 +1213,21 @@ async function applyEngineDiff(data) {
         // applyCollection keys off status/partial — promote draft collect for this call only.
         const payItem = (item.status === "collected" || item.partial) ? item
           : { ...item, status: "collected" };
-        await applyCollection(payItem, fresh);
+        try {
+          await applyCollection(payItem, fresh);
+        } catch (payErr) {
+          stripFailedCollectPaint(item, fresh);
+          throw payErr;
+        }
       }
+      item._commitIntent = false;
     } catch (e) {
+      item._commitIntent = false;
       console.error("applyEngineDiff item failed", item._spaceId, e);
+      const code = String((e && (e.message || e.code)) || e);
+      if (/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|TENANT_REQUIRED|RENT_REQUIRED/i.test(code)) {
+        stripFailedCollectPaint(item, dashSpaceById(item._spaceId));
+      }
       errors.push(e);
     }
   }
@@ -1231,6 +1380,7 @@ async function setDoc(ref, data) {
                   destinationAccountId: acc,
                   note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
                   reference: String(tx.desc || data.id || "إيداع").slice(0, 120),
+                  sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
                 }, ("reqdep-" + (data.id || ref._id)).slice(0, 120));
                 if (dep && dep.depositId) {
                   payload = { ...payload, depositId: dep.depositId, transaction: { ...tx, depositId: dep.depositId } };
@@ -1313,11 +1463,16 @@ async function setDoc(ref, data) {
       } catch (e) {
         console.error(e);
         const code = String((e && (e.message || e.code)) || e);
-        const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT/i.test(code);
+        const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED/i.test(code);
+        const moneyFail = /PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|createCash|submitBank|uncollect|AMOUNT_EXCEEDS_HOLDING/i.test(code);
         if (keepDraft && draftJson) {
           try {
-            localStorage.setItem("qama_month_" + y + "_" + m, draftJson);
+            const draft = JSON.parse(draftJson);
+            if (moneyFail) stripFailedCollectPaintInData(draft);
+            localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(draft));
             S._preserveDraftUntil = Date.now() + 120000;
+            // Re-read canonical money into S._dash without wiping the restored draft localStorage.
+            try { await refreshEngine(y, m, true); } catch (_re) {}
           } catch (_e2) {}
         } else {
           try { await hydrateMonthFromEngine(y, m); } catch (e2) {}
@@ -1365,7 +1520,7 @@ if (typeof window !== "undefined" && typeof __QAMA_EMULATOR__ !== "undefined" &&
   window.__qamaTest = {
     collectionOpKey, uncollectOpKey, shortOb, receiptCounts, formatEngineError, intentKey, opId,
     engineCommand, refreshEngine, applyEngineDiff, applyCollection, maybeUncollect,
-    renewCycleForItem, endTenancyForItem,
+    renewCycleForItem, endTenancyForItem, cancelErroneousRentalForItem,
     authState() {
       return {
         screen: typeof S !== "undefined" ? S.screen : null,

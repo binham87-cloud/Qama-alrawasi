@@ -1,0 +1,33 @@
+{
+  "name": "qama-new",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "QAMA NEW — event-based rent collection",
+  "scripts": {
+    "test": "node --test tests/domain/finance.test.mjs tests/integration/system.test.mjs tests/integration/scenario.test.mjs tests/ui/reliability_static.test.mjs",
+    "test:domain": "node --test tests/domain/finance.test.mjs",
+    "test:system": "node --test tests/integration/system.test.mjs",
+    "test:scenario": "node --test tests/integration/scenario.test.mjs",
+    "test:rules": "firebase emulators:exec --only firestore --project qama-new \"node --test tests/rules/firestore.rules.test.mjs\"",
+    "test:firebase": "firebase emulators:exec --only firestore,auth,functions,hosting --project qama-new \"node --test tests/firebase/integration.test.mjs tests/firebase/concurrency.test.mjs tests/firebase/security.test.mjs tests/firebase/e2e_seed_login.mjs\"",
+    "verify:functions-package": "node scripts/verify_functions_package.mjs",
+    "test:browser": "firebase emulators:exec --only firestore,auth,functions,hosting --project qama-new \"node tests/browser/smoke.mjs\"",
+    "test:ui": "node --test tests/ui/reliability_static.test.mjs",
+    "test:reliability": "node --test tests/ui/reliability_static.test.mjs",
+    "test:legacy-light-ui": "node --test tests/ui/dom.test.mjs tests/ui/money_input.test.mjs",
+    "assemble:ui": "node scripts/assemble_old_ui.mjs",
+    "prod:accept": "node scripts/prod_accept.mjs",
+    "deploy:prod": "node scripts/deploy_prod.mjs --project qama-new-prod-2026",
+    "emulators": "firebase emulators:start --only firestore,auth,functions,hosting --project qama-new",
+    "seed": "node seed/seed.mjs",
+    "postinstall": "npm install --prefix functions"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "firebase": "^10.14.1",
+    "firebase-admin": "^12.7.0",
+    "firebase-tools": "^14.27.0",
+    "puppeteer-core": "^25.5.0"
+  }
+}
