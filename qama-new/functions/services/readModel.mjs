@@ -323,13 +323,14 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
         fromBankReceipt: false,
       })),
       ...receipts
-        .filter((r) => r.state === "recognized" && r.method === "bank")
+        // Display-only history: recognized → معتمد, rejected → مرفوض (never double-count money).
+        .filter((r) => (r.state === "recognized" || r.state === "rejected") && r.method === "bank")
         .filter((r) => isOwner || r.collectorUserId === viewer.userId)
         .map((r) => ({
           id: r.id,
           amountFils: r.amountFils,
-          state: "approved",
-          depositDate: r.collectionDate || r.approvedAt?.slice?.(0, 10) || null,
+          state: r.state === "recognized" ? "approved" : "rejected",
+          depositDate: r.collectionDate || r.approvedAt?.slice?.(0, 10) || r.rejectedAt?.slice?.(0, 10) || null,
           employeeName: nameOf(r.collectorUserId),
           employeeId: r.collectorUserId || null,
           reference: r.bankReference || r.id,
@@ -340,6 +341,8 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
           destinationAccountId: null,
           approvedBy: r.approvedBy || null,
           approvedAt: r.approvedAt || null,
+          rejectedBy: r.rejectedBy || null,
+          rejectedAt: r.rejectedAt || null,
           fromBankReceipt: true,
           receiptId: r.id,
           tenantName: r.tenantNameSnapshot || null,

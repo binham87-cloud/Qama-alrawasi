@@ -71,3 +71,27 @@ test("inventory: core mutation entrypoints exist", () => {
     assert.ok(html.includes(name), "missing " + name);
   }
 });
+
+test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest alone", () => {
+  const src = authSrc;
+  const rejAt = src.indexOf("async function rejectRequest(req){");
+  assert.ok(rejAt >= 0, "rejectRequest missing in shell");
+  const rejSlice = src.slice(rejAt, rejAt + 900);
+  assert.match(rejSlice, /engine_approval/);
+  assert.match(rejSlice, /_rejectCommand/);
+  assert.match(rejSlice, /engineCommand/);
+  const engIdx = rejSlice.indexOf("engine_approval");
+  const setDocIdx = rejSlice.indexOf('setDoc(doc(db,"requests"');
+  assert.ok(engIdx >= 0 && setDocIdx > engIdx, "engine reject must run before requests setDoc");
+  // Assembled UI must carry the same branch (command name comes from readModel rejectCommand).
+  const htmlRej = html.indexOf("async function rejectRequest(req){");
+  const htmlSlice = html.slice(htmlRej, htmlRej + 900);
+  assert.match(htmlSlice, /_rejectCommand/);
+  assert.match(htmlSlice, /engineCommand/);
+  assert.match(html, /BANK-REJ-20260910T2153Z/);
+  assert.match(authSrc, /d\.state === "rejected"/);
+  assert.match(authSrc, /fromBankReceipt === true/);
+  const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
+  assert.match(readModel, /rejectCommand:\s*"rejectBankReceipt"/);
+  assert.match(readModel, /r\.state === "rejected"/);
+});

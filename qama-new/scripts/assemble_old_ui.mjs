@@ -231,38 +231,24 @@ out = replaceFn(
 }`
 );
 
-// engine_approval handlers live in index-auth.html — do not inject a second copy.
-if (!out.includes('req.type==="engine_approval"') && !out.includes("req.type===\"engine_approval\"")) {
-  out = out.replace(
-    "async function approveRequest(req){",
-    `async function approveRequest(req){
-  if(req&&req.type==="engine_approval"){
-    if(S.approvingReqId){showMsg("⏳ جاري اعتماد طلب آخر...");return;}
-    S.approvingReqId=req.id; R();
-    try{
-      await engineCommand(req._approveCommand,req._approvePayload,"engap-"+req.id);
-      showMsg("✓ تم اعتماد الطلب");
-      await loadMonthOnline(S.year,S.month);
-    }catch(e){showMsg("⚠ خطأ في الاعتماد");console.error(e);}
-    finally{S.approvingReqId=null;R();}
-    return;
+// Approve/reject engine_approval handlers live in old-qama-shell.html (source of truth).
+// Do not inject a second copy — only assert the canonical reject path is present.
+{
+  const rejAt = out.indexOf("async function rejectRequest(req){");
+  if (rejAt < 0) throw new Error("missing rejectRequest");
+  const rejSlice = out.slice(rejAt, rejAt + 900);
+  if (!rejSlice.includes("engine_approval")) {
+    throw new Error("rejectRequest missing engine_approval branch");
   }
-`
-  );
-  out = out.replace(
-    "async function rejectRequest(req){",
-    `async function rejectRequest(req){
-  if(req&&req.type==="engine_approval"){
-    try{
-      const payload=Object.assign({},req._rejectPayload||{},{reason:"رفض من الشاشة"});
-      await engineCommand(req._rejectCommand,payload,"engrej-"+req.id);
-      showMsg("✓ تم رفض الطلب");
-      await loadMonthOnline(S.year,S.month);
-    }catch(e){showMsg("⚠ خطأ");}
-    return;
+  if (!rejSlice.includes("_rejectCommand")) {
+    throw new Error("rejectRequest must use _rejectCommand (rejectBankReceipt), not setDoc alone");
   }
-`
-  );
+  // Ensure the engine branch runs before any setDoc on requests (resolveWorkRequest path).
+  const engIdx = rejSlice.indexOf("engine_approval");
+  const setDocIdx = rejSlice.indexOf('setDoc(doc(db,"requests"');
+  if (engIdx < 0 || setDocIdx < 0 || engIdx > setDocIdx) {
+    throw new Error("engine_approval reject must precede requests setDoc");
+  }
 }
 
 const dataMark = out.indexOf("// ========== DATA ==========");

@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="HOLDING-INST-20260908T0135Z"/>
-<title>قمة الرواسي · HOLDING-INST-20260908T0135Z</title>
+<meta name="qama-ui-build" content="BANK-REJ-20260910T2153Z"/>
+<title>قمة الرواسي · BANK-REJ-20260910T2153Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -356,10 +356,10 @@ async function loadRequests(){
         _employeeName: p.employeeName || null,
         _sharedHoldingFils: p.sharedHoldingFils ?? null,
       }));
-    // Permanent bank/deposit history cards — approval must not erase visible detail.
-    // Display-only: linked by receipt/deposit ID; never creates a second financial effect.
+    // Permanent bank history cards — approve/reject must not erase visible detail.
+    // Display-only: linked by receipt ID; never creates a second financial effect.
     const terminalBank = ((dash && dash.deposits) || [])
-      .filter((d) => d && d.fromBankReceipt === true && d.state === "approved")
+      .filter((d) => d && d.fromBankReceipt === true && (d.state === "approved" || d.state === "rejected"))
       .filter((d) => !byReqId.has("bankhist:" + d.id) && !byReqId.has("eng:" + d.id))
       .map((d) => ({
         id: "bankhist:" + d.id,
@@ -371,10 +371,11 @@ async function loadRequests(){
         byName: d.employeeName || "",
         month: S.month,
         year: S.year,
-        status: "approved",
-        createdAt: d.approvedAt || d.depositDate || "",
-        approvedAt: d.approvedAt || null,
-        resolvedAt: d.approvedAt || null,
+        status: d.state === "rejected" ? "rejected" : "approved",
+        createdAt: d.approvedAt || d.rejectedAt || d.depositDate || "",
+        approvedAt: d.state === "approved" ? (d.approvedAt || null) : null,
+        rejectedAt: d.state === "rejected" ? (d.rejectedAt || null) : null,
+        resolvedAt: d.approvedAt || d.rejectedAt || null,
         amountFils: d.amountFils,
         payload: {
           receiptId: d.receiptId || d.id,
@@ -533,6 +534,18 @@ async function approveRequest(req){
 }
 
 async function rejectRequest(req){
+  // Bank/deposit/expense engine cards must use canonical reject* — never resolveWorkRequest via setDoc.
+  if(req&&req.type==="engine_approval"){
+    try{
+      if(!req._rejectCommand){showMsg("⚠ لا يمكن رفض هذا الطلب");return;}
+      const payload=Object.assign({},req._rejectPayload||{},{reason:"رفض من الشاشة"});
+      await engineCommand(req._rejectCommand,payload,"engrej-"+(req._canonicalId||req.id)+"-"+Date.now());
+      showMsg("✓ تم رفض الطلب");
+      await loadMonthOnline(S.year,S.month);
+      await loadRequests();
+    }catch(e){showMsg("⚠ خطأ");console.error(e);}
+    return;
+  }
   try{
     await setDoc(doc(db,"requests",req.id),{...req,status:"rejected",rejectedAt:new Date().toISOString()});
     showMsg("✓ تم رفض الطلب");
@@ -2935,7 +2948,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI HOLDING-INST-20260908T0135Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI BANK-REJ-20260910T2153Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3161,7 +3174,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI HOLDING-INST-20260908T0135Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI BANK-REJ-20260910T2153Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),

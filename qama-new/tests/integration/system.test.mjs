@@ -111,6 +111,30 @@ test("M6 command: bank pending then approved", async () => {
   assert.equal(dash.summary.holdingFils, 0);
 });
 
+test("M6b command: bank pending then rejected — late, holding unchanged, history state rejected", async () => {
+  const { db, owner, building, yahia } = await setup();
+  const holdingBefore = buildDashboardFromDump(db, building.period, "2026-09-15").summary.holdingFils;
+  const bank = await run(db, actorFrom(yahia), "submitBankReceipt", {
+    obligationId: building.obligationId, amountFils: 110000, collectionDate: "2026-09-05", bankReference: "TRX-REJ-1100",
+  });
+  let dash = buildDashboardFromDump(db, building.period, "2026-09-15");
+  assert.equal(dash.summary.collectedFils, 0);
+  assert.equal(dash.summary.holdingFils, holdingBefore);
+  assert.equal(dash.obligations[0].status, STATUS.LATE);
+
+  await run(db, owner, "rejectBankReceipt", { receiptId: bank.receiptId, reason: "رفض اختبار" });
+  const doc = db.dump("receipts").find((r) => r.id === bank.receiptId);
+  assert.equal(doc.state, RECEIPT_STATE.REJECTED);
+
+  dash = buildDashboardFromDump(db, building.period, "2026-09-15");
+  assert.equal(dash.summary.collectedFils, 0);
+  assert.equal(dash.summary.depositedFils, 0);
+  assert.equal(dash.summary.holdingFils, holdingBefore);
+  assert.equal(dash.obligations[0].status, STATUS.LATE);
+  // Must not auto-approve: receipt stays rejected.
+  assert.equal(dash.receipts.find((r) => r.id === bank.receiptId).state, RECEIPT_STATE.REJECTED);
+});
+
 test("M7 command: reversal", async () => {
   const { db, owner, building, yahia } = await setup();
   const rcpt = await run(db, actorFrom(yahia), "createCashReceipt", {
