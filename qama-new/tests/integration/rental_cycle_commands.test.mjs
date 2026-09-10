@@ -248,10 +248,58 @@ test("13 renew cycle status starts unpaid not collected", async () => {
   assert.notEqual(v.status, "collected");
 });
 
-test("14 generateObligations does not auto-create next month cycle", async () => {
+test("14 generateObligations seeds next month unpaid cycle for continuing rental", async () => {
   const { db, owner, building } = await setup();
   const genOct = await run(db, owner, "generateObligations", { period: "2026-10" }, opId("gen-oct"));
-  assert.equal(genOct.created, 0);
-  const octObs = db.dump("obligations").filter((o) => o.period === "2026-10" && o.rentalId === building.rental.rentalId);
-  assert.equal(octObs.length, 0);
+  assert.equal(genOct.created, 1);
+  const octObs = db.dump("obligations").filter((o) => o.period === "2026-10" && o.rentalId === building.rental.rentalId && o.state === "active");
+  assert.equal(octObs.length, 1);
+  assert.equal(octObs[0].dueDate, "2026-10-01");
+  assert.equal(octObs[0].amountFils, 920000);
+  // Idempotent — second generate creates nothing.
+  const again = await run(db, owner, "generateObligations", { period: "2026-10" }, opId("gen-oct-2"));
+  assert.equal(again.created, 0);
+  assert.equal(db.dump("obligations").filter((o) => o.period === "2026-10" && o.rentalId === building.rental.rentalId && o.state === "active").length, 1);
+});
+
+test("15 Sep paid does not pay Oct; Oct before due is غير مستحق; Sep↔Oct round-trip", async () => {
+  const { db, owner, building, yahia } = await setup();
+  await run(db, actorFrom(yahia), "createCashReceipt", {
+    obligationId: building.obligationId, amountFils: 920000, collectionDate: "2026-09-01",
+  });
+  let sep = buildDashboardFromDump(db, "2026-09", "2026-09-15");
+  assert.equal(sep.obligations[0].status, "collected");
+  assert.equal(sep.obligations[0].paidFils, 920000);
+  assert.equal(sep.summary.collectedFils, 920000);
+  const sepObId = sep.obligations[0].obligationId;
+  const sepPaid = sep.obligations[0].paidFils;
+
+  await run(db, owner, "generateObligations", { period: "2026-10" }, opId("gen-oct-pay"));
+  // Before Oct due date → not_due (غير مستحق)
+  let oct = buildDashboardFromDump(db, "2026-10", "2026-09-15");
+  const octOb = oct.obligations.find((o) => o.rentalId === building.rental.rentalId) || oct.obligations[0];
+  assert.ok(octOb);
+  assert.notEqual(octOb.obligationId, sepObId);
+  assert.equal(octOb.dueDate, "2026-10-01");
+  assert.equal(octOb.paidFils, 0);
+  assert.equal(octOb.status, "not_due");
+  assert.equal(oct.summary.collectedFils, 0);
+
+  // On/after Oct due with no payment → late
+  oct = buildDashboardFromDump(db, "2026-10", "2026-10-01");
+  const octLate = oct.obligations.find((o) => o.obligationId === octOb.obligationId);
+  assert.equal(octLate.paidFils, 0);
+  assert.equal(octLate.status, "late");
+
+  // Round-trip: September unchanged
+  sep = buildDashboardFromDump(db, "2026-09", "2026-09-15");
+  assert.equal(sep.obligations[0].obligationId, sepObId);
+  assert.equal(sep.obligations[0].paidFils, sepPaid);
+  assert.equal(sep.obligations[0].status, "collected");
+  assert.equal(sep.summary.collectedFils, 920000);
+
+  // Reload Oct still Oct
+  oct = buildDashboardFromDump(db, "2026-10", "2026-10-15");
+  assert.equal(oct.obligations.find((o) => o.obligationId === octOb.obligationId).paidFils, 0);
+  assert.equal(oct.summary.collectedFils, 0);
 });

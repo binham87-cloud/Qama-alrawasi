@@ -399,7 +399,7 @@ function mapDashboardToMonth(dash) {
         })(),
         phone: extra.phone || sp.tenantPhone || "",
         note: extra.note || "",
-        start_date: extra.start_date || sp.startDate || "",
+        start_date: extra.start_date || sp.cycleStart || sp.startDate || "",
         due_date: sp.dueDate || extra.due_date || "",
         elec_paid: !!extra.elec_paid,
         elec_amount: Number(extra.elec_amount || 0),
@@ -453,7 +453,7 @@ function mapDashboardToMonth(dash) {
           tenant: sp.tenantName || extraUse.tenant || "",
           phone: extraUse.phone || sp.tenantPhone || "",
           note: extraUse.note || (mapped.status === "vacant" ? "فارغ" : mapped.status === "staff" ? "موظفين" : ""),
-          start_date: extraUse.start_date || sp.startDate || "",
+          start_date: extraUse.start_date || sp.cycleStart || sp.startDate || "",
           end_date: extraUse.end_date || "",
           due_date: sp.dueDate || extraUse.due_date || "",
           deposit: extraUse.deposit || "",
@@ -649,9 +649,9 @@ function extrasFromData(data) {
 
 async function refreshEngine(y, m, quiet) {
   const period = periodOfMonth(y, m);
-  if (USERS[S.user]?.role === "owner") {
-    try { await engineCommand("generateObligations", { period }, "genobl-" + period + "-" + Date.now()); } catch (e) {}
-  }
+  // Seed this calendar period's unpaid cycles for continuing rentals (idempotent).
+  // Owner and employee both need Oct cards when navigating — permission is BOTH.
+  try { await engineCommand("generateObligations", { period }, "genobl-" + period + "-" + Date.now()); } catch (e) {}
   const dash = await engineRead(period);
   S._dash = dash;
   applyUiConfig(dash.ui);

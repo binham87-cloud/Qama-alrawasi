@@ -134,8 +134,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
    * complete, while every money figure still comes from the derived views above.
    */
   const activeRental = (spaceId) => rentals.find((r) => r.spaceId === spaceId && r.state === "active") || null;
-  // Prefer the active rental's obligation — never bind a closed-rental orphan by spaceId alone.
-  // Latest cycle may belong to a prior calendar period (anniversary span) — still bind it.
+  // Latest cycle across periods — renew button metadata ONLY (never money/status for this period).
   const latestCycleForRental = (rentalId) => {
     if (!rentalId) return null;
     const list = (allObligations || [])
@@ -146,22 +145,24 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       ));
     return list.length ? list[list.length - 1] : null;
   };
+  /** Obligation for the dashboard `period` only — never fall back to a prior month. */
+  const periodCycleForRental = (rentalId) => {
+    if (!rentalId) return null;
+    const list = (allObligations || [])
+      .filter((o) => o && o.rentalId === rentalId && o.state === "active" && o.baselineExcluded !== true)
+      .filter((o) => {
+        const op = o.period || String(o.cycleStart || o.dueDate || "").slice(0, 7);
+        return op === period;
+      });
+    if (!list.length) return null;
+    list.sort((a, b) => String(a.cycleStart || a.dueDate || "").localeCompare(String(b.cycleStart || b.dueDate || "")));
+    return list[list.length - 1];
+  };
   const viewFor = (spaceId, rentalId) => {
     if (rentalId) {
+      // Period-scoped views only — do not bind September money into an October dashboard.
       const matched = views.find((v) => v.spaceId === spaceId && v.rentalId === rentalId);
-      if (matched) return matched;
-      const latest = latestCycleForRental(rentalId);
-      if (latest) {
-        const v = obligationView(latest, allReceipts, asOfDate);
-        return {
-          ...v,
-          spaceId: latest.spaceId,
-          rentalId: latest.rentalId,
-          spaceName: spaceName(latest.spaceId),
-          unitName: unitName(latest.unitId),
-        };
-      }
-      return null;
+      return matched || null;
     }
     // No active rental: still surface retained-after-vacate arrears on the vacant card
     // so Manager can see and collect historical debt without a live tenancy.
@@ -217,16 +218,21 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
           const rental = activeRental(sp.id);
           const v = viewFor(sp.id, rental?.id || null);
           const display = spaceDisplay({ space: sp, view: v, rental, period, asOfDate });
+          const periodOb = rental ? periodCycleForRental(rental.id) : null;
           const latestOb = rental ? latestCycleForRental(rental.id) : null;
           const anniversaryDay = Number(
             rental?.dueDayOfMonth
+            || periodOb?.anniversaryDay
             || latestOb?.anniversaryDay
             || String(rental?.startDate || "").slice(8, 10),
           ) || null;
-          const cycleStart = latestOb?.cycleStart || latestOb?.dueDate || null;
-          const nextStart = cycleStart && anniversaryDay
-            ? nextCycleStart(cycleStart, 1, anniversaryDay)
-            : (cycleStart ? nextCycleStart(cycleStart, 1) : null);
+          // Period card dates come from THIS period's cycle only (never prior-month fallthrough).
+          const cycleStart = periodOb?.cycleStart || periodOb?.dueDate || display.dueDate || null;
+          const cycleEnd = periodOb?.cycleEnd || null;
+          const nextFrom = latestOb?.cycleStart || latestOb?.dueDate || cycleStart || null;
+          const nextStart = nextFrom && anniversaryDay
+            ? nextCycleStart(nextFrom, 1, anniversaryDay)
+            : (nextFrom ? nextCycleStart(nextFrom, 1) : null);
           const renewVisible = !!(rental && nextStart && renewButtonVisible(nextStart, asOfDate, 7));
           // Per-space receipts for the current period — used by the receipt history
           // panel and the Manager حذف الإيصال control. We include ALL states so the
@@ -253,12 +259,14 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             rentalId: rental?.id || null,
             tenantName: rental?.tenantName || v?.tenantName || null,
             tenantPhone: rental?.tenantPhone || null,
-            startDate: rental?.startDate || null,
+            // Card "start" for the selected month = this period's cycle start (not contract start alone).
+            startDate: cycleStart || rental?.startDate || null,
+            contractStartDate: rental?.startDate || null,
             dueDayOfMonth: rental?.dueDayOfMonth || null,
-            obligationId: v?.obligationId || null,
-            rentalCycleId: latestOb?.rentalCycleId || latestOb?.id || null,
+            obligationId: v?.obligationId || periodOb?.id || null,
+            rentalCycleId: periodOb?.rentalCycleId || periodOb?.id || null,
             cycleStart: cycleStart || null,
-            cycleEnd: latestOb?.cycleEnd || null,
+            cycleEnd: cycleEnd || null,
             nextCycleStart: nextStart,
             renewVisible,
             dueFils: display.dueFils,

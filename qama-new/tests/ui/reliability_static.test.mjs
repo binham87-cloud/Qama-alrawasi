@@ -87,7 +87,7 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /BANK-REJ-HIST-20260910T2223Z/);
+  assert.match(html, /MONTH-SYNC-20260910T2237Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
@@ -99,12 +99,23 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
 test("rejected bank history stays visible: liveDep keeps fromBankReceipt rejected; Manager done pins bank_history", () => {
   assert.match(bridge, /fromBankReceipt === true/);
   assert.match(bridge, /d\.state === "rejected"/);
-  // Assembled UI must keep rejected bank rows in month transactions (display-only).
   assert.match(html, /fromBankReceipt === true/);
   assert.match(authSrc, /type==="bank_history"/);
   assert.match(authSrc, /bankDone/);
   assert.match(html, /bankDone/);
-  // terminalBank precedes ui requests so slice cannot bury rejected bank cards.
   assert.match(authSrc, /\[\.\.\.terminalBank, \.\.\.byReqId\.values\(\), \.\.\.enginePending\]/);
   assert.match(html, /\[\.\.\.terminalBank, \.\.\.byReqId\.values\(\), \.\.\.enginePending\]/);
+});
+
+test("month navigation clears stale dash and seeds period obligations for any role", () => {
+  assert.match(authSrc, /function changeMonth\(m,y\)\{[\s\S]{0,200}S\._dash\s*=\s*null/);
+  assert.match(html, /function changeMonth\(m,y\)\{[\s\S]{0,200}S\._dash\s*=\s*null/);
+  assert.match(bridge, /generateObligations/);
+  // Must not be owner-only — employees navigating months need the same period seed.
+  const refreshAt = bridge.indexOf("async function refreshEngine");
+  const refreshSlice = bridge.slice(refreshAt, refreshAt + 500);
+  assert.match(refreshSlice, /generateObligations/);
+  assert.doesNotMatch(refreshSlice, /role === "owner"[\s\S]{0,120}generateObligations/);
+  assert.match(html, /MONTH-SYNC-20260910T2237Z/);
+  assert.match(bridge, /sp\.cycleStart \|\| sp\.startDate/);
 });

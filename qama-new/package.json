@@ -5,10 +5,11 @@
   "type": "module",
   "description": "QAMA NEW — event-based rent collection",
   "scripts": {
-    "test": "node --test tests/domain/finance.test.mjs tests/integration/system.test.mjs tests/integration/scenario.test.mjs tests/ui/reliability_static.test.mjs",
+    "test": "node --test tests/domain/finance.test.mjs tests/integration/system.test.mjs tests/integration/scenario.test.mjs tests/integration/rental_cycle_commands.test.mjs tests/integration/month_nav_period.test.mjs tests/ui/reliability_static.test.mjs",
     "test:domain": "node --test tests/domain/finance.test.mjs",
     "test:system": "node --test tests/integration/system.test.mjs",
     "test:scenario": "node --test tests/integration/scenario.test.mjs",
+    "test:month-nav": "node --test tests/integration/month_nav_period.test.mjs tests/integration/rental_cycle_commands.test.mjs",
     "test:rules": "firebase emulators:exec --only firestore --project qama-new \"node --test tests/rules/firestore.rules.test.mjs\"",
     "test:firebase": "firebase emulators:exec --only firestore,auth,functions,hosting --project qama-new \"node --test tests/firebase/integration.test.mjs tests/firebase/concurrency.test.mjs tests/firebase/security.test.mjs tests/firebase/e2e_seed_login.mjs\"",
     "verify:functions-package": "node scripts/verify_functions_package.mjs",

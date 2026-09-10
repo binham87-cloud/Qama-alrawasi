@@ -17,6 +17,7 @@ import {
 } from "../domain/finance.mjs";
 import {
   buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
+  cyclePeriod,
 } from "../domain/rental_cycle.mjs";
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
 
@@ -972,34 +973,67 @@ const HANDLERS = {
 
   /* ---------- obligations ---------- */
   /**
-   * Seeds ONLY the first anniversary cycle (period of rental.startDate).
-   * Later cycles are created exclusively by renewRentalCycle (user press).
+   * Ensure each active continuing rental has an unpaid cycle for `period`.
+   * First cycle seeds from rental.startDate; later calendar months mint the
+   * matching anniversary cycle (idempotent by rentalCycleId). Never copies
+   * receipts/payment from a prior month. Closed / vacant / staff skipped.
    */
   async generateObligations(ctx) {
     const period = ctx.payload.period;
     const rentals = await ctx.tx.query("rentals", [["state", "==", "active"]]);
     const created = [];
     for (const rental of rentals) {
-      if (periodOf(rental.startDate) !== period) continue;
       const space = await ctx.tx.get("spaces", rental.spaceId);
       if (!space || space.active === false) continue;
       if (space.occupancy === "vacant" || space.occupancy === "staff") continue;
       if (isPlaceholderTenant(rental.tenantName)) continue;
-      const cycleStart = assertIsoDate(rental.startDate);
-      const anniversaryDay = Number(rental.dueDayOfMonth) || Number(cycleStart.slice(8, 10));
+
+      const start = assertIsoDate(rental.startDate);
+      const anniversaryDay = Number(rental.dueDayOfMonth) || Number(start.slice(8, 10));
+      // Do not invent cycles before the contractual start period.
+      if (String(periodOf(start)) > String(period)) continue;
+
+      let cycleStart = start;
+      let guard = 0;
+      while (cyclePeriod(cycleStart) < period && guard++ < 240) {
+        cycleStart = nextCycleStart(cycleStart, 1, anniversaryDay);
+      }
+      if (cyclePeriod(cycleStart) !== period) continue;
+
+      const existingForRental = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+      const periodHit = (existingForRental || []).find(
+        (o) => o && o.state === "active" && o.baselineExcluded !== true && (
+          o.period === period
+          || cyclePeriod(o.cycleStart || o.dueDate || `${o.period}-01`) === period
+        ),
+      );
+      if (periodHit) continue;
+
+      const prior = (existingForRental || [])
+        .filter((o) => o && o.state !== "cancelled")
+        .map((o) => ({
+          ...o,
+          _start: o.cycleStart || o.dueDate || `${o.period}-01`,
+        }))
+        .filter((o) => cyclePeriod(o._start) < period)
+        .sort((a, b) => String(a._start).localeCompare(String(b._start)));
+      const previousCycleId = prior.length
+        ? (prior[prior.length - 1].rentalCycleId || prior[prior.length - 1].id)
+        : null;
+
       const fields = buildCycleFields({
         rentalId: rental.id,
         cycleStart,
-        previousCycleId: null,
+        previousCycleId,
         amountFils: rental.contractualAmountFils,
         tenantName: rental.tenantName,
         anniversaryDay,
       });
-      // Prefer anniversary id; also skip legacy calendar id if present.
       const legacyId = obligationIdFor(rental.id, period);
       const existing = (await ctx.tx.get("obligations", fields.id))
         || (await ctx.tx.get("obligations", legacyId));
       if (existing) continue;
+
       ctx.tx.create("obligations", fields.id, {
         id: fields.id,
         rentalCycleId: fields.rentalCycleId,
@@ -1012,7 +1046,7 @@ const HANDLERS = {
         dueDate: fields.dueDate,
         cycleStart: fields.cycleStart,
         cycleEnd: fields.cycleEnd,
-        previousCycleId: null,
+        previousCycleId: fields.previousCycleId,
         anniversaryDay: fields.anniversaryDay,
         tenantNameSnapshot: fields.tenantNameSnapshot,
         state: "active",
