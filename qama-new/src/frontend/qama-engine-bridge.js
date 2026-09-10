@@ -546,6 +546,8 @@ function mapDashboardToMonth(dash) {
     _receiptId: d.receiptId || null,
     _approvedBy: d.approvedBy || null,
     _approvedAt: d.approvedAt || null,
+    _rejectedBy: d.rejectedBy || null,
+    _rejectedAt: d.rejectedAt || null,
     _accountName: d.accountName || null,
     _tenantName: d.tenantName || null,
   });
@@ -563,7 +565,12 @@ function mapDashboardToMonth(dash) {
     _kind: (String(e.category || "") === "صيانة") ? "maintenance" : "expense"
   });
   const liveExp = (dash.expenses || []).filter((e) => e.state !== "reversed" && e.state !== "rejected");
-  const liveDep = (dash.deposits || []).filter((d) => d.state !== "reversed" && d.state !== "rejected");
+  // Keep display-only rejected bank-receipt history (audit). Custody deposit rejects stay hidden.
+  const liveDep = (dash.deposits || []).filter((d) => {
+    if (!d || d.state === "reversed") return false;
+    if (d.state === "rejected") return d.fromBankReceipt === true;
+    return true;
+  });
   S._hydratedExpenseIds = new Set(liveExp.map((e) => e.id));
   S._hydratedDepositIds = new Set(liveDep.map((d) => d.id));
   // Money truth is engine-only. Do NOT merge extras.transactions/expenses —

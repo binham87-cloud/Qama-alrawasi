@@ -83,15 +83,28 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const engIdx = rejSlice.indexOf("engine_approval");
   const setDocIdx = rejSlice.indexOf('setDoc(doc(db,"requests"');
   assert.ok(engIdx >= 0 && setDocIdx > engIdx, "engine reject must run before requests setDoc");
-  // Assembled UI must carry the same branch (command name comes from readModel rejectCommand).
   const htmlRej = html.indexOf("async function rejectRequest(req){");
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /BANK-REJ-20260910T2153Z/);
+  assert.match(html, /BANK-REJ-HIST-20260910T2223Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
   assert.match(readModel, /rejectCommand:\s*"rejectBankReceipt"/);
+  assert.match(readModel, /bankReceiptHistoryRows/);
   assert.match(readModel, /r\.state === "rejected"/);
+});
+
+test("rejected bank history stays visible: liveDep keeps fromBankReceipt rejected; Manager done pins bank_history", () => {
+  assert.match(bridge, /fromBankReceipt === true/);
+  assert.match(bridge, /d\.state === "rejected"/);
+  // Assembled UI must keep rejected bank rows in month transactions (display-only).
+  assert.match(html, /fromBankReceipt === true/);
+  assert.match(authSrc, /type==="bank_history"/);
+  assert.match(authSrc, /bankDone/);
+  assert.match(html, /bankDone/);
+  // terminalBank precedes ui requests so slice cannot bury rejected bank cards.
+  assert.match(authSrc, /\[\.\.\.terminalBank, \.\.\.byReqId\.values\(\), \.\.\.enginePending\]/);
+  assert.match(html, /\[\.\.\.terminalBank, \.\.\.byReqId\.values\(\), \.\.\.enginePending\]/);
 });

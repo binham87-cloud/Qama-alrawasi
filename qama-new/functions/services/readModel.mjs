@@ -322,34 +322,14 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
         approvedBy: d.approvedBy || null, approvedAt: d.approvedAt || null,
         fromBankReceipt: false,
       })),
-      ...receipts
-        // Display-only history: recognized → معتمد, rejected → مرفوض (never double-count money).
-        .filter((r) => (r.state === "recognized" || r.state === "rejected") && r.method === "bank")
-        .filter((r) => isOwner || r.collectorUserId === viewer.userId)
-        .map((r) => ({
-          id: r.id,
-          amountFils: r.amountFils,
-          state: r.state === "recognized" ? "approved" : "rejected",
-          depositDate: r.collectionDate || r.approvedAt?.slice?.(0, 10) || r.rejectedAt?.slice?.(0, 10) || null,
-          employeeName: nameOf(r.collectorUserId),
-          employeeId: r.collectorUserId || null,
-          reference: r.bankReference || r.id,
-          note: r.note || `تحويل بنكي — ${r.tenantNameSnapshot || "—"} · ${unitName(r.unitId)} / ${spaceName(r.spaceId)}`,
-          sourceKind: "bank",
-          sourceLabel: "تحويل بنكي",
-          accountName: "إيرادات / بنك",
-          destinationAccountId: null,
-          approvedBy: r.approvedBy || null,
-          approvedAt: r.approvedAt || null,
-          rejectedBy: r.rejectedBy || null,
-          rejectedAt: r.rejectedAt || null,
-          fromBankReceipt: true,
-          receiptId: r.id,
-          tenantName: r.tenantNameSnapshot || null,
-          unitName: unitName(r.unitId),
-          spaceName: spaceName(r.spaceId),
-          paymentSource: "bank_transfer",
-        })),
+      ...bankReceiptHistoryRows({
+        receipts,
+        viewerUserId: viewer.userId,
+        isOwner,
+        nameOf,
+        unitName,
+        spaceName,
+      }),
     ],
     expenses: visibleExpenses.map((e) => ({
       id: e.id, amountFils: e.amountFils, reason: e.reason, state: e.state,
@@ -373,6 +353,37 @@ function parseJsonSafe(raw, fallback) {
   if (raw == null) return fallback;
   if (typeof raw === "object") return raw;
   try { return JSON.parse(raw); } catch { return fallback; }
+}
+
+/** Display-only bank receipt rows for deposits[] — never a second financial mutation. */
+export function bankReceiptHistoryRows({ receipts, viewerUserId, isOwner, nameOf, unitName, spaceName }) {
+  return (receipts || [])
+    .filter((r) => (r.state === "recognized" || r.state === "rejected") && r.method === "bank")
+    .filter((r) => isOwner || r.collectorUserId === viewerUserId)
+    .map((r) => ({
+      id: r.id,
+      amountFils: r.amountFils,
+      state: r.state === "recognized" ? "approved" : "rejected",
+      depositDate: r.collectionDate || r.approvedAt?.slice?.(0, 10) || r.rejectedAt?.slice?.(0, 10) || null,
+      employeeName: nameOf(r.collectorUserId),
+      employeeId: r.collectorUserId || null,
+      reference: r.bankReference || r.id,
+      note: r.note || `تحويل بنكي — ${r.tenantNameSnapshot || "—"} · ${unitName(r.unitId)} / ${spaceName(r.spaceId)}`,
+      sourceKind: "bank",
+      sourceLabel: "تحويل بنكي",
+      accountName: "إيرادات / بنك",
+      destinationAccountId: null,
+      approvedBy: r.approvedBy || null,
+      approvedAt: r.approvedAt || null,
+      rejectedBy: r.rejectedBy || null,
+      rejectedAt: r.rejectedAt || null,
+      fromBankReceipt: true,
+      receiptId: r.id,
+      tenantName: r.tenantNameSnapshot || null,
+      unitName: unitName(r.unitId),
+      spaceName: spaceName(r.spaceId),
+      paymentSource: "bank_transfer",
+    }));
 }
 
 /**
@@ -543,7 +554,18 @@ export function buildDashboardFromDump(db, period, asOfDate) {
     views,
     obligations: views,
     receipts,
-    deposits,
+    // Same display-only bank history enrichment as buildDashboard (owner view for tests).
+    deposits: [
+      ...deposits.map((d) => ({ ...d, fromBankReceipt: false })),
+      ...bankReceiptHistoryRows({
+        receipts,
+        viewerUserId: null,
+        isOwner: true,
+        nameOf,
+        unitName,
+        spaceName,
+      }),
+    ],
     expenses,
     accounts,
     spaces,

@@ -121,6 +121,8 @@ test("M6b command: bank pending then rejected — late, holding unchanged, histo
   assert.equal(dash.summary.collectedFils, 0);
   assert.equal(dash.summary.holdingFils, holdingBefore);
   assert.equal(dash.obligations[0].status, STATUS.LATE);
+  // Pending bank must stay financially inert (no history deposit row yet).
+  assert.equal((dash.deposits || []).filter((d) => d.fromBankReceipt && d.id === bank.receiptId).length, 0);
 
   await run(db, owner, "rejectBankReceipt", { receiptId: bank.receiptId, reason: "رفض اختبار" });
   const doc = db.dump("receipts").find((r) => r.id === bank.receiptId);
@@ -131,8 +133,49 @@ test("M6b command: bank pending then rejected — late, holding unchanged, histo
   assert.equal(dash.summary.depositedFils, 0);
   assert.equal(dash.summary.holdingFils, holdingBefore);
   assert.equal(dash.obligations[0].status, STATUS.LATE);
-  // Must not auto-approve: receipt stays rejected.
   assert.equal(dash.receipts.find((r) => r.id === bank.receiptId).state, RECEIPT_STATE.REJECTED);
+
+  // Reload-equivalent: rejected bank remains as display-only history (مرفوض), not a custody deposit.
+  const hist = (dash.deposits || []).filter((d) => d.fromBankReceipt === true && d.id === bank.receiptId);
+  assert.equal(hist.length, 1);
+  assert.equal(hist[0].state, "rejected");
+  assert.equal(hist[0].amountFils, 110000);
+  assert.equal(hist[0].reference, "TRX-REJ-1100");
+  assert.equal(hist[0].receiptId, bank.receiptId);
+  // No duplicate non-bank deposit for the same id.
+  assert.equal((dash.deposits || []).filter((d) => d.id === bank.receiptId).length, 1);
+});
+
+test("M6c rejected bank history visible to submitting employee after reload, not to other employee", async () => {
+  const { db, owner, building, yahia, nader } = await setup();
+  const bank = await run(db, actorFrom(yahia), "submitBankReceipt", {
+    obligationId: building.obligationId, amountFils: 110000, collectionDate: "2026-09-05", bankReference: "TRX-REJ-EMP",
+  });
+  await run(db, owner, "rejectBankReceipt", { receiptId: bank.receiptId, reason: "رفض موظف" });
+
+  const { bankReceiptHistoryRows } = await import("../../functions/services/readModel.mjs");
+  const receipts = db.dump("receipts").filter((r) => r.period === building.period);
+  const nameOf = (id) => (db.dump("users").find((u) => u.id === id)?.displayName) || id;
+  const unitName = () => "شقة";
+  const spaceName = () => "غرفة";
+
+  const ownerHist = bankReceiptHistoryRows({
+    receipts, viewerUserId: owner.userId, isOwner: true, nameOf, unitName, spaceName,
+  }).filter((d) => d.id === bank.receiptId);
+  assert.equal(ownerHist.length, 1);
+  assert.equal(ownerHist[0].state, "rejected");
+
+  const yahiaHist = bankReceiptHistoryRows({
+    receipts, viewerUserId: yahia.userId, isOwner: false, nameOf, unitName, spaceName,
+  }).filter((d) => d.id === bank.receiptId);
+  assert.equal(yahiaHist.length, 1);
+  assert.equal(yahiaHist[0].state, "rejected");
+  assert.equal(yahiaHist[0].employeeId, yahia.userId);
+
+  const naderHist = bankReceiptHistoryRows({
+    receipts, viewerUserId: nader.userId, isOwner: false, nameOf, unitName, spaceName,
+  }).filter((d) => d.id === bank.receiptId);
+  assert.equal(naderHist.length, 0);
 });
 
 test("M7 command: reversal", async () => {
