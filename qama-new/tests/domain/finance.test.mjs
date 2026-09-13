@@ -4,6 +4,7 @@ import {
   parseAedToFils, formatFils, obligationView, deriveStatus, assertReceiptFits,
   holdingByEmployee, sharedHoldingFils, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
   totalHoldingFils, periodSummary, checkInvariants,
+  receiptMoneyEffect, depositMoneyEffect, isDisplayOnlyMoneyProjection, assertProjectionsDoNotMoveMoney,
   STATUS, RECEIPT_STATE, APPROVAL_STATE, DomainError, periodOf, dueDateFor, obligationIdFor,
 } from "../../src/domain/finance.mjs";
 
@@ -577,4 +578,134 @@ test("SHARED G: bank receipt excluded from holding", () => {
     { id: "b", obligationId: "ob1", amountFils: 500000, state: RECEIPT_STATE.RECOGNIZED, method: "bank", collectorUserId: "e1" },
   ];
   assert.equal(sharedHoldingFils({ receipts, deposits: [] }), 400000);
+});
+
+// ══════════════════════════════════════════
+// CANONICAL MONEY EFFECTS / INERT STATES / NO DOUBLE-COUNT
+// ══════════════════════════════════════════
+
+test("EFFECT: pending/rejected/reversed bank receipt → all zeros", () => {
+  for (const state of [RECEIPT_STATE.PENDING, RECEIPT_STATE.REJECTED, RECEIPT_STATE.REVERSED]) {
+    const eff = receiptMoneyEffect({
+      id: "b", obligationId: "ob_sep10", amountFils: 110000, state, method: "bank", collectorUserId: "e1",
+    });
+    assert.equal(eff.collectedFils, 0, state);
+    assert.equal(eff.depositedFils, 0, state);
+    assert.equal(eff.holdingFils, 0, state);
+    assert.equal(eff.inert, true, state);
+  }
+});
+
+test("EFFECT: recognized bank → collected+deposited; cash → collected+holding", () => {
+  const bank = receiptMoneyEffect({
+    id: "b", obligationId: "ob_sep10", amountFils: 110000, state: RECEIPT_STATE.RECOGNIZED, method: "bank",
+  });
+  assert.deepEqual(
+    { c: bank.collectedFils, d: bank.depositedFils, h: bank.holdingFils, i: bank.inert },
+    { c: 110000, d: 110000, h: 0, i: false },
+  );
+  const cash = receiptMoneyEffect({
+    id: "c", obligationId: "ob_sep10", amountFils: 50000, state: RECEIPT_STATE.RECOGNIZED, method: "cash",
+  });
+  assert.deepEqual(
+    { c: cash.collectedFils, d: cash.depositedFils, h: cash.holdingFils, i: cash.inert },
+    { c: 50000, d: 0, h: 50000, i: false },
+  );
+});
+
+test("EFFECT: display-only bank history deposit row never moves money", () => {
+  assert.equal(isDisplayOnlyMoneyProjection({ fromBankReceipt: true, state: "approved", amountFils: 110000 }), true);
+  const eff = depositMoneyEffect({
+    id: "hist", amountFils: 110000, state: "approved", sourceKind: "bank", fromBankReceipt: true,
+  });
+  assert.equal(eff.inert, true);
+  assert.equal(eff.displayOnly, true);
+  assert.equal(eff.collectedFils + eff.depositedFils + eff.holdingFils, 0);
+});
+
+test("EFFECT: pending/rejected/reversed custody deposit → inert; approved holding moves Holding/Deposited", () => {
+  for (const state of [APPROVAL_STATE.PENDING, APPROVAL_STATE.REJECTED, APPROVAL_STATE.REVERSED]) {
+    const eff = depositMoneyEffect({ id: "d", amountFils: 700000, state, sourceKind: "holding" });
+    assert.equal(eff.inert, true, state);
+    assert.equal(eff.depositedFils, 0, state);
+    assert.equal(eff.holdingFils, 0, state);
+  }
+  const ok = depositMoneyEffect({
+    id: "d", amountFils: 700000, state: APPROVAL_STATE.APPROVED, sourceKind: "holding",
+  });
+  assert.equal(ok.depositedFils, 700000);
+  assert.equal(ok.holdingFils, -700000);
+  assert.equal(ok.collectedFils, 0);
+});
+
+test("INVARIANT: rejected bank + display history must not change any period total", () => {
+  const receipts = [
+    { id: "cash1", obligationId: "ob_sep10", amountFils: 50000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "e1" },
+    { id: "rej1100", obligationId: "ob_sep10", amountFils: 110000, state: RECEIPT_STATE.REJECTED, method: "bank", collectorUserId: "e1" },
+  ];
+  const deposits = [
+    {
+      id: "rej1100", amountFils: 110000, state: "rejected", sourceKind: "bank", fromBankReceipt: true,
+      depositDate: "2026-09-05", employeeId: "e1",
+    },
+  ];
+  const base = periodSummary({
+    obligations: [obSep10()], receipts: receipts.filter((r) => r.id === "cash1"), deposits: [], expenses: [], asOfDate: "2026-09-15",
+  });
+  const withRej = periodSummary({
+    obligations: [obSep10()], receipts, deposits, expenses: [], asOfDate: "2026-09-15",
+  });
+  for (const key of ["collectedFils", "depositedFils", "holdingFils", "incomeFils", "companyCollectedFils"]) {
+    assert.equal(withRej[key], base[key], key);
+  }
+  assert.equal(withRej.incomeFils, withRej.depositedFils);
+  const proj = assertProjectionsDoNotMoveMoney({
+    obligations: [obSep10()], receipts, deposits, expenses: [], asOfDate: "2026-09-15",
+  });
+  assert.equal(proj.ok, true, JSON.stringify(proj.problems));
+  assert.equal(checkInvariants(withRej).ok, true, JSON.stringify(checkInvariants(withRej).problems));
+});
+
+test("INVARIANT: recognized bank counted once — history projection must not double-count", () => {
+  const receipts = [
+    { id: "b1", obligationId: "ob_sep10", amountFils: 100000, state: RECEIPT_STATE.RECOGNIZED, method: "bank", collectorUserId: "e1" },
+  ];
+  const deposits = [
+    {
+      id: "b1", amountFils: 100000, state: "approved", sourceKind: "bank", fromBankReceipt: true,
+      depositDate: "2026-09-05", employeeId: "e1",
+    },
+  ];
+  const summary = periodSummary({
+    obligations: [obSep10()], receipts, deposits, expenses: [], asOfDate: "2026-09-15",
+  });
+  assert.equal(summary.collectedFils, 100000);
+  assert.equal(summary.depositedFils, 100000);
+  assert.equal(summary.incomeFils, 100000);
+  assert.equal(summary.holdingFils, 0);
+  // Naïve sum of receipt bank + history deposit would be 200000 — must not happen.
+  assert.notEqual(summary.depositedFils, 200000);
+  const proj = assertProjectionsDoNotMoveMoney({
+    obligations: [obSep10()], receipts, deposits, expenses: [], asOfDate: "2026-09-15",
+  });
+  assert.equal(proj.ok, true, JSON.stringify(proj.problems));
+});
+
+test("INVARIANT: pending bank and pending deposit do not inflate income/deposited/holding", () => {
+  const receipts = [
+    { id: "cash1", obligationId: "ob_sep10", amountFils: 40000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "e1" },
+    { id: "pendBank", obligationId: "ob_sep10", amountFils: 110000, state: RECEIPT_STATE.PENDING, method: "bank", collectorUserId: "e1" },
+  ];
+  const deposits = [
+    { id: "pendDep", amountFils: 10000, state: APPROVAL_STATE.PENDING, sourceKind: "holding", employeeId: "e1" },
+  ];
+  const summary = periodSummary({
+    obligations: [obSep10()], receipts, deposits, expenses: [], asOfDate: "2026-09-15",
+  });
+  assert.equal(summary.collectedFils, 40000);
+  assert.equal(summary.depositedFils, 0);
+  assert.equal(summary.incomeFils, 0);
+  assert.equal(summary.holdingFils, 40000);
+  assert.equal(summary.pendingBankFils, 110000);
+  assert.equal(summary.pendingDepositsFils, 10000);
 });

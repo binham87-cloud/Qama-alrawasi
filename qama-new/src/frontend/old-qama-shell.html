@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="MONTH-SYNC-20260910T2237Z"/>
-<title>قمة الرواسي · MONTH-SYNC-20260910T2237Z</title>
+<meta name="qama-ui-build" content="FINANCIAL-CANON-20260913T1855Z"/>
+<title>قمة الرواسي · FINANCIAL-CANON-20260913T1855Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2329,6 +2329,44 @@ function isPartialPaid(x){
   return !!x?.partial && (Number(x?.rent||0)>0 || Number(x?.paid_amount||0)>0) && remainingValue(x)>0;
 }
 function moneyText(n){return Number(n||0).toLocaleString();}
+
+/**
+ * Canonical money for UI cards. Prefer engine periodSummary (S._dash.summary).
+ * Display-only bank history / pending / rejected / reversed never contribute.
+ * Fallback sums only financially effective custody deposit rows (approved, not display-only).
+ */
+function financiallyEffectiveTxAed(t){
+  if(!t) return 0;
+  if(t._displayOnly || t._fromBankReceipt || t.sourceKind==="bank") return 0;
+  const st=String(t._state||"");
+  if(st==="pending"||st==="rejected"||st==="reversed") return 0;
+  if(st && st!=="approved" && st!=="recognized") return 0;
+  return Number(t.amount)||0;
+}
+function engineSummary(){
+  return (typeof S!=="undefined" && S._dash && S._dash.summary) ? S._dash.summary : null;
+}
+function canonicalIncomeAed(eng, txList){
+  if(eng){
+    if(eng.incomeFils!=null) return (Number(eng.incomeFils)||0)/100;
+    return (Number(eng.companyCollectedFils ?? eng.depositedFils)||0)/100;
+  }
+  return (txList||[]).reduce((s,t)=>s+financiallyEffectiveTxAed(t),0);
+}
+function canonicalExpensesAed(eng, expList){
+  if(eng && eng.expensesFils!=null) return (Number(eng.expensesFils)||0)/100;
+  return (expList||[])
+    .filter((e)=>e && e._state!=="pending" && e._state!=="rejected" && e._state!=="reversed")
+    .reduce((s,e)=>s+Number(e.amount||0),0);
+}
+function canonicalCollectedAed(eng, fallbackAed){
+  if(eng) return (Number(eng.collectedFils ?? eng.tenantPaidFils)||0)/100;
+  return Number(fallbackAed)||0;
+}
+function canonicalDepositedAed(eng, txList){
+  if(eng) return (Number(eng.companyCollectedFils ?? eng.depositedFils)||0)/100;
+  return (txList||[]).reduce((s,t)=>s+financiallyEffectiveTxAed(t),0);
+}
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function addMonthsISO(dateStr, months=1){
   if(!dateStr)return "";
@@ -2956,7 +2994,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI MONTH-SYNC-20260910T2237Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI FINANCIAL-CANON-20260913T1855Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3022,9 +3060,11 @@ function renderApp(){
   const vacantList=units.flatMap(u=>u.partitions.filter(p=>p.status==="vacant").map(p=>u.name+"/"+p.id));
   // Ensure late card shows if there are any problem items
   const hasLateOrPartial=lateList.length>0 || units.some(u=>u.partitions.some(p=>displayStatus(p)==="late"||isPartialPaid(p)));
-  const totalTx=data.transactions.reduce((s,t)=>s+(Number(t.amount)||0),0);
+  // Income/Deposited cards: canonical engine truth only — never raw sum of history rows.
+  const _engTop=engineSummary();
+  const totalTx=canonicalIncomeAed(_engTop, data.transactions);
   // Canonical expense total = engine expenses only (maintenance money lives as category صيانة).
-  const totalExp=data.expenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
+  const totalExp=canonicalExpensesAed(_engTop, data.expenses);
   const totalProfit=data.profits.reduce((s,t)=>s+(Number(t.amount)||0),0);
   const totalInstallments=data.installments.reduce((s,t)=>s+(Number(t.amount)||0),0);
 
@@ -3182,7 +3222,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI MONTH-SYNC-20260910T2237Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI FINANCIAL-CANON-20260913T1855Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -3377,7 +3417,8 @@ function renderApp(){
       const lateCount2=allRented2.filter(s=>s==="late").length;
       const collPct2=rentedCount2>0?Math.min(100,Math.round(collectedCount2/rentedCount2*100)):0;
       const collBar=isOwner?(()=>{
-        const txTotal=data.transactions?data.transactions.reduce((s,t)=>s+Number(t.amount||0),0):0;
+        const txTotal=canonicalCollectedAed(engineSummary(),
+          data.transactions?data.transactions.reduce((s,t)=>s+financiallyEffectiveTxAed(t),0):0);
         const rentTotal=units.reduce((s,u)=>s+u.partitions.filter(p=>p.status!=="vacant").reduce((ss,p)=>ss+Number(p.rent||0),0),0)+
           full.filter(u=>u.status!=="vacant").reduce((s,u)=>s+Number(u.rent||0),0);
         const pct=rentTotal>0?Math.min(100,Math.round(txTotal/rentTotal*100)):0;
@@ -4264,10 +4305,13 @@ function renderApp(){
     const mData=getCurData();
     const txList=mData.transactions||[];
     const expList=mData.expenses||[];
-    const totalIncome=txList.reduce((s,t)=>s+Number(t.amount||0),0);
-    // Count each financial event once (maintenance money is category صيانة inside expenses).
-    const totalExp=expList.reduce((s,e)=>s+Number(e.amount||0),0);
-    const netTotal=totalIncome-totalExp;
+    const _engFin=engineSummary();
+    // Income/Net from periodSummary — never sum display-only bank history / pending / rejected.
+    const totalIncome=canonicalIncomeAed(_engFin, txList);
+    const totalExp=canonicalExpensesAed(_engFin, expList);
+    const netTotal=_engFin && _engFin.netIncomeFils!=null
+      ? (Number(_engFin.netIncomeFils)||0)/100
+      : totalIncome-totalExp;
     const sched=ensureInstallmentSchedule(S.installmentSchedule);
     S.installmentSchedule=sched;
     const nextIdx=sched.findIndex(x=>!x.paid);
@@ -4409,13 +4453,13 @@ function renderApp(){
     });
     const targetTotalFin=occupied.reduce((s,x)=>s+x.rent,0)+(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     const vacantTotalFin=vacantList.reduce((s,x)=>s+x.rent,0);
-    const collectedTotalFin=txList.reduce((s,t)=>s+Number(t.amount||0),0);
 
     // Total liquidity
     const totalLiquidity=Math.round((S.companyBalance+S.revenueBalance+S.installmentBalance)*100)/100;
 
     // ======= Financial Validation Engine =======
-    const _vDeposited=txList.reduce((s,t)=>s+Number(t.amount||0),0);
+    // Fallback deposited must not include display-only / rejected / pending rows.
+    const _vDeposited=canonicalDepositedAed(_engFin, txList);
     let _vLate=0,_vPartialRem=0,_vReceived=0;
     const _vCalc=(x)=>{
       const ds=displayStatus(x);
@@ -4432,9 +4476,10 @@ function renderApp(){
     const _vUndeposited=Math.max(0,_vReceived-_vDeposited);
     // Core rent equation: TARGET = TENANT COLLECTED + TENANT UNPAID.
     // Tenant collected splits as company/deposited + at-employees (month). Holding is GLOBAL.
-    const eng = (typeof S !== "undefined" && S._dash && S._dash.summary) ? S._dash.summary : null;
+    const eng = _engFin || ((typeof S !== "undefined" && S._dash && S._dash.summary) ? S._dash.summary : null);
     const _vTarget = eng ? (Number(eng.targetFils)||0)/100 : (()=>{ let t=0; mData.units.forEach(u=>u.partitions.forEach(p=>{if(displayStatus(p)!=="vacant"&&displayStatus(p)!=="staff")t+=Number(p.rent)||0;})); (mData.full||[]).forEach(u=>{if(displayStatus(u)!=="vacant"&&displayStatus(u)!=="staff")t+=Number(u.rent)||0;}); return t; })();
     const _vCollected = eng ? (Number(eng.collectedFils ?? eng.tenantPaidFils)||0)/100 : _vReceived;
+    const collectedTotalFin=_vCollected;
     const _vRemaining = eng ? (Number(eng.remainingFils ?? eng.tenantUnpaidFils)||0)/100 : Math.max(0,_vTarget-_vCollected);
     const _vCompany = eng ? (Number(eng.companyCollectedFils ?? eng.depositedFils)||0)/100 : _vDeposited;
     const _vMonthAtEmp = eng ? (Number(eng.atEmployeesMonthFils)||0)/100 : _vUndeposited;

@@ -87,7 +87,7 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /MONTH-SYNC-20260910T2237Z/);
+  assert.match(html, /FINANCIAL-CANON-20260913T1855Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
@@ -116,6 +116,19 @@ test("month navigation clears stale dash and seeds period obligations for any ro
   const refreshSlice = bridge.slice(refreshAt, refreshAt + 500);
   assert.match(refreshSlice, /generateObligations/);
   assert.doesNotMatch(refreshSlice, /role === "owner"[\s\S]{0,120}generateObligations/);
-  assert.match(html, /MONTH-SYNC-20260910T2237Z/);
+  assert.match(html, /FINANCIAL-CANON-20260913T1855Z/);
   assert.match(bridge, /sp\.cycleStart \|\| sp\.startDate/);
+});
+
+test("financial cards derive from canonicalIncomeAed / engine summary — not raw tx reduce", () => {
+  assert.match(authSrc, /function canonicalIncomeAed/);
+  assert.match(authSrc, /function financiallyEffectiveTxAed/);
+  assert.match(authSrc, /_displayOnly/);
+  assert.match(html, /canonicalIncomeAed/);
+  assert.match(html, /financiallyEffectiveTxAed/);
+  // Income/Net must not raw-reduce transactions including rejected bank history.
+  assert.doesNotMatch(authSrc, /const totalIncome=txList\.reduce\(\(s,t\)=>s\+Number\(t\.amount/);
+  assert.doesNotMatch(authSrc, /const totalTx=data\.transactions\.reduce\(\(s,t\)=>s\+\(Number\(t\.amount\)/);
+  assert.doesNotMatch(html, /const totalIncome=txList\.reduce\(\(s,t\)=>s\+Number\(t\.amount/);
+  assert.match(bridge, /_displayOnly:\s*!!d\.fromBankReceipt/);
 });

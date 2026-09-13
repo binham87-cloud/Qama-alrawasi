@@ -132,6 +132,104 @@ export function isApproved(record) {
   return record.state === APPROVAL_STATE.APPROVED;
 }
 
+/**
+ * Display/audit projections of bank receipts (fromBankReceipt / sourceKind bank).
+ * These rows exist ONLY for UI history. They must never be treated as custody
+ * deposits or as a second copy of recognized bank money.
+ */
+export function isDisplayOnlyMoneyProjection(row) {
+  if (!row) return false;
+  return row.fromBankReceipt === true || row.sourceKind === "bank";
+}
+
+/**
+ * Canonical money effect of one receipt on *current* totals.
+ * pending / rejected / reversed / unrecognized → all zeros (audit only).
+ *
+ * Bank recognized:  Collected+, Deposited+, Holding unchanged
+ * Cash recognized:  Collected+, Holding+, Deposited unchanged
+ */
+export function receiptMoneyEffect(receipt) {
+  const zero = { collectedFils: 0, depositedFils: 0, holdingFils: 0, inert: true };
+  if (!isRecognizedReceipt(receipt)) return zero;
+  const amountFils = toSafeFils(receipt.amountFils);
+  if (receipt.method === "bank") {
+    return { collectedFils: amountFils, depositedFils: amountFils, holdingFils: 0, inert: false };
+  }
+  if (receipt.method === "cash") {
+    return { collectedFils: amountFils, depositedFils: 0, holdingFils: amountFils, inert: false };
+  }
+  return zero;
+}
+
+/**
+ * Canonical money effect of one deposit on *current* totals.
+ * Display-only bank history rows → always inert (even when state maps to "approved").
+ * pending / rejected / reversed → inert.
+ * Approved holding deposit: Holding−, Deposited+, Collected unchanged.
+ * Approved external deposit: Deposited+, Holding unchanged, Collected unchanged.
+ */
+export function depositMoneyEffect(deposit) {
+  const zero = { collectedFils: 0, depositedFils: 0, holdingFils: 0, inert: true, displayOnly: false };
+  if (!deposit || deposit.baselineExcluded === true) return zero;
+  if (isDisplayOnlyMoneyProjection(deposit)) {
+    return { ...zero, displayOnly: true };
+  }
+  if (!isApproved(deposit)) return zero;
+  const amountFils = toSafeFils(deposit.amountFils);
+  if (deposit.sourceKind === "external") {
+    return { collectedFils: 0, depositedFils: amountFils, holdingFils: 0, inert: false, displayOnly: false };
+  }
+  // Default: deposit from employee Holding.
+  return { collectedFils: 0, depositedFils: amountFils, holdingFils: -amountFils, inert: false, displayOnly: false };
+}
+
+/**
+ * Prove that display-only / inert rows cannot change period money when mixed into deposits[].
+ * Returns problems[] (empty = ok). Used by tests and checkInvariants callers.
+ */
+export function assertProjectionsDoNotMoveMoney({ obligations, receipts, deposits, expenses, asOfDate }) {
+  const problems = [];
+  const base = periodSummary({ obligations, receipts, deposits, expenses, asOfDate });
+  const withoutDisplay = (deposits || []).filter((d) => !isDisplayOnlyMoneyProjection(d));
+  const stripped = periodSummary({
+    obligations, receipts, deposits: withoutDisplay, expenses, asOfDate,
+  });
+  for (const key of [
+    "collectedFils", "depositedFils", "holdingFils", "companyCollectedFils",
+    "approvedDepositsFils", "bankRecognizedFils", "expensesFils", "incomeFils", "netIncomeFils",
+  ]) {
+    if (base[key] !== stripped[key]) {
+      problems.push({
+        code: "DISPLAY_PROJECTION_MOVED_MONEY",
+        detail: `${key} changed when display-only deposit rows were included`,
+        withDisplay: base[key],
+        withoutDisplay: stripped[key],
+      });
+    }
+  }
+  // Inert receipt states must not contribute via money-effect helpers.
+  for (const r of receipts || []) {
+    const eff = receiptMoneyEffect(r);
+    if (!isRecognizedReceipt(r) && !eff.inert) {
+      problems.push({ code: "INERT_RECEIPT_HAS_EFFECT", detail: `receipt ${r.id} state=${r.state}` });
+    }
+    if (!isRecognizedReceipt(r) && (eff.collectedFils || eff.depositedFils || eff.holdingFils)) {
+      problems.push({ code: "INERT_RECEIPT_NONZERO", detail: `receipt ${r.id} state=${r.state}` });
+    }
+  }
+  for (const d of deposits || []) {
+    const eff = depositMoneyEffect(d);
+    if (isDisplayOnlyMoneyProjection(d) && (eff.collectedFils || eff.depositedFils || eff.holdingFils || !eff.inert)) {
+      problems.push({ code: "DISPLAY_DEPOSIT_HAS_EFFECT", detail: `deposit ${d.id}` });
+    }
+    if (!isApproved(d) && !isDisplayOnlyMoneyProjection(d) && (eff.collectedFils || eff.depositedFils || eff.holdingFils)) {
+      problems.push({ code: "INERT_DEPOSIT_NONZERO", detail: `deposit ${d.id} state=${d.state}` });
+    }
+  }
+  return { ok: problems.length === 0, problems, summary: base };
+}
+
 /* ───────────────────── obligation derivation ───────────────────── */
 
 /**
@@ -245,7 +343,7 @@ export function sharedHoldingFils({ receipts, deposits, excludeReceiptIds = [], 
     // External (other) deposits never reduce Shared Holding.
     if (d.sourceKind === "external") continue;
     // Display-only bank-receipt history rows are not custody deposits.
-    if (d.sourceKind === "bank" || d.fromBankReceipt === true) continue;
+    if (isDisplayOnlyMoneyProjection(d)) continue;
     deposited += toSafeFils(d.amountFils);
   }
   return cash - deposited;
@@ -268,7 +366,7 @@ export function holdingByEmployee({ receipts, deposits }) {
   for (const d of deposits || []) {
     if (!isApproved(d)) continue;
     if (d.sourceKind === "external") continue;
-    if (d.sourceKind === "bank" || d.fromBankReceipt === true) continue;
+    if (isDisplayOnlyMoneyProjection(d)) continue;
     const who = d.employeeId;
     if (!who) continue;
     submitted.set(who, (submitted.get(who) || 0) + toSafeFils(d.amountFils));
@@ -378,7 +476,7 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
     .reduce((s, r) => s + toSafeFils(r.amountFils), 0);
 
   const approvedDepositsFils = (deposits || [])
-    .filter((d) => isApproved(d) && d.sourceKind !== "bank" && d.fromBankReceipt !== true)
+    .filter((d) => isApproved(d) && !isDisplayOnlyMoneyProjection(d))
     .reduce((s, d) => s + toSafeFils(d.amountFils), 0);
 
   // Deposits may draw from the shared global pool; for THIS month's rent split,
@@ -410,6 +508,11 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
   const custody = holdingByEmployee({ receipts, deposits });
   const holdingFils = sharedHoldingFils({ receipts, deposits });
 
+  // Income / Net income are domain KPIs derived from the same company/deposit truth —
+  // never from UI history rows. Income = money recognized as company/deposited for the period.
+  const incomeFils = depositedFils;
+  const netIncomeFils = incomeFils - expensesFils;
+
   const counts = { total: views.length, not_due: 0, late: 0, partial: 0, collected: 0 };
   for (const v of views) counts[v.status] += 1;
 
@@ -432,6 +535,8 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
     sharedEmployeeHoldingFils: holdingFils,
     custody,
     expensesFils,
+    incomeFils,
+    netIncomeFils,
     dailyPaidFils,
     counts,
     views,
@@ -461,6 +566,19 @@ export function checkInvariants(summary) {
       detail: "Shared employee holding is negative",
       holdingFils: summary.holdingFils,
     });
+  }
+  // Income/Net must track deposited/company truth — never a parallel UI sum.
+  if (summary.incomeFils != null && summary.incomeFils !== summary.depositedFils) {
+    problems.push({ code: "INCOME_MISMATCH", detail: "Income ≠ Deposited (canonical)" });
+  }
+  if (
+    summary.netIncomeFils != null
+    && summary.netIncomeFils !== summary.incomeFils - summary.expensesFils
+  ) {
+    problems.push({ code: "NET_INCOME_MISMATCH", detail: "Net income ≠ Income − approved expenses" });
+  }
+  if (summary.companyCollectedFils != null && summary.companyCollectedFils !== summary.depositedFils) {
+    problems.push({ code: "DEPOSITED_COMPANY_MISMATCH", detail: "Deposited ≠ companyCollectedFils" });
   }
   for (const v of summary.views) {
     if (v.remainingFils < 0) {

@@ -543,6 +543,8 @@ function mapDashboardToMonth(dash) {
     _engineId: d.id,
     _state: d.state,
     _fromBankReceipt: !!d.fromBankReceipt,
+    // Display/audit projection only — never feed into money reduces.
+    _displayOnly: !!d.fromBankReceipt || d.sourceKind === "bank",
     _receiptId: d.receiptId || null,
     _approvedBy: d.approvedBy || null,
     _approvedAt: d.approvedAt || null,

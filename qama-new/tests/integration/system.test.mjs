@@ -132,6 +132,7 @@ test("M6b command: bank pending then rejected — late, holding unchanged, histo
   assert.equal(dash.summary.collectedFils, 0);
   assert.equal(dash.summary.depositedFils, 0);
   assert.equal(dash.summary.holdingFils, holdingBefore);
+  assert.equal(dash.summary.incomeFils, 0);
   assert.equal(dash.obligations[0].status, STATUS.LATE);
   assert.equal(dash.receipts.find((r) => r.id === bank.receiptId).state, RECEIPT_STATE.REJECTED);
 
@@ -144,6 +145,17 @@ test("M6b command: bank pending then rejected — late, holding unchanged, histo
   assert.equal(hist[0].receiptId, bank.receiptId);
   // No duplicate non-bank deposit for the same id.
   assert.equal((dash.deposits || []).filter((d) => d.id === bank.receiptId).length, 1);
+
+  // Display history must not move canonical money (no double-count via deposits[]).
+  const { assertProjectionsDoNotMoveMoney } = await import("../../functions/domain/finance.mjs");
+  const proj = assertProjectionsDoNotMoveMoney({
+    obligations: db.dump("obligations").filter((o) => o.period === building.period),
+    receipts: db.dump("receipts"),
+    deposits: dash.deposits,
+    expenses: [],
+    asOfDate: "2026-09-15",
+  });
+  assert.equal(proj.ok, true, JSON.stringify(proj.problems));
 });
 
 test("M6c rejected bank history visible to submitting employee after reload, not to other employee", async () => {
