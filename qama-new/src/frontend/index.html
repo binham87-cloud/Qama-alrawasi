@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="FINANCIAL-CANON-20260913T1855Z"/>
-<title>قمة الرواسي · FINANCIAL-CANON-20260913T1855Z</title>
+<meta name="qama-ui-build" content="PAYMENT-STATE-20260913T1935Z"/>
+<title>قمة الرواسي · PAYMENT-STATE-20260913T1935Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -359,6 +359,12 @@ function mergeDraftStatus(mapped, extra, sp) {
   if (draft === "collected") {
     if (isStaleCollectDraft(extra, sp)) {
       // Pre-uncollect «محصّل» extras must not reopen as collect draft.
+      return out;
+    }
+    // After bank reject / reverse, engine money status wins — never restore a
+    // hardcoded «محصّل» from extras when there is no pending bank awaiting approval.
+    const pendingBank = receipts.some((r) => r && r.method === "bank" && r.state === "pending");
+    if ((eng === "late" || eng === "partial" || eng === "not_due") && !pendingBank) {
       return out;
     }
     // Keep editor intent via _collectDraft only — NEVER force status:"collected"
@@ -3861,16 +3867,24 @@ function moneyText(n){return Number(n||0).toLocaleString();}
 
 /**
  * Canonical money for UI cards. Prefer engine periodSummary (S._dash.summary).
- * Display-only bank history / pending / rejected / reversed never contribute.
- * Fallback sums only financially effective custody deposit rows (approved, not display-only).
+ * Pending / rejected / reversed never contribute.
+ * Approved bank history (recognized receipt projection) counts toward deposited/income.
+ * Custody deposits count only when approved.
  */
 function financiallyEffectiveTxAed(t){
   if(!t) return 0;
-  if(t._displayOnly || t._fromBankReceipt || t.sourceKind==="bank") return 0;
   const st=String(t._state||"");
   if(st==="pending"||st==="rejected"||st==="reversed") return 0;
+  if(t._fromBankReceipt || t.sourceKind==="bank"){
+    // Recognized bank → history row state "approved"; counts once as deposited income.
+    return (st==="approved"||st==="recognized") ? (Number(t.amount)||0) : 0;
+  }
   if(st && st!=="approved" && st!=="recognized") return 0;
   return Number(t.amount)||0;
+}
+/** تفاصيل الدخل = financially effective rows only (not audit/history). */
+function isIncomeDetailRow(t){
+  return financiallyEffectiveTxAed(t)>0;
 }
 function engineSummary(){
   return (typeof S!=="undefined" && S._dash && S._dash.summary) ? S._dash.summary : null;
@@ -4602,7 +4616,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI FINANCIAL-CANON-20260913T1855Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI PAYMENT-STATE-20260913T1935Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -4830,7 +4844,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI FINANCIAL-CANON-20260913T1855Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI PAYMENT-STATE-20260913T1935Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -5920,6 +5934,8 @@ function renderApp(){
     const netTotal=_engFin && _engFin.netIncomeFils!=null
       ? (Number(_engFin.netIncomeFils)||0)/100
       : totalIncome-totalExp;
+    // تفاصيل الدخل = financial projection only (approved/recognized effect). Audit keeps rejected/pending elsewhere.
+    const incomeDetailList=txList.filter(isIncomeDetailRow);
     const sched=ensureInstallmentSchedule(S.installmentSchedule);
     S.installmentSchedule=sched;
     const nextIdx=sched.findIndex(x=>!x.paid);
@@ -6445,12 +6461,12 @@ function renderApp(){
           wrap.appendChild(h("div",{style:{display:"flex",gap:"8px"}},[saveB,cancelB]));
           return wrap;
         })():null,
-        txList.length===0?h("div",{style:{padding:"16px",textAlign:"center",color:"#555",fontSize:"14px"}},["لا توجد إيداعات"]):
-          h("div",{},txList.map((t,i)=>h("div",{style:{padding:"10px 14px",borderBottom:i<txList.length-1?"1px solid #161616":"none",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"10px"}},[
+        incomeDetailList.length===0?h("div",{style:{padding:"16px",textAlign:"center",color:"#555",fontSize:"14px"}},["لا توجد إيداعات"]):
+          h("div",{},incomeDetailList.map((t,i)=>h("div",{"data-testid":"income-detail-row",style:{padding:"10px 14px",borderBottom:i<incomeDetailList.length-1?"1px solid #161616":"none",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"10px"}},[
             h("div",{style:{flex:"1",minWidth:"0"}},[h("div",{style:{fontSize:"15px",color:"#fff"}},[
               ((t.sourceKind==="bank"||t.sourceLabel==="تحويل بنكي"||t._fromBankReceipt)?"تحويل بنكي — ":
               (t.sourceKind==="external"||t.sourceLabel==="إيداع آخر")?"إيداع آخر — ":"من العهدة — ")+(t.desc||"")
-            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._state==="pending"?" · قيد الاعتماد":(t._state==="rejected"?" · مرفوض":(t._state==="approved"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:""))))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
+            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._state==="approved"||t._state==="recognized"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:""))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
             h("div",{style:{display:"flex",alignItems:"center",gap:"8px",flexShrink:"0"}},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#4ade80"}},[Number(t.amount||0).toLocaleString()+" د.إ"]),
               (t._engineId||t.id)&&t._state!=="rejected"?h("button",{class:"btn",style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"7px",padding:"5px 8px",fontSize:"12px",fontWeight:"700"},

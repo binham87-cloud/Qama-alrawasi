@@ -5,7 +5,7 @@
   "type": "module",
   "description": "QAMA NEW — event-based rent collection",
   "scripts": {
-    "test": "node --test tests/domain/finance.test.mjs tests/integration/system.test.mjs tests/integration/scenario.test.mjs tests/integration/rental_cycle_commands.test.mjs tests/integration/month_nav_period.test.mjs tests/ui/reliability_static.test.mjs",
+    "test": "node --test tests/domain/finance.test.mjs tests/integration/system.test.mjs tests/integration/scenario.test.mjs tests/integration/rental_cycle_commands.test.mjs tests/integration/month_nav_period.test.mjs tests/integration/payment_reject_reverse_state.test.mjs tests/ui/reliability_static.test.mjs",
     "test:domain": "node --test tests/domain/finance.test.mjs",
     "test:system": "node --test tests/integration/system.test.mjs",
     "test:scenario": "node --test tests/integration/scenario.test.mjs",

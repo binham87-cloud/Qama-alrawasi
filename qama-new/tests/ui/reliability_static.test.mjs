@@ -87,7 +87,7 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /FINANCIAL-CANON-20260913T1855Z/);
+  assert.match(html, /PAYMENT-STATE-20260913T1935Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
@@ -116,19 +116,33 @@ test("month navigation clears stale dash and seeds period obligations for any ro
   const refreshSlice = bridge.slice(refreshAt, refreshAt + 500);
   assert.match(refreshSlice, /generateObligations/);
   assert.doesNotMatch(refreshSlice, /role === "owner"[\s\S]{0,120}generateObligations/);
-  assert.match(html, /FINANCIAL-CANON-20260913T1855Z/);
+  assert.match(html, /PAYMENT-STATE-20260913T1935Z/);
   assert.match(bridge, /sp\.cycleStart \|\| sp\.startDate/);
 });
 
 test("financial cards derive from canonicalIncomeAed / engine summary — not raw tx reduce", () => {
   assert.match(authSrc, /function canonicalIncomeAed/);
   assert.match(authSrc, /function financiallyEffectiveTxAed/);
-  assert.match(authSrc, /_displayOnly/);
+  assert.match(authSrc, /function isIncomeDetailRow/);
+  assert.match(authSrc, /incomeDetailList/);
   assert.match(html, /canonicalIncomeAed/);
   assert.match(html, /financiallyEffectiveTxAed/);
+  assert.match(html, /isIncomeDetailRow/);
+  assert.match(html, /incomeDetailList/);
   // Income/Net must not raw-reduce transactions including rejected bank history.
   assert.doesNotMatch(authSrc, /const totalIncome=txList\.reduce\(\(s,t\)=>s\+Number\(t\.amount/);
   assert.doesNotMatch(authSrc, /const totalTx=data\.transactions\.reduce\(\(s,t\)=>s\+\(Number\(t\.amount\)/);
   assert.doesNotMatch(html, /const totalIncome=txList\.reduce\(\(s,t\)=>s\+Number\(t\.amount/);
   assert.match(bridge, /_displayOnly:\s*!!d\.fromBankReceipt/);
+  assert.match(html, /_displayOnly:\s*!!d\.fromBankReceipt/);
+  // تفاصيل الدخل must not render raw txList (audit rows); uses incomeDetailList.
+  assert.match(authSrc, /incomeDetailList\.length===0/);
+  assert.match(html, /incomeDetailList\.length===0/);
+});
+
+test("mergeDraftStatus does not restore محصّل after reject when engine is late", () => {
+  const draft = readFileSync(resolve(root, "src/frontend/draft_partial_merge.mjs"), "utf8");
+  assert.match(draft, /pendingBank/);
+  assert.match(draft, /eng === "late"/);
+  assert.match(html, /pendingBank/);
 });

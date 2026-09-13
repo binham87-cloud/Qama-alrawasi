@@ -89,6 +89,12 @@ export function mergeDraftStatus(mapped, extra, sp) {
       // Pre-uncollect «محصّل» extras must not reopen as collect draft.
       return out;
     }
+    // After bank reject / reverse, engine money status wins — never restore a
+    // hardcoded «محصّل» from extras when there is no pending bank awaiting approval.
+    const pendingBank = receipts.some((r) => r && r.method === "bank" && r.state === "pending");
+    if ((eng === "late" || eng === "partial" || eng === "not_due") && !pendingBank) {
+      return out;
+    }
     // Keep editor intent via _collectDraft only — NEVER force status:"collected"
     // without a recognized receipt (that caused Yahya محصّل vs Manager متأخر).
     out._collectDraft = true;

@@ -1229,6 +1229,15 @@ const HANDLERS = {
       ctx.tx.update("receipts", receipt.id, {
         state: RECEIPT_STATE.REVERSED, reversedByReversalId: reversalId, reversedAt: ctx.now,
       });
+      // Mirror reverseReceipt: bank money left the revenue ledger on approve — debit it back.
+      if (receipt.method === "bank") {
+        await debitRevenueAccount(ctx, {
+          amountFils: receipt.amountFils,
+          sourceType: "bank_receipt",
+          sourceId: receipt.id,
+          note: ctx.payload.reason,
+        });
+      }
       audit(ctx, "receipt_reversed", "receipt", receipt.id, {
         amountFils: receipt.amountFils, reason: ctx.payload.reason, reversalId,
       });

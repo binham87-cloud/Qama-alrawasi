@@ -143,6 +143,27 @@ export function isDisplayOnlyMoneyProjection(row) {
 }
 
 /**
+ * Whether a deposits[] / transactions projection row belongs in تفاصيل الدخل
+ * (financially effective now). Pending / rejected / reversed → audit only.
+ * Approved bank history (recognized receipt projection) → yes (deposited income).
+ */
+export function isFinancialIncomeDetailRow(row) {
+  if (!row || row.baselineExcluded === true) return false;
+  const st = String(row.state || "");
+  if (st === APPROVAL_STATE.PENDING || st === APPROVAL_STATE.REJECTED || st === APPROVAL_STATE.REVERSED) {
+    return false;
+  }
+  if (st === RECEIPT_STATE.PENDING || st === RECEIPT_STATE.REJECTED || st === RECEIPT_STATE.REVERSED) {
+    return false;
+  }
+  if (isDisplayOnlyMoneyProjection(row)) {
+    // bankReceiptHistoryRows maps recognized → "approved"
+    return st === APPROVAL_STATE.APPROVED || st === RECEIPT_STATE.RECOGNIZED;
+  }
+  return isApproved(row);
+}
+
+/**
  * Canonical money effect of one receipt on *current* totals.
  * pending / rejected / reversed / unrecognized → all zeros (audit only).
  *
