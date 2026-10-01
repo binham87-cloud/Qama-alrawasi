@@ -682,25 +682,32 @@ export function profitTransfersFils(profits) {
 }
 
 /**
- * Monthly operating Net after profit transfers only.
- * Paid installments are financing / balance-sheet outflows — NEVER subtracted here
- * and never treated as operating expenses.
+ * Canonical monthly operating Net for the selected period.
+ *
+ *   operatingNetFils = canonicalIncomeFils − canonicalOperatingExpensesFils
+ *
+ * NEVER subtracts: owner profit transfers, installment payments, balance/internal
+ * transfers, owner withdrawals, or pending/rejected/reversed records.
+ * Those affect account balances / liquidity only — not monthly operating Net.
  */
-export function netAfterProfitFils({
+export function operatingNetFils({
   incomeFils = 0,
   expensesFils = 0,
-  profitTransferFils = 0,
 } = {}) {
-  return (
-    Number(incomeFils || 0)
-    - Number(expensesFils || 0)
-    - Number(profitTransferFils || 0)
-  );
+  return Number(incomeFils || 0) - Number(expensesFils || 0);
 }
 
-/** @deprecated Use netAfterProfitFils — installments are not part of monthly operating Net. */
+/**
+ * @deprecated Use operatingNetFils. Kept as an alias that MUST equal operating Net
+ * (profit transfers are NOT deducted).
+ */
+export function netAfterProfitFils(args = {}) {
+  return operatingNetFils(args);
+}
+
+/** @deprecated Use operatingNetFils — installments/profit transfers are not part of monthly operating Net. */
 export function netAfterProfitAndInstallmentFils(args = {}) {
-  return netAfterProfitFils(args);
+  return operatingNetFils(args);
 }
 
 /** Stable financial identity for one installment payment (never Date.now()). */

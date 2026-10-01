@@ -87,7 +87,7 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /TARGET-INST-NET-20261001T1855Z/);
+  assert.match(html, /OPERATING-NET-20261001T2105Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
@@ -116,7 +116,7 @@ test("month navigation clears stale dash and seeds period obligations for any ro
   const refreshSlice = bridge.slice(refreshAt, refreshAt + 500);
   assert.match(refreshSlice, /generateObligations/);
   assert.doesNotMatch(refreshSlice, /role === "owner"[\s\S]{0,120}generateObligations/);
-  assert.match(html, /TARGET-INST-NET-20261001T1855Z/);
+  assert.match(html, /OPERATING-NET-20261001T2105Z/);
   assert.match(bridge, /sp\.cycleStart \|\| sp\.startDate/);
 });
 
@@ -151,11 +151,13 @@ test("Target cards use canonical eng.targetFils — no occupied+daily reduce for
   assert.doesNotMatch(authSrc, /occupied\.reduce\(\(s,x\)=>s\+x\.rent,0\)\+\(mData\.dailyBookings/);
   assert.match(authSrc, /const targetTotal=_vTarget/);
   assert.match(html, /const targetTotal=_vTarget/);
-  assert.match(authSrc, /netAfterProfitFils/);
-  assert.match(html, /netAfterProfitFils/);
-  assert.match(authSrc, /\["بعد الأرباح"\]/);
+  assert.match(authSrc, /operatingNetFils/);
+  assert.match(html, /operatingNetFils/);
+  assert.match(authSrc, /\["صافي الشهر"\]/);
+  assert.doesNotMatch(authSrc, /بعد الأرباح/);
   assert.doesNotMatch(authSrc, /بعد الأرباح والقسط/);
   assert.doesNotMatch(authSrc, /totalTx-totalExp-totalProfit-totalInstallments/);
+  assert.doesNotMatch(authSrc, /totalTx-totalExp-totalProfit;/);
 });
 
 test("installment pay patches dash before loadBalances; no UI success-log on pay", () => {

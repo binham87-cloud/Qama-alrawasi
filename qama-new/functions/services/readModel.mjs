@@ -8,7 +8,7 @@ import {
   periodSummary, obligationView, holdingByEmployee, sharedHoldingFils, checkInvariants,
   deriveStatus, dueDateFor, liveObligationsForPeriod,
   dailyBookingsTargetFils, paidInstallmentsFilsForPeriod, profitTransfersFils,
-  netAfterProfitFils,
+  operatingNetFils,
 } from "../domain/finance.mjs";
 import { nextCycleStart, renewButtonVisible } from "../domain/rental_cycle.mjs";
 
@@ -29,9 +29,9 @@ function applyDailyBookingTarget(summary, dailyBookings) {
 }
 
 /**
- * Monthly operating Net = Income − approved Expenses − profit transfers.
- * Paid installments are exposed separately for the installment section only —
- * never folded into operating Net / expenses.
+ * Monthly operating Net = Income − approved Operating Expenses ONLY.
+ * Profit transfers and paid installments are exposed separately for their
+ * dedicated UI/history/liquidity tracks — never folded into operating Net.
  */
 function applyOperatingNet(summary, { extras, balances }) {
   const profitTransferFils = profitTransfersFils(extras && extras.profits);
@@ -43,16 +43,15 @@ function applyOperatingNet(summary, { extras, balances }) {
     ? paidInstallmentsFilsForPeriod(sched, period)
     : 0;
   summary.profitTransferFils = profitTransferFils;
-  // Financing outflow only — not an operating expense / not in monthly P&L Net.
+  // Financing / distribution outflows only — not operating expenses / not in Net.
   summary.paidInstallmentFils = paidInstallmentFils;
-  summary.netAfterProfitFils = netAfterProfitFils({
+  summary.operatingNetFils = operatingNetFils({
     incomeFils: summary.incomeFils,
     expensesFils: summary.expensesFils,
-    profitTransferFils,
   });
-  // Alias kept so older UI builds reading the previous field name stay consistent
-  // with the corrected (installment-excluded) operating Net.
-  summary.netAfterProfitInstallmentFils = summary.netAfterProfitFils;
+  // Backward-compat aliases — MUST equal operatingNetFils (no profit/installment deduction).
+  summary.netAfterProfitFils = summary.operatingNetFils;
+  summary.netAfterProfitInstallmentFils = summary.operatingNetFils;
   return summary;
 }
 
