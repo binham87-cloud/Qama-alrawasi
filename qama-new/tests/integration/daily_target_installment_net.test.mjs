@@ -9,7 +9,7 @@ import {
 import { buildDashboardFromDump } from "../../functions/services/readModel.mjs";
 import {
   dailyBookingsTargetFils, isValidDailyBooking, paidInstallmentsFilsForPeriod,
-  netAfterProfitAndInstallmentFils, installmentPaymentId,
+  netAfterProfitFils, installmentPaymentId,
 } from "../../functions/domain/finance.mjs";
 
 async function setup() {
@@ -93,7 +93,7 @@ test("daily Target: Sep↔Oct↔Sep no duplicate; crossing-month booking counts 
   assert.equal(oct.summary.dailyTargetFils, 0);
 });
 
-test("payInstallment: one debit + one audit; retry/double-tap alreadyApplied; Net subtracts paid only", async () => {
+test("payInstallment: one debit + one audit; retry/double-tap alreadyApplied; Net ignores installment", async () => {
   const { db, owner } = await setup();
   const schedule = [
     { date: "2026-06-30", amount: 179294, paid: true, paymentId: "instpay:2026-06-30" },
@@ -117,19 +117,15 @@ test("payInstallment: one debit + one audit; retry/double-tap alreadyApplied; Ne
     { id: 1, amount: 300000, date: "2026-09-01" },
   ]);
 
-  // Seed deposited income + approved expense via dump-level receipts/deposits already from seedBuilding.
-  // Net before Sep installment uses paidInstallmentFils=0 for Sep.
   const before = buildDashboardFromDump(db, "2026-09", "2026-09-30");
   assert.equal(before.summary.paidInstallmentFils, 0);
-  assert.equal(
-    before.summary.netAfterProfitInstallmentFils,
-    netAfterProfitAndInstallmentFils({
-      incomeFils: before.summary.incomeFils,
-      expensesFils: before.summary.expensesFils,
-      profitTransferFils: before.summary.profitTransferFils,
-      paidInstallmentFils: 0,
-    }),
-  );
+  const operatingNetBefore = netAfterProfitFils({
+    incomeFils: before.summary.incomeFils,
+    expensesFils: before.summary.expensesFils,
+    profitTransferFils: before.summary.profitTransferFils,
+  });
+  assert.equal(before.summary.netAfterProfitFils, operatingNetBefore);
+  assert.equal(before.summary.netAfterProfitInstallmentFils, operatingNetBefore);
 
   const amountFils = 17929400;
   const token = "instpay-2026-09-30-17929400";
@@ -169,10 +165,17 @@ test("payInstallment: one debit + one audit; retry/double-tap alreadyApplied; Ne
   assert.equal(cfg.installmentPayments.filter((p) => p.state === "applied" && p.installmentDate === "2026-09-30").length, 1);
 
   const after = buildDashboardFromDump(db, "2026-09", "2026-09-30");
+  // Financing track is visible separately…
   assert.equal(after.summary.paidInstallmentFils, 17929400);
   assert.equal(after.summary.profitTransferFils, 30000000);
+  // …but monthly operating Net must NOT subtract the installment.
   assert.equal(
-    after.summary.netAfterProfitInstallmentFils,
+    after.summary.netAfterProfitFils,
+    after.summary.incomeFils - after.summary.expensesFils - 30000000,
+  );
+  assert.equal(after.summary.netAfterProfitFils, before.summary.netAfterProfitFils);
+  assert.notEqual(
+    after.summary.netAfterProfitFils,
     after.summary.incomeFils - after.summary.expensesFils - 30000000 - 17929400,
   );
 
@@ -206,6 +209,7 @@ test("payInstallment: one debit + one audit; retry/double-tap alreadyApplied; Ne
   assert.equal(rev.installmentBalance, 366000);
   const afterRev = buildDashboardFromDump(db, "2026-09", "2026-09-30");
   assert.equal(afterRev.summary.paidInstallmentFils, 0);
+  assert.equal(afterRev.summary.netAfterProfitFils, after.summary.netAfterProfitFils);
 
   const rev2 = await run(db, owner, "reverseInstallment", {
     installmentDate: "2026-09-30",

@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="TARGET-INST-NET-20261001T1845Z"/>
-<title>قمة الرواسي · TARGET-INST-NET-20261001T1845Z</title>
+<meta name="qama-ui-build" content="TARGET-INST-NET-20261001T1855Z"/>
+<title>قمة الرواسي · TARGET-INST-NET-20261001T1855Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -4640,7 +4640,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI TARGET-INST-NET-20261001T1845Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI TARGET-INST-NET-20261001T1855Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -4714,15 +4714,7 @@ function renderApp(){
   const totalProfit=_engTop && _engTop.profitTransferFils!=null
     ? (Number(_engTop.profitTransferFils)||0)/100
     : data.profits.reduce((s,t)=>s+(Number(t.amount)||0),0);
-  // Only successfully paid canonical installments in this period (not UI extras / unpaid due).
-  const _periodKey=typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"));
-  const totalInstallments=_engTop && _engTop.paidInstallmentFils!=null
-    ? (Number(_engTop.paidInstallmentFils)||0)/100
-    : (Array.isArray(S.installmentSchedule)?S.installmentSchedule:[]).reduce((s,row)=>{
-      if(!row||!row.paid) return s;
-      if(String(row.date||"").slice(0,7)!==_periodKey) return s;
-      return s+(Number(row.amount)||0);
-    },0);
+  // Installments are financing outflows — never part of monthly operating Net/expenses.
 
   const smallBtnStyle={background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"7px",padding:"4px 8px",fontSize:"15px"};
   const dangerBtnStyle={background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"8px",fontSize:"14px",fontWeight:"700"};
@@ -4878,7 +4870,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI TARGET-INST-NET-20261001T1845Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI TARGET-INST-NET-20261001T1855Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -4915,10 +4907,11 @@ function renderApp(){
   // ======= OVERVIEW =======
   let content;
   if(S.tab==="overview" && isOwner){
-    // Canonical Net (label: بعد الأرباح والقسط) = Income − Expenses − Profit transfers − PAID installments.
-    const net=_engTop && _engTop.netAfterProfitInstallmentFils!=null
-      ? (Number(_engTop.netAfterProfitInstallmentFils)||0)/100
-      : totalTx-totalExp-totalProfit-totalInstallments;
+    // Monthly operating Net = Income − Expenses − Profit transfers.
+    // Paid installments are financing/balance-sheet only — never subtracted here.
+    const net=_engTop && (_engTop.netAfterProfitFils!=null || _engTop.netAfterProfitInstallmentFils!=null)
+      ? (Number(_engTop.netAfterProfitFils ?? _engTop.netAfterProfitInstallmentFils)||0)/100
+      : totalTx-totalExp-totalProfit;
     const recentLogs=(data.logs||[]).slice(0,12);
     const addMoneyForm=(type)=>{
       const isProfit=type==="profit";
@@ -4973,7 +4966,7 @@ function renderApp(){
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"14px"}},[
         h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["دخل الشهر"]),h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#4ade80"}},[totalTx.toLocaleString()]),h("div",{style:{fontSize:"14px",color:"#444"}},["د.إ"])]),
         h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["المصروفات"]),h("div",{style:{fontSize:"20px",fontWeight:"900",color:"#f87171"}},[totalExp.toLocaleString()]),h("div",{style:{fontSize:"14px",color:"#444"}},["د.إ"])]),
-        h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["الصافي"]),h("div",{style:{fontSize:"20px",fontWeight:"900",color:net>=0?"#60a5fa":"#f87171"}},[net.toLocaleString()]),h("div",{style:{fontSize:"14px",color:"#444"}},["بعد الأرباح والقسط"])]),
+        h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["الصافي"]),h("div",{style:{fontSize:"20px",fontWeight:"900",color:net>=0?"#60a5fa":"#f87171"}},[net.toLocaleString()]),h("div",{style:{fontSize:"14px",color:"#444"}},["بعد الأرباح"])]),
         h("div",{class:"card",style:{padding:"14px"}},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"4px"}},["شواغر / متأخرات"]),h("div",{style:{fontSize:"18px",fontWeight:"900",color:"#fb923c"}},[vacantList.length+" / "+lateList.length]),h("div",{style:{fontSize:"14px",color:"#444"}},["بارتشن"])]),
       ]),
       h("div",{class:"card",style:{padding:"16px",marginBottom:"14px",border:"1px solid #1e3a2e"}},[
@@ -5968,8 +5961,8 @@ function renderApp(){
     // Income/Net from periodSummary — never sum display-only bank history / pending / rejected.
     const totalIncome=canonicalIncomeAed(_engFin, txList);
     const totalExp=canonicalExpensesAed(_engFin, expList);
-    const netTotal=_engFin && _engFin.netAfterProfitInstallmentFils!=null
-      ? (Number(_engFin.netAfterProfitInstallmentFils)||0)/100
+    const netTotal=_engFin && (_engFin.netAfterProfitFils!=null || _engFin.netAfterProfitInstallmentFils!=null)
+      ? (Number(_engFin.netAfterProfitFils ?? _engFin.netAfterProfitInstallmentFils)||0)/100
       : (_engFin && _engFin.netIncomeFils!=null
         ? (Number(_engFin.netIncomeFils)||0)/100
         : totalIncome-totalExp);

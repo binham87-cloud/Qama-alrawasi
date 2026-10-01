@@ -682,21 +682,25 @@ export function profitTransfersFils(profits) {
 }
 
 /**
- * Net after profits and paid installments (matches UI label الصافي — بعد الأرباح والقسط).
- * Unpaid / failed / reversed installments do not subtract.
+ * Monthly operating Net after profit transfers only.
+ * Paid installments are financing / balance-sheet outflows — NEVER subtracted here
+ * and never treated as operating expenses.
  */
-export function netAfterProfitAndInstallmentFils({
+export function netAfterProfitFils({
   incomeFils = 0,
   expensesFils = 0,
   profitTransferFils = 0,
-  paidInstallmentFils = 0,
 } = {}) {
   return (
     Number(incomeFils || 0)
     - Number(expensesFils || 0)
     - Number(profitTransferFils || 0)
-    - Number(paidInstallmentFils || 0)
   );
+}
+
+/** @deprecated Use netAfterProfitFils — installments are not part of monthly operating Net. */
+export function netAfterProfitAndInstallmentFils(args = {}) {
+  return netAfterProfitFils(args);
 }
 
 /** Stable financial identity for one installment payment (never Date.now()). */

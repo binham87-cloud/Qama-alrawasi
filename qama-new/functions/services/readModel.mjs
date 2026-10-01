@@ -8,7 +8,7 @@ import {
   periodSummary, obligationView, holdingByEmployee, sharedHoldingFils, checkInvariants,
   deriveStatus, dueDateFor, liveObligationsForPeriod,
   dailyBookingsTargetFils, paidInstallmentsFilsForPeriod, profitTransfersFils,
-  netAfterProfitAndInstallmentFils,
+  netAfterProfitFils,
 } from "../domain/finance.mjs";
 import { nextCycleStart, renewButtonVisible } from "../domain/rental_cycle.mjs";
 
@@ -28,8 +28,12 @@ function applyDailyBookingTarget(summary, dailyBookings) {
   return summary;
 }
 
-/** Attach Net-after-profits-and-paid-installments from extras + balances schedule. */
-function applyNetAfterProfitInstallment(summary, { extras, balances }) {
+/**
+ * Monthly operating Net = Income − approved Expenses − profit transfers.
+ * Paid installments are exposed separately for the installment section only —
+ * never folded into operating Net / expenses.
+ */
+function applyOperatingNet(summary, { extras, balances }) {
   const profitTransferFils = profitTransfersFils(extras && extras.profits);
   const sched = balances && Array.isArray(balances.installmentSchedule)
     ? balances.installmentSchedule
@@ -39,13 +43,16 @@ function applyNetAfterProfitInstallment(summary, { extras, balances }) {
     ? paidInstallmentsFilsForPeriod(sched, period)
     : 0;
   summary.profitTransferFils = profitTransferFils;
+  // Financing outflow only — not an operating expense / not in monthly P&L Net.
   summary.paidInstallmentFils = paidInstallmentFils;
-  summary.netAfterProfitInstallmentFils = netAfterProfitAndInstallmentFils({
+  summary.netAfterProfitFils = netAfterProfitFils({
     incomeFils: summary.incomeFils,
     expensesFils: summary.expensesFils,
     profitTransferFils,
-    paidInstallmentFils,
   });
+  // Alias kept so older UI builds reading the previous field name stay consistent
+  // with the corrected (installment-excluded) operating Net.
+  summary.netAfterProfitInstallmentFils = summary.netAfterProfitFils;
   return summary;
 }
 
@@ -83,7 +90,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   summary._period = period;
   applyDailyBookingTarget(summary, dailyBookings);
   const balances = (ui.config && ui.config.balances) || {};
-  applyNetAfterProfitInstallment(summary, { extras: ui.extras || {}, balances });
+  applyOperatingNet(summary, { extras: ui.extras || {}, balances });
   // Recalc at-employees after cashOnObligations already includes daily cash in periodSummary.
   const monthDepositCover = Math.min(
     Number(summary.approvedDepositsFils || 0),
@@ -573,7 +580,7 @@ export function buildDashboardFromDump(db, period, asOfDate) {
         : (balDocs[0].data || balDocs[0] || {});
     } catch { balances = {}; }
   }
-  applyNetAfterProfitInstallment(summary, { extras, balances });
+  applyOperatingNet(summary, { extras, balances });
 
   const approvedAll = allDeposits
     .filter((d) => d.state === "approved" && d.sourceKind !== "external")
