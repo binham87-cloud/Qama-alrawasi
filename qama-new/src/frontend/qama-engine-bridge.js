@@ -83,7 +83,17 @@ const MONEY_MUTATION_COMMANDS = new Set([
   "uncollectObligation", "reverseReceipt",
   "submitDeposit", "approveDeposit", "reverseDeposit", "rejectDeposit",
   "submitExpense", "reverseExpense", "rejectExpense",
+  "payInstallment", "reverseInstallment",
 ]);
+
+/** Keep S._dash.ui.config.balances aligned after canonical installment commands. */
+function patchDashBalances( partial ) {
+  if (!S._dash) S._dash = {};
+  if (!S._dash.ui) S._dash.ui = {};
+  if (!S._dash.ui.config) S._dash.ui.config = {};
+  const prev = S._dash.ui.config.balances || {};
+  S._dash.ui.config.balances = { ...prev, ...partial };
+}
 /**
  * Run a command with an optional stable operationId.
  * Non-money IDEMPOTENCY_PAYLOAD_MISMATCH (stale opId reused for a NEW edit)

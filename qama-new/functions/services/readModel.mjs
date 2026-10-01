@@ -4,8 +4,50 @@
  * Derived, never authoritative. It calls the SAME domain module the commands use, so no
  * screen can disagree with a command about a number.
  */
-import { periodSummary, obligationView, holdingByEmployee, sharedHoldingFils, checkInvariants, deriveStatus, dueDateFor, liveObligationsForPeriod } from "../domain/finance.mjs";
+import {
+  periodSummary, obligationView, holdingByEmployee, sharedHoldingFils, checkInvariants,
+  deriveStatus, dueDateFor, liveObligationsForPeriod,
+  dailyBookingsTargetFils, paidInstallmentsFilsForPeriod, profitTransfersFils,
+  netAfterProfitAndInstallmentFils,
+} from "../domain/finance.mjs";
 import { nextCycleStart, renewButtonVisible } from "../domain/rental_cycle.mjs";
+
+/** Fold valid daily booking Target into period summary (payment status is separate). */
+function applyDailyBookingTarget(summary, dailyBookings) {
+  const dailyTargetFils = dailyBookingsTargetFils(dailyBookings);
+  const dailyPaidFils = Number(summary.dailyPaidFils || 0);
+  const obligationTargetFils = Number(summary.targetFils || 0) - dailyPaidFils;
+  const obligationUnpaidFils = Number(summary.remainingFils ?? summary.tenantUnpaidFils ?? 0);
+  summary.dailyTargetFils = dailyTargetFils;
+  summary.obligationTargetFils = obligationTargetFils;
+  // ONE canonical Target: monthly recurring + ALL valid daily obligations (paid or unpaid).
+  summary.targetFils = obligationTargetFils + dailyTargetFils;
+  const dailyUnpaidFils = Math.max(0, dailyTargetFils - dailyPaidFils);
+  summary.tenantUnpaidFils = obligationUnpaidFils + dailyUnpaidFils;
+  summary.remainingFils = summary.targetFils - Number(summary.collectedFils || 0);
+  return summary;
+}
+
+/** Attach Net-after-profits-and-paid-installments from extras + balances schedule. */
+function applyNetAfterProfitInstallment(summary, { extras, balances }) {
+  const profitTransferFils = profitTransfersFils(extras && extras.profits);
+  const sched = balances && Array.isArray(balances.installmentSchedule)
+    ? balances.installmentSchedule
+    : [];
+  const period = summary._period || null;
+  const paidInstallmentFils = period
+    ? paidInstallmentsFilsForPeriod(sched, period)
+    : 0;
+  summary.profitTransferFils = profitTransferFils;
+  summary.paidInstallmentFils = paidInstallmentFils;
+  summary.netAfterProfitInstallmentFils = netAfterProfitAndInstallmentFils({
+    incomeFils: summary.incomeFils,
+    expensesFils: summary.expensesFils,
+    profitTransferFils,
+    paidInstallmentFils,
+  });
+  return summary;
+}
 
 export async function buildDashboard({ db, viewer, period, asOfDate }) {
   const [periodObligations, allObligations, receipts, deposits, expenses, spaces, units, users, accounts, allReceipts, allDeposits, rentals] = await Promise.all([
@@ -35,20 +77,13 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   summary.custody = collectedBy;
 
   // Daily booking targets live in uiPeriods extras (not obligations).
-  // periodSummary already folded recognized daily receipts into paid/collected/target(paid portion).
+  // periodSummary already folded recognized daily receipts into paid/collected.
   const ui = await buildUiBundle({ db, period });
   const dailyBookings = (ui.extras && ui.extras.dailyBookings) || [];
-  const dailyTargetFils = dailyBookings.reduce((s, b) => {
-    const aed = Number(b.total || 0);
-    return s + (Number.isFinite(aed) ? Math.round(aed * 100) : 0);
-  }, 0);
-  const dailyPaidFils = Number(summary.dailyPaidFils || 0);
-  const dailyUnpaidFils = Math.max(0, dailyTargetFils - dailyPaidFils);
-  if (dailyUnpaidFils > 0) {
-    summary.targetFils += dailyUnpaidFils;
-    summary.tenantUnpaidFils += dailyUnpaidFils;
-    summary.remainingFils += dailyUnpaidFils;
-  }
+  summary._period = period;
+  applyDailyBookingTarget(summary, dailyBookings);
+  const balances = (ui.config && ui.config.balances) || {};
+  applyNetAfterProfitInstallment(summary, { extras: ui.extras || {}, balances });
   // Recalc at-employees after cashOnObligations already includes daily cash in periodSummary.
   const monthDepositCover = Math.min(
     Number(summary.approvedDepositsFils || 0),
@@ -527,17 +562,18 @@ export function buildDashboardFromDump(db, period, asOfDate) {
       : (uiPeriods[0].extras || {}))
     : {};
   const dailyBookings = extras.dailyBookings || [];
-  const dailyTargetFils = dailyBookings.reduce((s, b) => {
-    const aed = Number(b.total || 0);
-    return s + (Number.isFinite(aed) ? Math.round(aed * 100) : 0);
-  }, 0);
-  const dailyPaidFils = Number(summary.dailyPaidFils || 0);
-  const dailyUnpaidFils = Math.max(0, dailyTargetFils - dailyPaidFils);
-  if (dailyUnpaidFils > 0) {
-    summary.targetFils += dailyUnpaidFils;
-    summary.tenantUnpaidFils += dailyUnpaidFils;
-    summary.remainingFils += dailyUnpaidFils;
+  summary._period = period;
+  applyDailyBookingTarget(summary, dailyBookings);
+  const balDocs = dump("uiConfig").filter((d) => d.id === "balances");
+  let balances = {};
+  if (balDocs[0]) {
+    try {
+      balances = typeof balDocs[0].json === "string"
+        ? JSON.parse(balDocs[0].json || "{}")
+        : (balDocs[0].data || balDocs[0] || {});
+    } catch { balances = {}; }
   }
+  applyNetAfterProfitInstallment(summary, { extras, balances });
 
   const approvedAll = allDeposits
     .filter((d) => d.state === "approved" && d.sourceKind !== "external")

@@ -1501,9 +1501,7 @@ const HANDLERS = {
   async upsertUiConfig(ctx) {
     const id = ctx.payload.configId;
     parseJsonField(ctx.payload.json, "json");
-    const rec = {
-      id, json: ctx.payload.json, updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
-    };
+    let jsonOut = ctx.payload.json;
     const existing = await ctx.tx.get("uiConfig", id);
     let beforeRev = null;
     let afterRev = null;
@@ -1513,8 +1511,49 @@ const HANDLERS = {
         const nextObj = JSON.parse(ctx.payload.json || "{}");
         beforeRev = Number(prevObj.revenueBalance);
         afterRev = Number(nextObj.revenueBalance);
+        // Guard: upsertUiConfig must not silently unpay / restore deduction balance.
+        // Only payInstallment / reverseInstallment may flip paid or debit/credit that ledger.
+        const prevSched = Array.isArray(prevObj.installmentSchedule) ? prevObj.installmentSchedule : [];
+        const prevPays = Array.isArray(prevObj.installmentPayments) ? prevObj.installmentPayments : [];
+        let nextSched = Array.isArray(nextObj.installmentSchedule) ? nextObj.installmentSchedule.slice() : null;
+        let nextPays = Array.isArray(nextObj.installmentPayments) ? nextObj.installmentPayments.slice() : null;
+        if (nextSched == null) nextSched = prevSched.slice();
+        if (nextPays == null) nextPays = prevPays.slice();
+        if (nextObj.installmentBalance == null && prevObj.installmentBalance != null) {
+          nextObj.installmentBalance = prevObj.installmentBalance;
+        }
+        const prevByDate = new Map(prevSched.map((r) => [String(r && r.date), r]));
+        let blockedUnpay = false;
+        for (let i = 0; i < nextSched.length; i++) {
+          const row = nextSched[i] || {};
+          const prev = prevByDate.get(String(row.date));
+          if (prev && prev.paid && !row.paid) {
+            nextSched[i] = { ...prev };
+            blockedUnpay = true;
+          }
+        }
+        for (const p of prevPays) {
+          if (!p || p.state !== "applied") continue;
+          if (!nextPays.some((x) => x && x.id === p.id && x.state === "applied")) {
+            nextPays.push(p);
+            blockedUnpay = true;
+          }
+        }
+        if (blockedUnpay) {
+          const prevBal = Number(prevObj.installmentBalance || 0);
+          const nextBal = Number(nextObj.installmentBalance);
+          if (Number.isFinite(nextBal) && nextBal > prevBal) {
+            nextObj.installmentBalance = prevBal;
+          }
+        }
+        nextObj.installmentSchedule = nextSched;
+        nextObj.installmentPayments = nextPays;
+        jsonOut = JSON.stringify(nextObj);
       } catch { /* ignore parse */ }
     }
+    const rec = {
+      id, json: jsonOut, updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
+    };
     if (existing) ctx.tx.update("uiConfig", id, rec);
     else ctx.tx.create("uiConfig", id, { ...rec, ...base(ctx) });
     if (id === "balances" && beforeRev != null && afterRev != null && beforeRev !== afterRev) {
@@ -1532,18 +1571,22 @@ const HANDLERS = {
 
   /**
    * Atomic installment pay: mark one schedule row paid + debit installmentBalance.
-   * Concurrent sessions / lost-response retries are safe via operationId + paid guard.
+   * Concurrent sessions / lost-response retries are safe via operationId + paid guard
+   * + stable paymentId `instpay:YYYY-MM-DD` (never Date.now()).
    * Plan is open-ended: after paying the last unpaid row, append the next quarterly row.
+   * Audit is written ONLY after canonical success (not on alreadyApplied).
    */
   async payInstallment(ctx) {
     const date = ctx.payload.installmentDate;
     const amountFils = ctx.payload.amountFils;
     const amountAed = Math.round(amountFils) / 100;
+    const paymentId = `instpay:${date}`;
     const existing = await ctx.tx.get("uiConfig", "balances");
     if (!existing) throw new DomainError("BALANCES_NOT_FOUND");
     let obj = {};
     try { obj = JSON.parse(existing.json || "{}"); } catch { obj = {}; }
     const sched = Array.isArray(obj.installmentSchedule) ? obj.installmentSchedule.slice() : [];
+    const payments = Array.isArray(obj.installmentPayments) ? obj.installmentPayments.slice() : [];
     const idx = sched.findIndex((x) => String(x && x.date) === date);
     if (idx < 0) throw new DomainError("INSTALLMENT_NOT_FOUND", { installmentDate: date });
     const row = sched[idx] || {};
@@ -1553,13 +1596,16 @@ const HANDLERS = {
         installmentDate: date, expectedFils: rowFils, gotFils: amountFils,
       });
     }
-    if (row.paid) {
+    const priorPayment = payments.find((p) => p && p.id === paymentId && p.state === "applied");
+    if (row.paid || priorPayment) {
       return {
         alreadyApplied: true,
+        paymentId,
         installmentDate: date,
         installmentBalance: Number(obj.installmentBalance || 0),
         paidCount: sched.filter((x) => x && x.paid).length,
         installmentSchedule: sched,
+        installmentPayments: payments,
       };
     }
     const bal = Number(obj.installmentBalance || 0);
@@ -1574,6 +1620,7 @@ const HANDLERS = {
       paid: true,
       paidAt: ctx.now,
       paidBy: ctx.actor.userId,
+      paymentId,
       evidence: row.evidence || "payInstallment",
       reversedAt: null,
       reversedBy: null,
@@ -1587,7 +1634,18 @@ const HANDLERS = {
         paid: false,
       });
     }
+    payments.push({
+      id: paymentId,
+      installmentDate: date,
+      amountFils,
+      state: "applied",
+      paidAt: ctx.now,
+      paidBy: ctx.actor.userId,
+      balanceAfterAed: nextBal,
+      operationId: ctx.operationId,
+    });
     obj.installmentSchedule = sched;
+    obj.installmentPayments = payments;
     obj.installmentBalance = nextBal;
     obj.updatedAt = ctx.now;
     ctx.tx.update("uiConfig", "balances", {
@@ -1596,50 +1654,71 @@ const HANDLERS = {
       updatedBy: ctx.actor.userId,
       schemaVersion: 1,
     });
+    // Canonical success FIRST — then exactly one audit success entry.
     audit(ctx, "installment_paid", "uiConfig", `balances:installment:${date}`, {
-      amountFils, balanceAfterAed: nextBal,
+      amountFils, balanceAfterAed: nextBal, paymentId,
     });
     return {
       alreadyApplied: false,
+      paymentId,
       installmentDate: date,
       installmentBalance: nextBal,
       paidCount: sched.filter((x) => x && x.paid).length,
       installmentSchedule: sched,
+      installmentPayments: payments,
     };
   },
 
   /** Undo a paid installment: restore balance once; unpaid rows no longer count. */
   async reverseInstallment(ctx) {
     const date = ctx.payload.installmentDate;
+    const paymentId = `instpay:${date}`;
     const existing = await ctx.tx.get("uiConfig", "balances");
     if (!existing) throw new DomainError("BALANCES_NOT_FOUND");
     let obj = {};
     try { obj = JSON.parse(existing.json || "{}"); } catch { obj = {}; }
     const sched = Array.isArray(obj.installmentSchedule) ? obj.installmentSchedule.slice() : [];
+    const payments = Array.isArray(obj.installmentPayments) ? obj.installmentPayments.slice() : [];
     const idx = sched.findIndex((x) => String(x && x.date) === date);
     if (idx < 0) throw new DomainError("INSTALLMENT_NOT_FOUND", { installmentDate: date });
     const row = sched[idx] || {};
-    if (!row.paid) {
+    const livePay = payments.find((p) => p && p.id === paymentId && p.state === "applied");
+    if (!row.paid && !livePay) {
       return {
         alreadyApplied: true,
+        paymentId,
         installmentDate: date,
         installmentBalance: Number(obj.installmentBalance || 0),
         paidCount: sched.filter((x) => x && x.paid).length,
         installmentSchedule: sched,
+        installmentPayments: payments,
       };
     }
-    const amountAed = Number(row.amount) || 0;
+    const amountAed = Number(row.amount) || (livePay ? Number(livePay.amountFils || 0) / 100 : 0);
     const nextBal = Math.round((Number(obj.installmentBalance || 0) + amountAed) * 100) / 100;
     sched[idx] = {
       ...row,
       paid: false,
       paidAt: null,
       paidBy: null,
+      paymentId: null,
       evidence: null,
       reversedAt: ctx.now,
       reversedBy: ctx.actor.userId,
     };
+    const payIdx = payments.findIndex((p) => p && p.id === paymentId && p.state === "applied");
+    if (payIdx >= 0) {
+      payments[payIdx] = {
+        ...payments[payIdx],
+        state: "reversed",
+        reversedAt: ctx.now,
+        reversedBy: ctx.actor.userId,
+        reverseOperationId: ctx.operationId,
+        balanceAfterAed: nextBal,
+      };
+    }
     obj.installmentSchedule = sched;
+    obj.installmentPayments = payments;
     obj.installmentBalance = nextBal;
     obj.updatedAt = ctx.now;
     ctx.tx.update("uiConfig", "balances", {
@@ -1649,14 +1728,16 @@ const HANDLERS = {
       schemaVersion: 1,
     });
     audit(ctx, "installment_reversed", "uiConfig", `balances:installment:${date}`, {
-      amountAed, balanceAfterAed: nextBal,
+      amountAed, balanceAfterAed: nextBal, paymentId,
     });
     return {
       alreadyApplied: false,
+      paymentId,
       installmentDate: date,
       installmentBalance: nextBal,
       paidCount: sched.filter((x) => x && x.paid).length,
       installmentSchedule: sched,
+      installmentPayments: payments,
     };
   },
 

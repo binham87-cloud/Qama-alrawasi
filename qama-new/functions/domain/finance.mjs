@@ -639,3 +639,67 @@ export function daysInMonth(year, month1to12) {
 export function obligationIdFor(rentalId, period) {
   return `${rentalId}_${period}`;
 }
+
+/**
+ * Valid daily booking for Target: creates a financial obligation for the period
+ * regardless of paid/unpaid. Cancelled/deleted/reversed bookings are excluded.
+ */
+export function isValidDailyBooking(booking) {
+  if (!booking || typeof booking !== "object") return false;
+  if (booking.cancelled === true || booking.canceled === true || booking.deleted === true) return false;
+  if (booking.reversed === true || booking.baselineExcluded === true) return false;
+  const st = String(booking.status || "").toLowerCase();
+  if (st === "cancelled" || st === "canceled" || st === "deleted" || st === "reversed") return false;
+  const aed = Number(booking.total || 0);
+  return Number.isFinite(aed) && aed > 0;
+}
+
+/** Sum valid daily booking totals as integer fils. */
+export function dailyBookingsTargetFils(bookings) {
+  return (bookings || []).reduce((s, b) => {
+    if (!isValidDailyBooking(b)) return s;
+    return s + Math.round(Number(b.total) * 100);
+  }, 0);
+}
+
+/** Paid installments whose due date falls in `period` (YYYY-MM), in fils. */
+export function paidInstallmentsFilsForPeriod(schedule, period) {
+  const p = String(period || "");
+  if (!/^\d{4}-\d{2}$/.test(p)) return 0;
+  return (schedule || []).reduce((s, row) => {
+    if (!row || !row.paid) return s;
+    if (String(row.date || "").slice(0, 7) !== p) return s;
+    return s + Math.round(Number(row.amount || 0) * 100);
+  }, 0);
+}
+
+/** Profit transfers in period extras (AED amounts → fils). */
+export function profitTransfersFils(profits) {
+  return (profits || []).reduce((s, t) => {
+    const aed = Number(t && t.amount);
+    return s + (Number.isFinite(aed) ? Math.round(aed * 100) : 0);
+  }, 0);
+}
+
+/**
+ * Net after profits and paid installments (matches UI label الصافي — بعد الأرباح والقسط).
+ * Unpaid / failed / reversed installments do not subtract.
+ */
+export function netAfterProfitAndInstallmentFils({
+  incomeFils = 0,
+  expensesFils = 0,
+  profitTransferFils = 0,
+  paidInstallmentFils = 0,
+} = {}) {
+  return (
+    Number(incomeFils || 0)
+    - Number(expensesFils || 0)
+    - Number(profitTransferFils || 0)
+    - Number(paidInstallmentFils || 0)
+  );
+}
+
+/** Stable financial identity for one installment payment (never Date.now()). */
+export function installmentPaymentId(installmentDate) {
+  return `instpay:${String(installmentDate || "").slice(0, 10)}`;
+}

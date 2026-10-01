@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="PAYMENT-STATE-20260913T1935Z"/>
-<title>قمة الرواسي · PAYMENT-STATE-20260913T1935Z</title>
+<meta name="qama-ui-build" content="TARGET-INST-NET-20261001T1845Z"/>
+<title>قمة الرواسي · TARGET-INST-NET-20261001T1845Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -114,7 +114,17 @@ const MONEY_MUTATION_COMMANDS = new Set([
   "uncollectObligation", "reverseReceipt",
   "submitDeposit", "approveDeposit", "reverseDeposit", "rejectDeposit",
   "submitExpense", "reverseExpense", "rejectExpense",
+  "payInstallment", "reverseInstallment",
 ]);
+
+/** Keep S._dash.ui.config.balances aligned after canonical installment commands. */
+function patchDashBalances( partial ) {
+  if (!S._dash) S._dash = {};
+  if (!S._dash.ui) S._dash.ui = {};
+  if (!S._dash.ui.config) S._dash.ui.config = {};
+  const prev = S._dash.ui.config.balances || {};
+  S._dash.ui.config.balances = { ...prev, ...partial };
+}
 /**
  * Run a command with an optional stable operationId.
  * Non-money IDEMPOTENCY_PAYLOAD_MISMATCH (stale opId reused for a NEW edit)
@@ -4050,17 +4060,23 @@ async function ensureInstallmentScheduleOnServer(){
   const sched=ensureInstallmentSchedule(S.installmentSchedule);
   S.installmentSchedule=sched;
   let serverSched=[];
+  let serverBal=null;
   try{
-    const dash=S._dash || await refreshEngine(S.year,S.month,true);
+    // Force a fresh read so we never bootstrap defaults over a just-paid schedule.
+    const dash=await refreshEngine(S.year,S.month,true);
     const b=(dash && dash.ui && dash.ui.config && dash.ui.config.balances) || {};
     const obj=b.data || b || {};
     serverSched=Array.isArray(obj.installmentSchedule)?obj.installmentSchedule:[];
-    if(obj.installmentBalance!=null) S.installmentBalance=Number(obj.installmentBalance);
+    if(obj.installmentBalance!=null){
+      serverBal=Number(obj.installmentBalance);
+      S.installmentBalance=serverBal;
+    }
   }catch(_e){}
   if(serverSched.length>0){
     S.installmentSchedule=cloneInstallmentSchedule(serverSched);
     return S.installmentSchedule;
   }
+  // Bootstrap only when canonical schedule is truly empty — never wipe paid rows.
   await setDoc(doc(db,"config","balances"),{
     companyBalance:S.companyBalance,
     revenueBalance:S.revenueBalance,
@@ -4068,6 +4084,14 @@ async function ensureInstallmentScheduleOnServer(){
     installmentSchedule:sched,
     updatedAt:serverTimestamp()
   },{merge:true});
+  if(typeof patchDashBalances==="function"){
+    patchDashBalances({
+      companyBalance:S.companyBalance,
+      revenueBalance:S.revenueBalance,
+      installmentBalance:S.installmentBalance,
+      installmentSchedule:sched
+    });
+  }
   return sched;
 }
 
@@ -4616,7 +4640,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI PAYMENT-STATE-20260913T1935Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI TARGET-INST-NET-20261001T1845Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -4687,8 +4711,18 @@ function renderApp(){
   const totalTx=canonicalIncomeAed(_engTop, data.transactions);
   // Canonical expense total = engine expenses only (maintenance money lives as category صيانة).
   const totalExp=canonicalExpensesAed(_engTop, data.expenses);
-  const totalProfit=data.profits.reduce((s,t)=>s+(Number(t.amount)||0),0);
-  const totalInstallments=data.installments.reduce((s,t)=>s+(Number(t.amount)||0),0);
+  const totalProfit=_engTop && _engTop.profitTransferFils!=null
+    ? (Number(_engTop.profitTransferFils)||0)/100
+    : data.profits.reduce((s,t)=>s+(Number(t.amount)||0),0);
+  // Only successfully paid canonical installments in this period (not UI extras / unpaid due).
+  const _periodKey=typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"));
+  const totalInstallments=_engTop && _engTop.paidInstallmentFils!=null
+    ? (Number(_engTop.paidInstallmentFils)||0)/100
+    : (Array.isArray(S.installmentSchedule)?S.installmentSchedule:[]).reduce((s,row)=>{
+      if(!row||!row.paid) return s;
+      if(String(row.date||"").slice(0,7)!==_periodKey) return s;
+      return s+(Number(row.amount)||0);
+    },0);
 
   const smallBtnStyle={background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#aaa",borderRadius:"7px",padding:"4px 8px",fontSize:"15px"};
   const dangerBtnStyle={background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"8px",fontSize:"14px",fontWeight:"700"};
@@ -4844,7 +4878,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI PAYMENT-STATE-20260913T1935Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI TARGET-INST-NET-20261001T1845Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -4881,7 +4915,10 @@ function renderApp(){
   // ======= OVERVIEW =======
   let content;
   if(S.tab==="overview" && isOwner){
-    const net=totalTx-totalExp-totalProfit-totalInstallments;
+    // Canonical Net (label: بعد الأرباح والقسط) = Income − Expenses − Profit transfers − PAID installments.
+    const net=_engTop && _engTop.netAfterProfitInstallmentFils!=null
+      ? (Number(_engTop.netAfterProfitInstallmentFils)||0)/100
+      : totalTx-totalExp-totalProfit-totalInstallments;
     const recentLogs=(data.logs||[]).slice(0,12);
     const addMoneyForm=(type)=>{
       const isProfit=type==="profit";
@@ -5931,9 +5968,11 @@ function renderApp(){
     // Income/Net from periodSummary — never sum display-only bank history / pending / rejected.
     const totalIncome=canonicalIncomeAed(_engFin, txList);
     const totalExp=canonicalExpensesAed(_engFin, expList);
-    const netTotal=_engFin && _engFin.netIncomeFils!=null
-      ? (Number(_engFin.netIncomeFils)||0)/100
-      : totalIncome-totalExp;
+    const netTotal=_engFin && _engFin.netAfterProfitInstallmentFils!=null
+      ? (Number(_engFin.netAfterProfitInstallmentFils)||0)/100
+      : (_engFin && _engFin.netIncomeFils!=null
+        ? (Number(_engFin.netIncomeFils)||0)/100
+        : totalIncome-totalExp);
     // تفاصيل الدخل = financial projection only (approved/recognized effect). Audit keeps rejected/pending elsewhere.
     const incomeDetailList=txList.filter(isIncomeDetailRow);
     const sched=ensureInstallmentSchedule(S.installmentSchedule);
@@ -5971,8 +6010,9 @@ function renderApp(){
               if(amt<=0){showMsg("⚠ مبلغ القسط غير صالح");return;}
               if(Number(S.installmentBalance)<amt){showMsg("⚠ رصيد الاقتطاع غير كافٍ ("+Number(S.installmentBalance).toLocaleString()+" من "+amt.toLocaleString()+" د.إ)");return;}
               const amountFils=Math.round(amt*100);
-              const payToken="instpay-"+nextInst.date+"-"+amountFils;
-              if(S._lastInstPayToken===payToken && S._payingInstallment){showMsg("⏳ تم تسجيل هذا الدفع للتو");return;}
+              // Stable idempotency key from installment identity — never Date.now().
+              const payToken=("instpay-"+nextInst.date+"-"+amountFils).slice(0,120);
+              if(S._lastInstPayToken===payToken){showMsg("⏳ تم تسجيل هذا الدفع للتو");return;}
               S._payingInstallment=true;
               const prevBal=Number(S.installmentBalance);
               const prevSched=cloneInstallmentSchedule(S.installmentSchedule);
@@ -5984,20 +6024,32 @@ function renderApp(){
                 }, payToken);
                 S._lastInstPayToken=payToken;
                 if(res && res.installmentBalance!=null) S.installmentBalance=Number(res.installmentBalance);
-                else S.installmentBalance=Math.max(0,Math.round((prevBal-amt)*100)/100);
                 if(Array.isArray(res&&res.installmentSchedule)&&res.installmentSchedule.length){
                   S.installmentSchedule=cloneInstallmentSchedule(res.installmentSchedule);
                 } else if(S.installmentSchedule[nextIdx]) {
                   S.installmentSchedule[nextIdx].paid=true;
                 }
-                try{await loadBalances();}catch(_e){}
-                if(!(res&&res.alreadyApplied)){
-                  addLog&&addLog(mData,"تم دفع قسط "+nextInst.date+": "+amt.toLocaleString()+" د.إ من حساب الاقتطاع");
-                  await Promise.resolve(saveCurData(mData));
+                // Patch dash cache BEFORE loadBalances so stale unpaid snapshot cannot undo pay.
+                if(typeof patchDashBalances==="function"){
+                  patchDashBalances({
+                    companyBalance:S.companyBalance,
+                    revenueBalance:S.revenueBalance,
+                    installmentBalance:S.installmentBalance,
+                    installmentSchedule:S.installmentSchedule,
+                    installmentPayments:res&&res.installmentPayments
+                  });
+                } else if(S._dash&&S._dash.ui&&S._dash.ui.config){
+                  S._dash.ui.config.balances=Object.assign({},S._dash.ui.config.balances||{},{
+                    installmentBalance:S.installmentBalance,
+                    installmentSchedule:S.installmentSchedule
+                  });
                 }
+                try{await loadBalances();}catch(_e){}
+                // Do NOT write period-extras "تم دفع قسط" logs — server audit after canonical
+                // success is the single success trail (prevents duplicate intent logs).
                 showMsg(res&&res.alreadyApplied
                   ?"✓ هذا القسط مسجّل مسبقاً — رصيد الاقتطاع: "+Number(S.installmentBalance).toLocaleString()+" د.إ"
-                  :"✓ تم الدفع – رصيد الاقتطاع: "+Number(S.installmentBalance).toLocaleString()+" د.إ");
+                  :"✓ تم الدفع – رصيد الاقتطاع: "+Number(S.installmentBalance).toLocaleString()+" د.إ · المدفوعة: "+(res&&res.paidCount!=null?res.paidCount:S.installmentSchedule.filter(x=>x.paid).length));
                 R();
               }catch(e){
                 S.installmentSchedule=prevSched;
@@ -6030,6 +6082,18 @@ function renderApp(){
                 if(Array.isArray(res&&res.installmentSchedule)&&res.installmentSchedule.length){
                   S.installmentSchedule=cloneInstallmentSchedule(res.installmentSchedule);
                 } else if(S.installmentSchedule[i]) S.installmentSchedule[i].paid=false;
+                if(typeof patchDashBalances==="function"){
+                  patchDashBalances({
+                    installmentBalance:S.installmentBalance,
+                    installmentSchedule:S.installmentSchedule,
+                    installmentPayments:res&&res.installmentPayments
+                  });
+                } else if(S._dash&&S._dash.ui&&S._dash.ui.config){
+                  S._dash.ui.config.balances=Object.assign({},S._dash.ui.config.balances||{},{
+                    installmentBalance:S.installmentBalance,
+                    installmentSchedule:S.installmentSchedule
+                  });
+                }
                 try{await loadBalances();}catch(_e){}
                 showMsg("✓ تم إلغاء دفع القسط — الأقساط المدفوعة: "+(res&&res.paidCount!=null?res.paidCount:S.installmentSchedule.filter(x=>x.paid).length));
                 R();
@@ -6075,7 +6139,7 @@ function renderApp(){
       if(u.status!=="vacant") occupied.push({name:"شقة "+u.id,rent:Number(u.rent)||0,status:u.status});
       else vacantList.push({name:"شقة "+u.id,rent:Number(u.rent)||0});
     });
-    const targetTotalFin=occupied.reduce((s,x)=>s+x.rent,0)+(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
+    // Target is NEVER independent UI reduce(occupied)+reduce(daily) — only periodSummary.targetFils.
     const vacantTotalFin=vacantList.reduce((s,x)=>s+x.rent,0);
 
     // Total liquidity
@@ -6276,9 +6340,11 @@ function renderApp(){
       // Collection card
       (()=>{
         const rented=occupied;
-        const targetTotal=targetTotalFin;
+        // Same canonical Target/Collected/Remaining as reconciliation card above.
+        const targetTotal=_vTarget;
         const vacantTotal=vacantTotalFin;
-        const collectedTotal=collectedTotalFin;
+        const collectedTotal=_vCollected;
+        const remainingTotal=_vRemaining;
         const collPct=targetTotal>0?Math.min(100,Math.round(collectedTotal/targetTotal*100)):0;
         const collColor=collPct>=100?"#4ade80":collPct>=70?"#facc15":"#f87171";
         return h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1e3a1e"}},[
@@ -6296,7 +6362,7 @@ function renderApp(){
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#4ade80"}},[collectedTotal.toLocaleString()+" د.إ"])]),
             h("div",{style:{textAlign:"center"}},[
               h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"2px"}},["المتبقي"]),
-              h("div",{style:{fontSize:"14px",fontWeight:"700",color:collPct>=100?"#4ade80":"#f87171"}},[Math.max(0,targetTotal-collectedTotal).toLocaleString()+" د.إ"])])]),
+              h("div",{style:{fontSize:"14px",fontWeight:"700",color:collPct>=100?"#4ade80":"#f87171"}},[remainingTotal.toLocaleString()+" د.إ"])])]),
           rented.length>0?h("div",{style:{borderTop:"1px solid #1a1a1a",paddingTop:"8px"}},[
             h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"6px"}},["البارتشنات المؤجرة ("+occupied.length+")"]),
             h("div",{},rented.map(x=>h("div",{style:{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:"1px solid #111"}},[

@@ -87,7 +87,7 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /PAYMENT-STATE-20260913T1935Z/);
+  assert.match(html, /TARGET-INST-NET-20261001T1845Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
@@ -116,7 +116,7 @@ test("month navigation clears stale dash and seeds period obligations for any ro
   const refreshSlice = bridge.slice(refreshAt, refreshAt + 500);
   assert.match(refreshSlice, /generateObligations/);
   assert.doesNotMatch(refreshSlice, /role === "owner"[\s\S]{0,120}generateObligations/);
-  assert.match(html, /PAYMENT-STATE-20260913T1935Z/);
+  assert.match(html, /TARGET-INST-NET-20261001T1845Z/);
   assert.match(bridge, /sp\.cycleStart \|\| sp\.startDate/);
 });
 
@@ -145,4 +145,23 @@ test("mergeDraftStatus does not restore محصّل after reject when engine is l
   assert.match(draft, /pendingBank/);
   assert.match(draft, /eng === "late"/);
   assert.match(html, /pendingBank/);
+});
+
+test("Target cards use canonical eng.targetFils — no occupied+daily reduce for Target", () => {
+  assert.doesNotMatch(authSrc, /occupied\.reduce\(\(s,x\)=>s\+x\.rent,0\)\+\(mData\.dailyBookings/);
+  assert.match(authSrc, /const targetTotal=_vTarget/);
+  assert.match(html, /const targetTotal=_vTarget/);
+  assert.match(authSrc, /netAfterProfitInstallmentFils/);
+  assert.match(html, /netAfterProfitInstallmentFils/);
+});
+
+test("installment pay patches dash before loadBalances; no UI success-log on pay", () => {
+  assert.match(bridge, /patchDashBalances/);
+  assert.match(bridge, /"payInstallment"/);
+  const payAt = authSrc.indexOf("btn-pay-installment");
+  assert.ok(payAt >= 0);
+  const paySlice = authSrc.slice(payAt, payAt + 3500);
+  assert.match(paySlice, /patchDashBalances|S\._dash\.ui\.config\.balances/);
+  assert.doesNotMatch(paySlice, /addLog&&addLog\(mData,"تم دفع قسط/);
+  assert.match(paySlice, /instpay-"\+nextInst\.date/);
 });
