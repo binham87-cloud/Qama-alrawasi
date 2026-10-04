@@ -474,24 +474,77 @@ test("SHARED B: pending 7000 does not reduce; approved → 2000", () => {
 
 test("SHARED C: deposit exceeding shared pool refused", () => {
   const receipts = [
-    { id: "y", obligationId: "ob1", amountFils: 500000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "yahia" },
-    { id: "n", obligationId: "ob1", amountFils: 400000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "nader" },
+    { id: "y", obligationId: "ob1", amountFils: 500000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "yahia", period: "2026-09" },
+    { id: "n", obligationId: "ob1", amountFils: 400000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "nader", period: "2026-09" },
   ];
-  const deposits = [{ id: "d", employeeId: "nader", amountFils: 700000, state: APPROVAL_STATE.APPROVED }];
+  const deposits = [{ id: "d", employeeId: "nader", amountFils: 700000, state: APPROVAL_STATE.APPROVED, sourcePeriod: "2026-09", period: "2026-09" }];
   assert.throws(
-    () => assertDepositFitsCustody({ employeeId: "yahia", amountFils: 300000, receipts, deposits }),
+    () => assertDepositFitsCustody({
+      employeeId: "yahia", amountFils: 300000, receipts, deposits, sourcePeriod: "2026-09",
+    }),
     (e) => e.code === "AMOUNT_EXCEEDS_HOLDING" && e.details.holdingFils === 200000
   );
 });
 
 test("SHARED D: zero-personal-collection employee may deposit from shared pool", () => {
   const receipts = [
-    { id: "n", obligationId: "ob1", amountFils: 400000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "nader" },
+    { id: "n", obligationId: "ob1", amountFils: 400000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "nader", period: "2026-09" },
   ];
   const holding = assertDepositFitsCustody({
-    employeeId: "future-emp", amountFils: 100000, receipts, deposits: [],
+    employeeId: "future-emp", amountFils: 100000, receipts, deposits: [], sourcePeriod: "2026-09",
   });
   assert.equal(holding, 400000);
+});
+
+test("PERIOD HOLDING: Sep cash/deposit isolated from Oct", () => {
+  const receipts = [
+    { id: "s", obligationId: "ob1", amountFils: 800000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "yahia", period: "2026-09" },
+    { id: "o", obligationId: "ob2", amountFils: 500000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "nader", period: "2026-10" },
+  ];
+  const deposits = [
+    { id: "d", employeeId: "yahia", amountFils: 300000, state: APPROVAL_STATE.APPROVED, sourceKind: "holding", sourcePeriod: "2026-09", period: "2026-09" },
+  ];
+  assert.equal(sharedHoldingFils({ receipts, deposits, period: "2026-09" }), 500000);
+  assert.equal(sharedHoldingFils({ receipts, deposits, period: "2026-10" }), 500000);
+  assert.equal(sharedHoldingFils({ receipts, deposits }), 1000000);
+  assert.throws(
+    () => assertDepositFitsCustody({
+      employeeId: "yahia", amountFils: 600000, receipts, deposits, sourcePeriod: "2026-09",
+    }),
+    (e) => e.code === "AMOUNT_EXCEEDS_HOLDING" && e.details.holdingFils === 500000
+      && e.details.sourcePeriod === "2026-09",
+  );
+  // Global would be enough (1,000,000) but Sep-only refuses.
+  assert.equal(assertDepositFitsCustody({
+    employeeId: "yahia", amountFils: 400000, receipts, deposits, sourcePeriod: "2026-10",
+  }), 500000);
+});
+
+test("PERIOD HOLDING: rejected/pending/external/bank have no Holding effect", () => {
+  const receipts = [
+    { id: "c", obligationId: "ob1", amountFils: 400000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", collectorUserId: "yahia", period: "2026-09" },
+    { id: "b", obligationId: "ob1", amountFils: 200000, state: RECEIPT_STATE.RECOGNIZED, method: "bank", collectorUserId: "yahia", period: "2026-09" },
+  ];
+  const deposits = [
+    { id: "p", employeeId: "yahia", amountFils: 100000, state: APPROVAL_STATE.PENDING, sourcePeriod: "2026-09" },
+    { id: "r", employeeId: "yahia", amountFils: 100000, state: APPROVAL_STATE.REJECTED, sourcePeriod: "2026-09" },
+    { id: "e", employeeId: "yahia", amountFils: 100000, state: APPROVAL_STATE.APPROVED, sourceKind: "external", sourcePeriod: "2026-09" },
+  ];
+  assert.equal(sharedHoldingFils({ receipts, deposits, period: "2026-09" }), 400000);
+});
+
+test("PERIOD HOLDING: reverse approved deposit restores same month only", () => {
+  const receipts = [
+    { id: "s", amountFils: 800000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", period: "2026-09", collectorUserId: "y" },
+    { id: "o", amountFils: 500000, state: RECEIPT_STATE.RECOGNIZED, method: "cash", period: "2026-10", collectorUserId: "y" },
+  ];
+  const approved = [
+    { id: "d", amountFils: 300000, state: APPROVAL_STATE.APPROVED, sourceKind: "holding", sourcePeriod: "2026-09", period: "2026-09", employeeId: "y" },
+  ];
+  assert.equal(sharedHoldingFils({ receipts, deposits: approved, period: "2026-09" }), 500000);
+  const reversed = [{ ...approved[0], state: APPROVAL_STATE.REVERSED }];
+  assert.equal(sharedHoldingFils({ receipts, deposits: reversed, period: "2026-09" }), 800000);
+  assert.equal(sharedHoldingFils({ receipts, deposits: reversed, period: "2026-10" }), 500000);
 });
 
 test("external deposit does not reduce shared holding or employee depositedFils", () => {

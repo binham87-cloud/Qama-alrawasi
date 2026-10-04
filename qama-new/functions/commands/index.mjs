@@ -12,8 +12,8 @@
 import {
   DomainError, RECEIPT_STATE, APPROVAL_STATE, OCCUPANCY, METHOD,
   assertReceiptFits, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
-  periodOf, dueDateFor, obligationIdFor,
-  assertPositiveFils, isFils, isPlaceholderTenant,
+  periodOf, dueDateFor, obligationIdFor, depositSourcePeriod,
+  assertPositiveFils, isFils, isPlaceholderTenant, parseAedToFils,
 } from "../domain/finance.mjs";
 import {
   buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
@@ -335,6 +335,7 @@ export const PERMISSIONS = Object.freeze({
   generateObligations: BOTH, cancelObligation: OWNER,
   createCashReceipt: BOTH,
   createDailyCashReceipt: BOTH,
+  createDailyBookingPrepaid: BOTH,
   submitBankReceipt: BOTH, approveBankReceipt: OWNER, rejectBankReceipt: OWNER,
   reverseReceipt: OWNER,
   submitDeposit: BOTH, approveDeposit: OWNER, rejectDeposit: OWNER, reverseDeposit: OWNER,
@@ -417,6 +418,14 @@ export const SCHEMAS = Object.freeze({
     bookingId: S.str(120), amountFils: S.fils(), collectionDate: S.date(),
     collectorUserId: S.opt(S.id()), note: S.opt(S.str(300)), period: S.period(),
   },
+  createDailyBookingPrepaid: {
+    period: S.period(),
+    bookingJson: S.str(4000),
+    amountFils: S.fils(),
+    collectionDate: S.date(),
+    collectorUserId: S.opt(S.id()),
+    note: S.opt(S.str(300)),
+  },
   submitBankReceipt: {
     obligationId: S.id(), amountFils: S.fils(), collectionDate: S.date(), bankReference: S.str(120),
     collectorUserId: S.opt(S.id()),
@@ -429,6 +438,8 @@ export const SCHEMAS = Object.freeze({
     amountFils: S.fils(), depositDate: S.date(), destinationAccountId: S.id(),
     note: S.opt(S.str(300)), reference: S.opt(S.str(120)), employeeId: S.opt(S.id()),
     sourceKind: S.opt(S.enum(["holding", "external"])),
+    /** Financial period whose Holding this deposit reduces (required for holding deposits). */
+    sourcePeriod: S.opt(S.period()),
   },
   approveDeposit: { depositId: S.id() },
   rejectDeposit: { depositId: S.id(), reason: S.str(300) },
@@ -1089,6 +1100,17 @@ const HANDLERS = {
     await assertEmployeePeriodOpen(ctx, ctx.payload.period);
     const collectorUserId = await collectorFor(ctx);
     const bookingId = ctx.payload.bookingId;
+    // Idempotent: one recognized cash receipt per daily booking.
+    const existing = await ctx.tx.query("receipts", [["obligationId", "==", `daily:${bookingId}`]]);
+    const live = (existing || []).find(
+      (r) => r && r.state === RECEIPT_STATE.RECOGNIZED && r.sourceType === "daily_booking",
+    );
+    if (live) {
+      return {
+        receiptId: live.id, state: RECEIPT_STATE.RECOGNIZED, method: "cash",
+        bookingId, alreadyApplied: true,
+      };
+    }
     const id = newId("rcpt", ctx);
     ctx.tx.create("receipts", id, {
       id,
@@ -1113,6 +1135,114 @@ const HANDLERS = {
       amountFils: ctx.payload.amountFils, bookingId, method: "cash",
     });
     return { receiptId: id, state: RECEIPT_STATE.RECOGNIZED, method: "cash", bookingId };
+  },
+
+  /**
+   * Atomic prepaid daily booking: one booking in uiPeriods + one recognized cash receipt.
+   * Daily rentals are always prepaid — Save means full amount already received.
+   * Holding/Target/Collected follow the same canonical `period` as the daily Target engine
+   * (viewing-month extras period — not browser "today").
+   */
+  async createDailyBookingPrepaid(ctx) {
+    const period = ctx.payload.period;
+    await assertEmployeePeriodOpen(ctx, period);
+    assertPositiveFils(ctx.payload.amountFils, "INVALID_AMOUNT");
+    let booking;
+    try {
+      booking = JSON.parse(ctx.payload.bookingJson);
+    } catch {
+      throw new DomainError("INVALID_BOOKING_JSON");
+    }
+    if (!booking || typeof booking !== "object") throw new DomainError("INVALID_BOOKING");
+    const bookingId = String(booking.id || ctx.operationId || "").slice(0, 120);
+    if (!bookingId) throw new DomainError("BOOKING_ID_REQUIRED");
+    const totalFils = Number(ctx.payload.amountFils);
+    const bookingTotal = parseAedToFils(booking.total);
+    if (bookingTotal != null && bookingTotal !== totalFils) {
+      throw new DomainError("BOOKING_AMOUNT_MISMATCH", {
+        bookingTotalFils: bookingTotal, amountFils: totalFils,
+      });
+    }
+
+    const periodDocId = `period:${period}`;
+    const existingPeriod = await ctx.tx.get("uiPeriods", periodDocId);
+    let extras = {};
+    if (existingPeriod) {
+      try {
+        extras = typeof existingPeriod.extrasJson === "string"
+          ? JSON.parse(existingPeriod.extrasJson || "{}")
+          : (existingPeriod.extras || {});
+      } catch { extras = existingPeriod.extras || {}; }
+    }
+    const list = Array.isArray(extras.dailyBookings) ? extras.dailyBookings.slice() : [];
+    const priorIdx = list.findIndex((b) => b && String(b.id) === bookingId);
+    const prior = priorIdx >= 0 ? list[priorIdx] : null;
+
+    const existingRcpts = await ctx.tx.query("receipts", [["obligationId", "==", `daily:${bookingId}`]]);
+    const liveRcpt = (existingRcpts || []).find(
+      (r) => r && r.state === RECEIPT_STATE.RECOGNIZED && r.sourceType === "daily_booking",
+    );
+
+    if (prior && liveRcpt) {
+      return {
+        bookingId, receiptId: liveRcpt.id, period,
+        state: RECEIPT_STATE.RECOGNIZED, alreadyApplied: true,
+      };
+    }
+
+    const collectorUserId = await collectorFor(ctx);
+    let receiptId = liveRcpt ? liveRcpt.id : null;
+    if (!liveRcpt) {
+      receiptId = newId("rcpt", ctx);
+      ctx.tx.create("receipts", receiptId, {
+        id: receiptId,
+        obligationId: `daily:${bookingId}`,
+        rentalId: null, propertyId: null, unitId: null, spaceId: null,
+        period,
+        tenantNameSnapshot: String(booking.guest || ctx.payload.note || "حجز يومي").slice(0, 160),
+        amountFils: totalFils,
+        collectionDate: ctx.payload.collectionDate,
+        note: ctx.payload.note || String(booking.guest || "حجز يومي").slice(0, 300),
+        method: "cash",
+        state: RECEIPT_STATE.RECOGNIZED,
+        collectorUserId,
+        sourceType: "daily_booking",
+        bookingId,
+        ...base(ctx),
+      });
+    }
+
+    const row = {
+      ...(prior || {}),
+      ...booking,
+      id: bookingId,
+      total: Number(booking.total) || totalFils / 100,
+      paymentStatus: "collected",
+      receiptId,
+      prepaid: true,
+      by: booking.by || ctx.actor.userId,
+    };
+    if (priorIdx >= 0) list[priorIdx] = row;
+    else list.push(row);
+    extras.dailyBookings = list;
+    const rec = {
+      id: periodDocId,
+      period,
+      extrasJson: JSON.stringify(extras),
+      updatedAt: ctx.now,
+      updatedBy: ctx.actor.userId,
+      schemaVersion: 1,
+    };
+    if (existingPeriod) ctx.tx.update("uiPeriods", periodDocId, rec);
+    else ctx.tx.create("uiPeriods", periodDocId, { ...rec, ...base(ctx) });
+
+    audit(ctx, "daily_booking_prepaid", "receipt", receiptId, {
+      amountFils: totalFils, bookingId, period, method: "cash",
+    });
+    return {
+      bookingId, receiptId, period,
+      state: RECEIPT_STATE.RECOGNIZED, alreadyApplied: false,
+    };
   },
   async submitBankReceipt(ctx) {
     const collectorUserId = await collectorFor(ctx);
@@ -1255,12 +1385,20 @@ const HANDLERS = {
 
     const employeeId = await depositEmployeeFor(ctx);
     const sourceKind = ctx.payload.sourceKind || "holding";
+    // Holding deposits must name the source period they reduce. Never infer from "today".
+    // Prefer explicit sourcePeriod; else (legacy callers) depositDate's period.
+    const sourcePeriod = sourceKind === "external"
+      ? (ctx.payload.sourcePeriod || periodOf(ctx.payload.depositDate))
+      : (ctx.payload.sourcePeriod || periodOf(ctx.payload.depositDate));
+    if (sourceKind !== "external" && !/^\d{4}-\d{2}$/.test(String(sourcePeriod || ""))) {
+      throw new DomainError("SOURCE_PERIOD_REQUIRED", { sourcePeriod });
+    }
     const receipts = await ctx.tx.query("receipts", []);
     const deposits = await ctx.tx.query("deposits", []);
-    // Holding deposits must fit Shared Holding. External (other) deposits do not reduce Holding.
+    // Holding deposits must fit Holding(sourcePeriod) only. External does not reduce Holding.
     if (sourceKind !== "external") {
       assertDepositFitsCustody({
-        employeeId, amountFils: ctx.payload.amountFils, receipts, deposits,
+        employeeId, amountFils: ctx.payload.amountFils, receipts, deposits, sourcePeriod,
       });
     }
 
@@ -1272,6 +1410,7 @@ const HANDLERS = {
       amountFils: ctx.payload.amountFils,
       depositDate: ctx.payload.depositDate,
       period: periodOf(ctx.payload.depositDate),
+      sourcePeriod,
       destinationAccountId: account.id,
       note: ctx.payload.note || null, reference: ctx.payload.reference || null,
       sourceKind,
@@ -1279,7 +1418,9 @@ const HANDLERS = {
       ...(approved ? { approvedBy: ctx.actor.userId, approvedAt: ctx.now } : {}),
       ...base(ctx),
     });
-    audit(ctx, "deposit_submitted", "deposit", id, { amountFils: ctx.payload.amountFils, sourceKind });
+    audit(ctx, "deposit_submitted", "deposit", id, {
+      amountFils: ctx.payload.amountFils, sourceKind, sourcePeriod,
+    });
     if (approved) {
       await creditRevenueAccount(ctx, {
         amountFils: ctx.payload.amountFils,
@@ -1289,22 +1430,32 @@ const HANDLERS = {
         accountId: account.id,
       });
     }
-    return { depositId: id, state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING };
+    return {
+      depositId: id,
+      state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING,
+      sourcePeriod,
+    };
   },
   async approveDeposit(ctx) {
     const dep = await ctx.tx.get("deposits", ctx.payload.depositId);
     if (!dep) throw new DomainError("DEPOSIT_NOT_FOUND");
     if (dep.state !== APPROVAL_STATE.PENDING) throw new DomainError("DEPOSIT_NOT_PENDING", { state: dep.state });
 
-    // Same Firestore transaction: refuse if amount exceeds current Shared Holding.
+    // Same Firestore transaction: refuse if amount exceeds Holding for the deposit's source period.
     // External deposits never drew from Holding — skip custody check.
     if (dep.sourceKind !== "external") {
       const receipts = await ctx.tx.query("receipts", []);
       const deposits = await ctx.tx.query("deposits", []);
+      const sourcePeriod = depositSourcePeriod(dep) || dep.period;
       assertDepositFitsCustody({
         employeeId: dep.employeeId, amountFils: dep.amountFils,
         receipts, deposits: deposits.filter((d) => d.id !== dep.id),
+        sourcePeriod,
       });
+      // Persist sourcePeriod on approve when legacy pending deposit lacked it.
+      if (!dep.sourcePeriod && sourcePeriod) {
+        ctx.tx.update("deposits", dep.id, { sourcePeriod });
+      }
     }
 
     ctx.tx.update("deposits", dep.id, {

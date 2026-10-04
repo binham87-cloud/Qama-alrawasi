@@ -75,11 +75,20 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   // Monthly KPIs count ONLY obligations belonging to a CURRENT active rental.
   const obligations = periodObligations;
   const liveObs = liveObligationsForPeriod(obligations, rentals);
-  const summary = periodSummary({ obligations: liveObs, receipts, deposits, expenses, asOfDate });
-  const shared = sharedHoldingFils({ receipts: allReceipts, deposits: allDeposits });
-  const collectedBy = holdingByEmployee({ receipts: allReceipts, deposits: allDeposits });
-  summary.holdingFils = shared;
-  summary.sharedEmployeeHoldingFils = shared;
+  // Pass ALL receipts/deposits into periodSummary for Holding(P) via holdingPeriod,
+  // while obligation/receipt money for the month still uses period-filtered arrays below.
+  const summary = periodSummary({
+    obligations: liveObs, receipts, deposits, expenses, asOfDate, holdingPeriod: period,
+  });
+  // Month screens: عند الموظفين = Holding for the selected period only (shared among employees).
+  const periodHolding = sharedHoldingFils({
+    receipts: allReceipts, deposits: allDeposits, period,
+  });
+  const globalHolding = sharedHoldingFils({ receipts: allReceipts, deposits: allDeposits });
+  const collectedBy = holdingByEmployee({ receipts: allReceipts, deposits: allDeposits, period });
+  summary.holdingFils = periodHolding;
+  summary.sharedEmployeeHoldingFils = periodHolding;
+  summary.globalHoldingFils = globalHolding;
   summary.custody = collectedBy;
 
   // Daily booking targets live in uiPeriods extras (not obligations).
@@ -90,20 +99,28 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   applyDailyBookingTarget(summary, dailyBookings);
   const balances = (ui.config && ui.config.balances) || {};
   applyOperatingNet(summary, { extras: ui.extras || {}, balances });
-  // Recalc at-employees after cashOnObligations already includes daily cash in periodSummary.
-  const monthDepositCover = Math.min(
-    Number(summary.approvedDepositsFils || 0),
-    Number(summary.cashOnObligationsFils || 0),
-  );
-  summary.atEmployeesMonthFils = Number(summary.cashOnObligationsFils || 0) - monthDepositCover;
+  // Align rent-split at-employees with Holding(P) cover from all deposits (sourcePeriod).
+  const holdingCoverAll = allDeposits
+    .filter((d) => d.state === "approved" && d.sourceKind !== "external"
+      && !(d.fromBankReceipt || d.sourceKind === "bank"))
+    .filter((d) => {
+      const sp = d.sourcePeriod || d.period;
+      return sp === period;
+    })
+    .reduce((s, d) => s + Number(d.amountFils || 0), 0);
+  const externalCover = deposits
+    .filter((d) => d.state === "approved" && d.sourceKind === "external")
+    .reduce((s, d) => s + Number(d.amountFils || 0), 0);
+  const cashOb = Number(summary.cashOnObligationsFils || 0);
+  const monthDepositCover = Math.min(holdingCoverAll + externalCover, cashOb);
+  summary.atEmployeesMonthFils = cashOb - monthDepositCover;
   summary.companyCollectedFils = Number(summary.bankRecognizedFils || 0) + monthDepositCover;
   summary.depositedFils = summary.companyCollectedFils;
+  summary.incomeFils = summary.depositedFils;
+  summary.netIncomeFils = summary.incomeFils - Number(summary.expensesFils || 0);
 
-  const approvedAll = allDeposits
-    .filter((d) => d.state === "approved" && d.sourceKind !== "external")
-    .reduce((s, d) => s + Number(d.amountFils || 0), 0);
   const problems = checkInvariants({
-    ...summary, approvedDepositsFils: approvedAll, custody: collectedBy, holdingFils: shared,
+    ...summary, custody: collectedBy, holdingFils: periodHolding,
   }).problems;
 
   const views = liveObs
@@ -113,7 +130,8 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
     });
 
   const isOwner = viewer.role === "owner";
-  const myHolding = shared;
+  const myHolding = periodHolding;
+  const shared = periodHolding;
 
   const visibleDeposits = deposits.filter((d) => isOwner || d.employeeId === viewer.userId);
   const visibleExpenses = expenses.filter((e) =>
@@ -298,8 +316,11 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
           return {
             spaceId: sp.id, name: sp.name, occupancy: sp.occupancy || "vacant",
             rentalId: rental?.id || null,
-            tenantName: rental?.tenantName || v?.tenantName || null,
+            // Current tenant only from LIVE rental. Retained-arrears snapshot must NOT
+            // appear as the vacant partition's current tenant (history stays on the obligation).
+            tenantName: rental?.tenantName || null,
             tenantPhone: rental?.tenantPhone || null,
+            arrearsTenantName: (!rental && v?.tenantName) || null,
             // Card "start" for the selected month = this period's cycle start (not contract start alone).
             startDate: cycleStart || rental?.startDate || null,
             contractStartDate: rental?.startDate || null,
@@ -552,13 +573,19 @@ export function buildDashboardFromDump(db, period, asOfDate) {
   const unitName = (id) => units.find((u) => u.id === id)?.name || "—";
 
   const liveObs = liveObligationsForPeriod(obligations, rentals);
-  const summary = periodSummary({ obligations: liveObs, receipts, deposits, expenses, asOfDate });
   const allReceipts = dump("receipts");
   const allDeposits = dump("deposits");
-  const shared = sharedHoldingFils({ receipts: allReceipts, deposits: allDeposits });
-  const collectedBy = holdingByEmployee({ receipts: allReceipts, deposits: allDeposits });
-  summary.holdingFils = shared;
-  summary.sharedEmployeeHoldingFils = shared;
+  const summary = periodSummary({
+    obligations: liveObs, receipts, deposits, expenses, asOfDate, holdingPeriod: period,
+  });
+  const periodHolding = sharedHoldingFils({
+    receipts: allReceipts, deposits: allDeposits, period,
+  });
+  const globalHolding = sharedHoldingFils({ receipts: allReceipts, deposits: allDeposits });
+  const collectedBy = holdingByEmployee({ receipts: allReceipts, deposits: allDeposits, period });
+  summary.holdingFils = periodHolding;
+  summary.sharedEmployeeHoldingFils = periodHolding;
+  summary.globalHoldingFils = globalHolding;
   summary.custody = collectedBy;
 
   const uiPeriods = dump("uiPeriods").filter((p) => p.period === period);
@@ -581,11 +608,24 @@ export function buildDashboardFromDump(db, period, asOfDate) {
   }
   applyOperatingNet(summary, { extras, balances });
 
-  const approvedAll = allDeposits
-    .filter((d) => d.state === "approved" && d.sourceKind !== "external")
+  const holdingCoverAll = allDeposits
+    .filter((d) => d.state === "approved" && d.sourceKind !== "external"
+      && !(d.fromBankReceipt || d.sourceKind === "bank"))
+    .filter((d) => (d.sourcePeriod || d.period) === period)
     .reduce((s, d) => s + Number(d.amountFils || 0), 0);
+  const externalCover = deposits
+    .filter((d) => d.state === "approved" && d.sourceKind === "external")
+    .reduce((s, d) => s + Number(d.amountFils || 0), 0);
+  const cashOb = Number(summary.cashOnObligationsFils || 0);
+  const monthDepositCover = Math.min(holdingCoverAll + externalCover, cashOb);
+  summary.atEmployeesMonthFils = cashOb - monthDepositCover;
+  summary.companyCollectedFils = Number(summary.bankRecognizedFils || 0) + monthDepositCover;
+  summary.depositedFils = summary.companyCollectedFils;
+  summary.incomeFils = summary.depositedFils;
+  summary.netIncomeFils = summary.incomeFils - Number(summary.expensesFils || 0);
+
   const problems = checkInvariants({
-    ...summary, approvedDepositsFils: approvedAll, custody: collectedBy, holdingFils: shared,
+    ...summary, custody: collectedBy, holdingFils: periodHolding,
   }).problems;
   const views = liveObs
     .map((o) => {
@@ -621,7 +661,8 @@ export function buildDashboardFromDump(db, period, asOfDate) {
     spaces,
     units,
     rentals,
-    myHolding: shared,
+    myHolding: periodHolding,
+    globalHoldingFils: globalHolding,
   };
 }
 

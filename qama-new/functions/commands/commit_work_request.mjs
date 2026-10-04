@@ -72,7 +72,18 @@ async function dispatchRequest(ctx) {
     return;
   }
   if (type === "add_daily") {
-    await mergeExtrasArray(ctx, "dailyBookings", { ...(ctx.body.booking || ctx.body), id: ctx.requestId });
+    // Daily bookings are prepaid: booking + recognized cash in one canonical command.
+    const booking = { ...(ctx.body.booking || ctx.body), id: ctx.requestId };
+    const fils = moneyFils(booking.total);
+    if (fils <= 0) throw new DomainError("INVALID_AMOUNT", { amount: booking.total });
+    await ctx.run(ctx.actor, "createDailyBookingPrepaid", {
+      period: ctx.period,
+      bookingJson: JSON.stringify(booking),
+      amountFils: fils,
+      collectionDate: validDate(booking.startDate) || ctx.now.slice(0, 10),
+      collectorUserId: ctx.collectorUserId,
+      note: String(booking.guest || "حجز يومي").slice(0, 300),
+    }, STEP(ctx.requestId, "dailypay"));
     return;
   }
   if (type === "add_unit_maintenance") {
@@ -98,15 +109,26 @@ async function applySpaceFields(ctx, payload) {
 
   if (occ === "vacant" || occ === "staff") {
     if (rental) {
-      await ctx.run(ctx.actor, "closeRental", {
-        rentalId: rental.id,
-        endDate: ctx.now.slice(0, 10),
-        reason: "طلب معتمد — تغيير الحالة",
-        setVacant: occ === "vacant",
-      }, STEP(ctx.requestId, "close"));
+      // Real vacate: endTenancy+retain (never reverse money; keep historical arrears).
+      try {
+        await ctx.run(ctx.actor, "endTenancy", {
+          rentalId: rental.id,
+          endDate: ctx.now.slice(0, 10),
+          reason: "طلب معتمد — إخلاء",
+          arrearsDecision: "retain",
+        }, STEP(ctx.requestId, "end"));
+      } catch (e) {
+        if (e.code !== "RENTAL_ALREADY_CLOSED" && e.code !== "RENTAL_NOT_ACTIVE") throw e;
+      }
       rental = null;
     }
     await ctx.run(ctx.actor, "setSpaceOccupancy", { spaceId: space.id, occupancy: occ }, STEP(ctx.requestId, "occ"));
+    // Clear CURRENT tenant projection in extras — history stays on obligations/receipts.
+    await patchSpaceExtras(ctx, space.id, {
+      tenant: "", phone: "", start_date: "", end_date: "", due_date: "",
+      deposit: "", collectionMethod: "", collectedBy: "", note: occ === "staff" ? "موظفين" : "فارغ",
+      status: occ, draftClearedByVacate: true, rent: 0, paid_amount: 0, partial: false,
+    });
     return;
   }
 
@@ -170,15 +192,43 @@ async function applySpaceFields(ctx, payload) {
       if (e.code !== "NOTHING_TO_UPDATE") throw e;
     }
   }
-  const obligationId = fields._obligationId
-    || (rental ? obligationIdFor(rental.id, ctx.period) : null);
-  if (!obligationId) return;
-  const ob = await readDoc(ctx.db, "obligations", obligationId);
+  // Resolve obligation by explicit id, then live period match (cycle ids ≠ rentalId_period).
+  let ob = null;
+  if (fields._obligationId) {
+    ob = await readDoc(ctx.db, "obligations", fields._obligationId);
+  }
+  if (!ob && rental) {
+    const legacyId = obligationIdFor(rental.id, ctx.period);
+    ob = await readDoc(ctx.db, "obligations", legacyId);
+  }
+  if (!ob && rental) {
+    const all = await queryAll(ctx.db, "obligations");
+    const candidates = (all || []).filter((o) =>
+      o && o.rentalId === rental.id && o.state === "active" && o.baselineExcluded !== true
+      && (o.period === ctx.period
+        || String(o.cycleStart || o.dueDate || "").slice(0, 7) === ctx.period),
+    );
+    candidates.sort((a, b) =>
+      String(a.cycleStart || a.dueDate || "").localeCompare(String(b.cycleStart || b.dueDate || "")));
+    ob = candidates.length ? candidates[candidates.length - 1] : null;
+  }
+  if (!ob && (status === "collected" || fields.partial)) {
+    throw new DomainError("OBLIGATION_NOT_FOUND", {
+      rentalId: rental?.id || null, period: ctx.period, spaceId: space.id,
+      message: "لا يوجد التزام جاهز للتحصيل — أعد توليد الالتزامات",
+    });
+  }
   if (!ob) return;
 
-  const wantPaid = fields.partial ? moneyFils(fields.paid_amount) : (status === "collected" ? (ob.amountFils || 0) : 0);
+  const paidNow = await recognizedPaid(ctx.db, ob.id);
+  const dueFils = Number(ob.amountFils || 0);
+  const remainingFils = Math.max(0, dueFils - paidNow);
+  // كامل = full REMAINING only (never mint another full due when already partially paid).
+  const wantPaid = fields.partial
+    ? moneyFils(fields.paid_amount)
+    : (status === "collected" ? paidNow + remainingFils : 0);
   // OLD UI keeps paid_amount when switching محصّل → متأخر. Treat non-partial late as unpaid.
-  const unpaidIntent = (status === "late" || status === "pending") && (!fields.partial || wantPaid === 0);
+  const unpaidIntent = (status === "late" || status === "pending") && (!fields.partial || moneyFils(fields.paid_amount) === 0);
   if (unpaidIntent) {
     await ctx.run(ctx.actor, "uncollectObligation", {
       obligationId: ob.id, reason: "طلب معتمد — متأخر",
@@ -187,10 +237,13 @@ async function applySpaceFields(ctx, payload) {
   }
   if (status !== "collected" && !fields.partial) return;
 
-  const paidNow = await recognizedPaid(ctx.db, ob.id);
   const delta = wantPaid - paidNow;
-  if (delta <= 0) return;
+  if (delta <= 0) {
+    // Already fully applied — idempotent no-op for محصل+كامل retries.
+    return { obligationId: ob.id, alreadyApplied: true, paidFils: paidNow };
+  }
   const date = validDate(fields.due_date) || validDate(fields.start_date) || ctx.now.slice(0, 10);
+  // محصل + كامل is payment intent. Default channel is cash when omitted (employee trust path).
   const method = fields.collectionMethod === "bank" ? "bank" : "cash";
   if (method === "bank") {
     const sub = await ctx.run(ctx.actor, "submitBankReceipt", {
@@ -305,6 +358,8 @@ async function addDeposit(ctx, tx) {
     note: String(tx.desc || tx.notes || "إيداع").slice(0, 300),
     reference: String(tx.desc || ctx.requestId).slice(0, 120),
     employeeId: ctx.collectorUserId,
+    sourceKind: tx.sourceKind === "external" ? "external" : "holding",
+    sourcePeriod: tx.sourcePeriod || ctx.period,
   }, STEP(ctx.requestId, "dep"));
   // Owner submitDeposit auto-approves; employee-attributed submit stays pending until approve.
   if (submitted.state === "pending" && submitted.depositId) {
@@ -373,6 +428,11 @@ async function patchSpaceExtras(ctx, spaceId, fields) {
       elec_paid: !!fields.elec_paid,
       elec_amount: Number(fields.elec_amount || 0),
       tenant: fields.tenant || "",
+      rent: fields.rent != null ? Number(fields.rent) || 0 : (extras.spaces[spaceId]?.rent || 0),
+      paid_amount: fields.paid_amount != null ? Number(fields.paid_amount) || 0 : 0,
+      partial: !!fields.partial,
+      status: fields.status || extras.spaces[spaceId]?.status || "",
+      draftClearedByVacate: !!fields.draftClearedByVacate,
     };
     const rec = {
       id, period: ctx.period, extrasJson: JSON.stringify(extras),

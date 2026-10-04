@@ -79,7 +79,8 @@ function uncollectOpKey(obligationId, alreadyFils, receipts) {
 }
 /** Money-mutating commands — never auto-retry on IDEMPOTENCY_PAYLOAD_MISMATCH. */
 const MONEY_MUTATION_COMMANDS = new Set([
-  "createCashReceipt", "createDailyCashReceipt", "submitBankReceipt", "approveBankReceipt",
+  "createCashReceipt", "createDailyCashReceipt", "createDailyBookingPrepaid",
+  "submitBankReceipt", "approveBankReceipt",
   "uncollectObligation", "reverseReceipt",
   "submitDeposit", "approveDeposit", "reverseDeposit", "rejectDeposit",
   "submitExpense", "reverseExpense", "rejectExpense",
@@ -373,13 +374,15 @@ function applyUiConfig(ui) {
 function isVacateResidueExtra(extra, sp, mapped) {
   if (!extra) return false;
   if (sp && sp.rentalId) return false;
-  // Real vacate with retained arrears: keep card money/tenant snapshot from engine.
-  if (sp && sp.obligationId && Number(sp.remainingFils || 0) > 0) return false;
-  if (!(mapped && (mapped.status === "vacant" || mapped.status === "staff"))) return false;
-  if (!["collected", "late", "pending"].includes(String(extra.status || ""))) return false;
-  if (extra.draftClearedByVacate) return true;
-  const bound = extra.draftForRentalId != null ? String(extra.draftForRentalId) : "";
-  if (bound) return true; // bound to a rental that no longer occupies this space
+  // Vacant/staff with no live rental: ALWAYS strip current-tenant paint from extras.
+  // Retained arrears stay collectible via obligationId/money fields — not as "current tenant".
+  if (mapped && (mapped.status === "vacant" || mapped.status === "staff")) {
+    if (extra.draftClearedByVacate) return true;
+    const bound = extra.draftForRentalId != null ? String(extra.draftForRentalId) : "";
+    if (bound) return true;
+    if (["collected", "late", "pending"].includes(String(extra.status || ""))) return true;
+    if (extra.tenant || extra.phone || extra.start_date || extra.collectionMethod) return true;
+  }
   return false;
 }
 
@@ -460,18 +463,37 @@ function mapDashboardToMonth(dash) {
           rent: (mapped.status === "vacant" || mapped.status === "staff")
             ? (draftRent || engineRent)
             : (engineRent || draftRent),
-          tenant: sp.tenantName || extraUse.tenant || "",
-          phone: extraUse.phone || sp.tenantPhone || "",
-          note: extraUse.note || (mapped.status === "vacant" ? "فارغ" : mapped.status === "staff" ? "موظفين" : ""),
-          start_date: extraUse.start_date || sp.cycleStart || sp.startDate || "",
-          end_date: extraUse.end_date || "",
-          due_date: sp.dueDate || extraUse.due_date || "",
-          deposit: extraUse.deposit || "",
-          collectionMethod: extraUse.collectionMethod || "",
-          collectedBy: extraUse.collectedBy || "",
+          tenant: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (sp.tenantName || extraUse.tenant || ""),
+          phone: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (extraUse.phone || sp.tenantPhone || ""),
+          note: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? (mapped.status === "staff" ? "موظفين" : "فارغ")
+            : (extraUse.note || (mapped.status === "vacant" ? "فارغ" : mapped.status === "staff" ? "موظفين" : "")),
+          start_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (extraUse.start_date || sp.cycleStart || sp.startDate || ""),
+          end_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (extraUse.end_date || ""),
+          due_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? (Number(sp.remainingFils || 0) > 0 ? (sp.dueDate || "") : "")
+            : (sp.dueDate || extraUse.due_date || ""),
+          deposit: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (extraUse.deposit || ""),
+          collectionMethod: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (extraUse.collectionMethod || ""),
+          collectedBy: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (extraUse.collectedBy || ""),
           rent_type: extraUse.rent_type || "monthly",
           draftSessionId: extraUse.draftSessionId || "",
-          draftClearedByVacate: !!extraUse.draftClearedByVacate,
+          draftClearedByVacate: !!extraUse.draftClearedByVacate
+            || ((mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId),
           draftForRentalId: extraUse.draftForRentalId || "",
           draftReverseGen: Number.isFinite(Number(extraUse.draftReverseGen)) ? Number(extraUse.draftReverseGen) : null,
           ...mapped,
@@ -483,7 +505,10 @@ function mapDashboardToMonth(dash) {
           _obligationId: sp.obligationId,
           _enginePaid: filsToAed(sp.paidFils),
           _receipts: sp.spaceReceipts || [],
-          _tenantCommitted: sp.tenantName || extraUse.tenant || "",
+          _tenantCommitted: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+            ? ""
+            : (sp.tenantName || extraUse.tenant || ""),
+          _arrearsTenantName: sp.arrearsTenantName || "",
           _renewVisible: !!sp.renewVisible,
           _cycleStart: sp.cycleStart || "",
           _cycleEnd: sp.cycleEnd || "",
@@ -661,12 +686,32 @@ function extrasFromData(data) {
 
 async function refreshEngine(y, m, quiet) {
   const period = periodOfMonth(y, m);
-  // Seed this calendar period's unpaid cycles for continuing rentals (idempotent).
-  // Owner and employee both need Oct cards when navigating — permission is BOTH.
-  try { await engineCommand("generateObligations", { period }, "genobl-" + period + "-" + Date.now()); } catch (e) {}
+  // Seed unpaid cycles when navigating/opening a month. Skip on quiet post-approve
+  // refreshes — generateObligations is a write and dominated perceived approval latency.
+  if (!quiet) {
+    try {
+      await engineCommand("generateObligations", { period }, "genobl-" + period);
+    } catch (e) {}
+  }
   const dash = await engineRead(period);
   S._dash = dash;
   applyUiConfig(dash.ui);
+  return dash;
+}
+
+/** Post-approve: one quiet dashboard read + request cards. Preserves month/tab. No fake money. */
+async function refreshAfterCanonicalApproval(opts = {}) {
+  const keepY = S.year, keepM = S.month, keepTab = S.tab;
+  const y = opts.year != null ? opts.year : S.year;
+  const m = opts.month != null ? opts.month : S.month;
+  const dash = await refreshEngine(y, m, true);
+  if (y === S.year && m === S.month) {
+    const data = mapDashboardToMonth(dash);
+    const k = getMonthKey(y, m);
+    try { localStorage.setItem("qama_month_" + k, JSON.stringify(data)); } catch (e) {}
+  }
+  if (typeof loadRequests === "function") await loadRequests();
+  S.year = keepY; S.month = keepM; S.tab = keepTab;
   return dash;
 }
 async function engineRead(period) {
@@ -713,11 +758,23 @@ async function applyCollection(item, dashSp) {
     want = already + remaining;
   } else return;
   const delta = want - already;
-  if (delta <= 0) return;
-  // Full and partial collect both require an explicit method. Otherwise selecting
-  // محصّل alone would mint a cash receipt before the user chose نقداً/تحويل,
-  // and a concurrent hydrate could wipe the method picker mid-edit.
-  if (!item.collectionMethod) return;
+  if (delta <= 0) {
+    // Already fully paid — idempotent no-op (double-tap / network retry).
+    item._collectDraft = false;
+    return { alreadyApplied: true, paidFils: already };
+  }
+  // محصل + كامل/جزئي is payment intent. Channel required; cash is the default when
+  // the employee/manager left method blank after choosing محصّل (never leave Paid=0).
+  if (!item.collectionMethod) {
+    if (item.status === "collected" || item._collectDraft) {
+      item.collectionMethod = "cash";
+    } else {
+      const err = new Error("COLLECTION_METHOD_REQUIRED");
+      err.code = "COLLECTION_METHOD_REQUIRED";
+      err.field = "collectionMethod";
+      throw err;
+    }
+  }
   const ob = item._obligationId || dashSp?.obligationId;
   if (!ob) {
     throw new Error("COLLECTION_NOT_READY: لا يوجد التزام جاهز للتحصيل — أعد المحاولة");
@@ -1098,6 +1155,9 @@ async function applyUiDeposits(data) {
       tx._state = dup.state;
       continue;
     }
+    const sourcePeriod = tx.sourcePeriod
+      || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
+      || String(date).slice(0, 7);
     const r = await engineCommand("submitDeposit", {
       amountFils: fils,
       depositDate: date,
@@ -1105,6 +1165,7 @@ async function applyUiDeposits(data) {
       note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
       reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
       sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
+      sourcePeriod,
     }, ("uiddep-" + String(tx.id || Date.now()) + "-" + fils).slice(0, 120));
     if (r && r.depositId) {
       tx._engineId = r.depositId;
@@ -1393,6 +1454,9 @@ async function setDoc(ref, data) {
             if (fils > 0 && acc) {
               const date = (tx.date && /^\d{4}-\d{2}-\d{2}$/.test(tx.date)) ? tx.date : engineToday();
               try {
+                const sourcePeriod = tx.sourcePeriod
+                  || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
+                  || String(date).slice(0, 7);
                 const dep = await engineCommand("submitDeposit", {
                   amountFils: fils,
                   depositDate: date,
@@ -1400,6 +1464,7 @@ async function setDoc(ref, data) {
                   note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
                   reference: String(tx.desc || data.id || "إيداع").slice(0, 120),
                   sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
+                  sourcePeriod,
                 }, ("reqdep-" + (data.id || ref._id)).slice(0, 120));
                 if (dep && dep.depositId) {
                   payload = { ...payload, depositId: dep.depositId, transaction: { ...tx, depositId: dep.depositId } };

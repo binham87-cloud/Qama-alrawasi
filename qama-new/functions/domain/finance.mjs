@@ -336,25 +336,69 @@ export function assertReceiptFits({ obligation, receipts, amountFils, asOfDate }
 /* ───────────────────── custody / holding ───────────────────── */
 
 /**
- * Operational cash custody is ONE shared pool (عهدة الموظفين).
+ * Operational cash custody is SHARED among employees, but ISOLATED by financial period.
  *
- * Shared Holding =
- *   SUM(recognized CASH receipts from any collector)
- * − SUM(APPROVED deposits from shared custody)
+ * Holding(P) =
+ *   SUM(recognized CASH receipts whose canonical period is P)
+ * − SUM(APPROVED holding deposits whose sourcePeriod is P)
  *
+ * Employees remain pooled within each month (no Nader vs Yahya spendable split).
  * collectorUserId / deposit employeeId are audit fields only.
- * Bank receipts never enter the pool. Pending/rejected deposits do not reduce it.
+ * Bank receipts never enter Holding. Pending/rejected deposits do not reduce it.
+ * External ("إيداع آخر") deposits never reduce Holding.
  * Reversed cash receipts leave the set via state. NO CLAMPING.
+ *
+ * Global all-period Holding (internal) = sum of Holding(P) over periods.
  */
 
-/** Shared spendable custody. Integer fils. */
-export function sharedHoldingFils({ receipts, deposits, excludeReceiptIds = [], excludeDepositIds = [] }) {
+const PERIOD_RE = /^\d{4}-\d{2}$/;
+
+/** Canonical holding period of a cash receipt — obligation/daily period, never "today". */
+export function receiptHoldingPeriod(receipt) {
+  if (!receipt) return null;
+  const p = String(receipt.period || "");
+  return PERIOD_RE.test(p) ? p : null;
+}
+
+/**
+ * Source holding period of a deposit.
+ * New records persist `sourcePeriod`. Legacy fallback: `deposit.period`
+ * (historically periodOf(depositDate)) when present — deterministic, not a guess from today.
+ * Deposits with neither field are ambiguous and excluded from period Holding.
+ */
+export function depositSourcePeriodInfo(deposit) {
+  if (!deposit) return { period: null, derived: false, ambiguous: true };
+  const explicit = String(deposit.sourcePeriod || "");
+  if (PERIOD_RE.test(explicit)) {
+    return { period: explicit, derived: false, ambiguous: false };
+  }
+  const legacy = String(deposit.period || "");
+  if (PERIOD_RE.test(legacy)) {
+    return { period: legacy, derived: true, ambiguous: false };
+  }
+  return { period: null, derived: false, ambiguous: true };
+}
+
+export function depositSourcePeriod(deposit) {
+  return depositSourcePeriodInfo(deposit).period;
+}
+
+/** Shared spendable custody. When `period` is set, only that month's Holding. Integer fils. */
+export function sharedHoldingFils({
+  receipts, deposits, period = null, excludeReceiptIds = [], excludeDepositIds = [],
+}) {
   const skipR = new Set(excludeReceiptIds);
   const skipD = new Set(excludeDepositIds);
+  const wantPeriod = period && PERIOD_RE.test(String(period)) ? String(period) : null;
   let cash = 0;
   for (const r of receipts || []) {
     if (skipR.has(r.id)) continue;
     if (!isRecognizedReceipt(r) || r.method !== "cash") continue;
+    if (wantPeriod) {
+      const rp = receiptHoldingPeriod(r);
+      // Ambiguous (no period) receipts are excluded from period Holding — never guess.
+      if (rp !== wantPeriod) continue;
+    }
     cash += toSafeFils(r.amountFils);
   }
   let deposited = 0;
@@ -365,6 +409,10 @@ export function sharedHoldingFils({ receipts, deposits, excludeReceiptIds = [], 
     if (d.sourceKind === "external") continue;
     // Display-only bank-receipt history rows are not custody deposits.
     if (isDisplayOnlyMoneyProjection(d)) continue;
+    if (wantPeriod) {
+      const sp = depositSourcePeriod(d);
+      if (sp !== wantPeriod) continue;
+    }
     deposited += toSafeFils(d.amountFils);
   }
   return cash - deposited;
@@ -373,13 +421,16 @@ export function sharedHoldingFils({ receipts, deposits, excludeReceiptIds = [], 
 /**
  * Audit only: cash collected BY each employee. Not a spendable limit.
  * depositedFils here is deposits that employee submitted (audit), not their personal pool.
+ * Optional `period` scopes attribution to that holding period.
  */
-export function holdingByEmployee({ receipts, deposits }) {
+export function holdingByEmployee({ receipts, deposits, period = null }) {
   const collected = new Map();
   const submitted = new Map();
+  const wantPeriod = period && PERIOD_RE.test(String(period)) ? String(period) : null;
 
   for (const r of receipts || []) {
     if (!isRecognizedReceipt(r) || r.method !== "cash") continue;
+    if (wantPeriod && receiptHoldingPeriod(r) !== wantPeriod) continue;
     const who = r.collectorUserId;
     if (!who) continue;
     collected.set(who, (collected.get(who) || 0) + toSafeFils(r.amountFils));
@@ -388,6 +439,7 @@ export function holdingByEmployee({ receipts, deposits }) {
     if (!isApproved(d)) continue;
     if (d.sourceKind === "external") continue;
     if (isDisplayOnlyMoneyProjection(d)) continue;
+    if (wantPeriod && depositSourcePeriod(d) !== wantPeriod) continue;
     const who = d.employeeId;
     if (!who) continue;
     submitted.set(who, (submitted.get(who) || 0) + toSafeFils(d.amountFils));
@@ -403,7 +455,7 @@ export function holdingByEmployee({ receipts, deposits }) {
       cashCollectedFils: c,
       depositedFils: d,
       submittedDepositFils: d,
-      // Attribution for audit/display. Operational deposit limit remains sharedHoldingFils.
+      // Attribution for audit/display. Operational deposit limit remains sharedHoldingFils(period).
       holdingFils: Math.max(0, c - d),
     });
   }
@@ -416,36 +468,73 @@ export function totalHoldingFils(rows) {
 }
 
 /**
- * A deposit may not exceed the SHARED employee holding pool.
+ * A deposit may not exceed the SHARED Holding for its sourcePeriod only.
  * Submitter identity is audit only — it does not create a personal limit.
+ * Global Holding being sufficient is NEVER enough if the selected period is short.
  */
-export function assertDepositFitsCustody({ employeeId, amountFils, receipts, deposits }) {
+export function assertDepositFitsCustody({
+  employeeId, amountFils, receipts, deposits, sourcePeriod,
+}) {
   assertPositiveFils(amountFils, "INVALID_AMOUNT");
-  const holding = sharedHoldingFils({ receipts, deposits });
+  const period = String(sourcePeriod || "");
+  if (!PERIOD_RE.test(period)) {
+    throw new DomainError("SOURCE_PERIOD_REQUIRED", { employeeId, sourcePeriod });
+  }
+  const holding = sharedHoldingFils({ receipts, deposits, period });
   if (holding < 0) {
-    throw new DomainError("CUSTODY_RECONCILIATION_ERROR", { employeeId, holdingFils: holding });
+    throw new DomainError("CUSTODY_RECONCILIATION_ERROR", {
+      employeeId, holdingFils: holding, sourcePeriod: period,
+    });
   }
   if (amountFils > holding) {
-    throw new DomainError("AMOUNT_EXCEEDS_HOLDING", { employeeId, holdingFils: holding, attemptedFils: amountFils });
+    throw new DomainError("AMOUNT_EXCEEDS_HOLDING", {
+      employeeId, holdingFils: holding, attemptedFils: amountFils, sourcePeriod: period,
+    });
   }
   return holding;
 }
 
 /**
- * Cash receipt reversal is allowed iff shared holding after removing those
- * receipts remains >= 0. Bank receipts skip this (they never entered the pool).
+ * Cash receipt reversal is allowed iff Holding for each affected period stays >= 0
+ * after removing those receipts. Bank receipts skip this (they never entered the pool).
  */
 export function assertCashReversalFitsSharedHolding({ receipts, deposits, reversingReceiptIds }) {
   const ids = Array.isArray(reversingReceiptIds) ? reversingReceiptIds : [reversingReceiptIds];
-  const after = sharedHoldingFils({ receipts, deposits, excludeReceiptIds: ids });
-  if (after < 0) {
-    throw new DomainError("RECEIPT_ALREADY_DEPOSITED", {
-      reversingReceiptIds: ids,
-      sharedHoldingAfterFils: after,
-      message: "تم تضمين هذا المبلغ في إيداع معتمد من العهدة المشتركة. يُرجى عكس الإيداع أولاً قبل إلغاء الإيصال.",
-    });
+  const idSet = new Set(ids);
+  const periods = new Set();
+  for (const r of receipts || []) {
+    if (!idSet.has(r.id)) continue;
+    const p = receiptHoldingPeriod(r);
+    if (p) periods.add(p);
   }
-  return after;
+  // Legacy receipts without period: fall back to all-period check.
+  if (periods.size === 0) {
+    const after = sharedHoldingFils({ receipts, deposits, excludeReceiptIds: ids });
+    if (after < 0) {
+      throw new DomainError("RECEIPT_ALREADY_DEPOSITED", {
+        reversingReceiptIds: ids,
+        sharedHoldingAfterFils: after,
+        message: "تم تضمين هذا المبلغ في إيداع معتمد من العهدة المشتركة. يُرجى عكس الإيداع أولاً قبل إلغاء الإيصال.",
+      });
+    }
+    return after;
+  }
+  let minAfter = Infinity;
+  for (const period of periods) {
+    const after = sharedHoldingFils({
+      receipts, deposits, period, excludeReceiptIds: ids,
+    });
+    if (after < 0) {
+      throw new DomainError("RECEIPT_ALREADY_DEPOSITED", {
+        reversingReceiptIds: ids,
+        sharedHoldingAfterFils: after,
+        sourcePeriod: period,
+        message: "تم تضمين هذا المبلغ في إيداع معتمد من عهدة هذا الشهر. يُرجى عكس الإيداع أولاً قبل إلغاء الإيصال.",
+      });
+    }
+    if (after < minAfter) minAfter = after;
+  }
+  return minAfter;
 }
 
 /* ───────────────────── period summary ───────────────────── */
@@ -463,10 +552,10 @@ export function assertCashReversalFitsSharedHolding({ receipts, deposits, revers
  *   + approved deposits covering this month's CASH (capped so prior-month
  *     shared-pool deposits cannot invent September rent figures).
  *
- * Global Shared Holding is separate (all-period cash − all approved deposits)
- * and must never be mixed into TARGET.
+ * Period Holding (عند الموظفين for the selected month) is Holding(P) and must
+ * never be mixed into TARGET. Global Holding may equal sum(Holding for all P).
  */
-export function periodSummary({ obligations, receipts, deposits, expenses, asOfDate }) {
+export function periodSummary({ obligations, receipts, deposits, expenses, asOfDate, holdingPeriod = null }) {
   const obs = (obligations || []).filter((o) => o.state === "active");
   const views = obs.map((o) => obligationView(o, receipts, asOfDate));
   const liveObIds = new Set(obs.map((o) => o.id));
@@ -500,9 +589,24 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
     .filter((d) => isApproved(d) && !isDisplayOnlyMoneyProjection(d))
     .reduce((s, d) => s + toSafeFils(d.amountFils), 0);
 
-  // Deposits may draw from the shared global pool; for THIS month's rent split,
-  // only count deposit coverage up to this month's cash on obligations.
-  const monthDepositCoverFils = Math.min(approvedDepositsFils, cashOnObligationsFils);
+  // Holding deposits that SOURCE from this period (or all when holdingPeriod unset)
+  // plus external deposits in this list may displace "at employees" in the rent equation.
+  // Holding(P) itself never decreases for external — see sharedHoldingFils.
+  const holdingDepositsCoverFils = (deposits || [])
+    .filter((d) => {
+      if (!isApproved(d) || isDisplayOnlyMoneyProjection(d)) return false;
+      if (d.sourceKind === "external") return false;
+      if (!holdingPeriod) return true;
+      return depositSourcePeriod(d) === holdingPeriod;
+    })
+    .reduce((s, d) => s + toSafeFils(d.amountFils), 0);
+  const externalDepositsFils = (deposits || [])
+    .filter((d) => isApproved(d) && !isDisplayOnlyMoneyProjection(d) && d.sourceKind === "external")
+    .reduce((s, d) => s + toSafeFils(d.amountFils), 0);
+  const monthDepositCoverFils = Math.min(
+    holdingDepositsCoverFils + externalDepositsFils,
+    cashOnObligationsFils,
+  );
   const atEmployeesMonthFils = cashOnObligationsFils - monthDepositCoverFils;
   const companyCollectedFils = bankRecognizedFils + monthDepositCoverFils;
 
@@ -526,8 +630,8 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
     .filter(isApproved)
     .reduce((s, e) => s + toSafeFils(e.amountFils), 0);
 
-  const custody = holdingByEmployee({ receipts, deposits });
-  const holdingFils = sharedHoldingFils({ receipts, deposits });
+  const custody = holdingByEmployee({ receipts, deposits, period: holdingPeriod });
+  const holdingFils = sharedHoldingFils({ receipts, deposits, period: holdingPeriod });
 
   // Income / Net income are domain KPIs derived from the same company/deposit truth —
   // never from UI history rows. Income = money recognized as company/deposited for the period.

@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="OPERATING-NET-20261001T2105Z"/>
-<title>قمة الرواسي · OPERATING-NET-20261001T2105Z</title>
+<meta name="qama-ui-build" content="PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z"/>
+<title>قمة الرواسي · PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -416,125 +416,64 @@ async function loadRequests(){
 }
 
 async function approveRequest(req){
-  if(req&&req.type==="engine_approval"){
-    if(S.approvingReqId){showMsg("⏳ جاري اعتماد طلب آخر...");return;}
-    S.approvingReqId=req.id; R();
-    try{
+  // commitWorkRequest FIRST — never Object.assign paid/status into the month and save before this.
+  // Never Object.assign paid/status into the month and save before this.
+  if(S.approvingReqId){showMsg("⏳ جاري اعتماد طلب آخر...");return;}
+  if(!req||!req.id){showMsg("⚠ طلب غير صالح");return;}
+  S.approvingReqId=req.id; R();
+  const keepY=S.year, keepM=S.month, keepTab=S.tab;
+  try{
+    if(req.type==="engine_approval"){
       await engineCommand(req._approveCommand,req._approvePayload,"engap-"+(req._canonicalId||req.id));
       showMsg("✓ تم اعتماد الطلب");
-      await loadMonthOnline(S.year,S.month);
-      await loadRequests();
-    }catch(e){showMsg("⚠ خطأ في الاعتماد");console.error(e);}
-    finally{S.approvingReqId=null;R();}
-    return;
-  }
-  // FIX 4: منع الضغط المزدوج من نفس الجهاز
-  if(S.approvingReqId){showMsg("⏳ جاري اعتماد طلب آخر...");return;}
-  S.approvingReqId=req.id; R();
-  try{
-    // Deposit/expense: commitWorkRequest only — no local month mutate / double path.
-    if(req&&(req.type==="add_transaction"||req.type==="add_expense")){
-      await setDoc(doc(db,"requests",req.id),{...req,status:"approved",approvedAt:new Date().toISOString()});
-      showMsg("✓ تم اعتماد الطلب");
-      await loadRequests();
-      await loadMonthOnline(S.year,S.month);
-      R();
+      if(typeof refreshAfterCanonicalApproval==="function"){
+        await refreshAfterCanonicalApproval({year:S.year,month:S.month});
+      }else{
+        await refreshEngine(S.year,S.month,true);
+        await loadRequests();
+      }
+      S.year=keepY;S.month=keepM;S.tab=keepTab; R();
       return;
     }
-    // ============================================================
-    // حماية atomic من التكرار باستخدام Firebase runTransaction
-    // runTransaction يضمن: اقرأ الطلب + تحقق status + اكتب processing
-    // كل ذلك في عملية واحدة لا تقبل التنفيذ المتزامن من جهازين
-    // ============================================================
-    const {doc:fbDoc,getDoc:fbGetDoc,setDoc:fbSetDoc,serverTimestamp:fbSTS,runTransaction:fbRunTx}=
-      await import("https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js");
-    const reqRef=fbDoc(db,"requests",req.id);
-    let reqLive=null;
-    try{
-      await fbRunTx(db,async(tx)=>{
-        const snap=await tx.get(reqRef);
-        if(!snap.exists()) throw new Error("NOT_FOUND");
-        const d=snap.data();
-        if(d.status!=="pending") throw new Error("NOT_PENDING:"+d.status);
-        // اكتب processing داخل نفس الـ transaction — atomic
-        tx.update(reqRef,{status:"processing",processingAt:new Date().toISOString()});
-        reqLive=d;
-      });
-    }catch(txErr){
-      const msg=txErr.message||"";
-      if(msg==="NOT_FOUND"){showMsg("⚠ الطلب غير موجود");return;}
-      if(msg.startsWith("NOT_PENDING")){
-        const st=msg.split(":")[1]||"";
-        showMsg(st==="approved"?"✓ الطلب مُعتمد مسبقاً":"⏳ الطلب قيد المعالجة أو مرفوض");
-        await loadRequests();R();return;
-      }
-      throw txErr; // خطأ غير متوقع
+    // Canonical server commit first (idempotent). UI card status updates only after success.
+    const commit=await engineCommand("commitWorkRequest",{requestId:req.id},"commit-"+req.id);
+    if(!(commit&&(commit.status==="approved"||commit.alreadyApplied))){
+      throw new Error((commit&&commit.status)||"APPROVE_FAILED");
     }
-    // بعد runTransaction نستخدم reqLive (النسخة الحقيقية من Firebase) وليس req (نسخة الواجهة)
-    const R_=reqLive; // اختصار واضح — R_ هي المصدر الموثوق
-    const data=getMonthData(R_.year,R_.month);
-    if(R_.type==="update_partition"){
-      const unit=data.units.find(u=>u.id===R_.payload.unitId);
-      if(unit){const p=unit.partitions.find(p=>p.id===R_.payload.partId);if(p)Object.assign(p,R_.payload.fields);}
-    } else if(R_.type==="update_full"){
-      const u=data.full.find(u=>u.id===R_.payload.unitId);
-      if(u)Object.assign(u,R_.payload.fields);
-    } else if(R_.type==="add_expense"){
-      // Engine commitWorkRequest creates the expense + Revenue debit. No local double write.
-    } else if(R_.type==="add_transaction"){
-      // Handled above via commitWorkRequest — keep branch for safety no-op
-    } else if(R_.type==="add_unit"){
-      data.units.push(R_.payload.unit);
-      registerCustomUnit(R_.payload.unit,false,R_.year,R_.month);
-      propagateNewUnit(R_.payload.unit,R_.year,R_.month);
-    } else if(R_.type==="add_full_unit"){
-      data.full.push(R_.payload.unit);
-      registerCustomUnit(R_.payload.unit,true,R_.year,R_.month);
-      propagateNewFullUnit(R_.payload.unit,R_.year,R_.month);
-    } else if(R_.type==="delete_partition"){
-      const unit=data.units.find(u=>u.id===R_.payload.unitId);
-      if(unit){const pi=unit.partitions.findIndex(p=>p.id===R_.payload.partId);if(pi>-1)unit.partitions.splice(pi,1);}
-    } else if(R_.type==="delete_full"){
-      const fi=data.full.findIndex(u=>u.id===R_.payload.unitId);
-      if(fi>-1)data.full.splice(fi,1);
-      try{removeCustomUnit(R_.payload.unitId,true,R_.year,R_.month);}catch(e){}
-      try{propagateRemoveUnit(R_.payload.unitId,true,R_.year,R_.month);}catch(e){}
+    // Reflect request card immediately from trustworthy server result (not fake money).
+    if(Array.isArray(S.pendingRequests)){
+      S.pendingRequests=S.pendingRequests.map(r=>r&&r.id===req.id?{...r,status:"approved",approvedAt:new Date().toISOString()}:r);
     }
-    if(R_.type==="add_daily"){
-      if(!data.dailyBookings)data.dailyBookings=[];
-      data.dailyBookings.push({...R_.payload.booking,id:R_.id});
-    } else if(R_.type==="add_unit_maintenance"){
-      if(!data.unitMaintenance)data.unitMaintenance=[];
-      data.unitMaintenance.push({...R_.payload.maintenance,id:R_.id});
-      // Revenue debit comes from linked engine expense — do not bump client balance.
-    } else if(R_.type==="add_facility_maintenance"){
-      if(!data.facilityMaintenance)data.facilityMaintenance=[];
-      data.facilityMaintenance.push({...R_.payload.maintenance,id:R_.id});
-    }
-    // Audit Log
-    try{
-      const RTL={update_partition:"تعديل بارتشن",update_full:"تعديل شقة",add_transaction:"إيداع",add_expense:"مصروف",add_unit_maintenance:"صيانة شقة",add_facility_maintenance:"صيانة مرافق",add_daily:"حجز يومي",delete_partition:"حذف بارتشن",delete_full:"حذف شقة"};
-      addLog&&addLog(data,(USERS[S.user]?.name||S.user)+" اعتمد طلب "+(RTL[R_.type]||R_.type)+" من "+(USERS[R_.by]?.name||R_.by||"موظف"),{target:R_.desc||(RTL[R_.type]||R_.type),field:"اعتماد",oldVal:"معلّق",newVal:"معتمد"});
-    }catch(e){}
-    // كتابة واحدة لـ Firebase للشهر
-    const monthKey=getMonthKey(R_.year,R_.month);
-    const finalData=normalizeData(data);
-    try{localStorage.setItem("qama_month_"+monthKey,JSON.stringify(finalData));}catch(e){}
-    await fbSetDoc(fbDoc(db,"months",monthKey),{data:finalData,updatedAt:fbSTS()},{merge:true});
-    // approved — يحوّل status من processing إلى approved
-    await fbSetDoc(fbDoc(db,"requests",R_.id),{...R_,status:"approved",approvedAt:new Date().toISOString()});
     showMsg("✓ تم اعتماد الطلب");
-    await loadRequests();
-    await loadMonthOnline(R_.year,R_.month);
-    if(R_.year!==S.year||R_.month!==S.month) await loadMonthOnline(S.year,S.month);
-    await loadBalances();
+    const ry=req.year!=null?req.year:S.year;
+    const rm=req.month!=null?req.month:S.month;
+    if(typeof refreshAfterCanonicalApproval==="function"){
+      await refreshAfterCanonicalApproval({year:ry,month:rm});
+      if(ry!==keepY||rm!==keepM){
+        await refreshAfterCanonicalApproval({year:keepY,month:keepM});
+      }
+    }else{
+      await refreshEngine(ry,rm,true);
+      await loadRequests();
+    }
+    S.year=keepY;S.month=keepM;S.tab=keepTab;
     R();
   }catch(e){
-    showMsg("⚠ خطأ في الاعتماد — راجع السجل");
-    console.error(e);
+    const msg=String((e&&(e.message||e.code))||e);
+    if(/NOT_PENDING|alreadyApplied|REQUEST_NOT_PENDING/i.test(msg)){
+      showMsg("✓ الطلب مُعتمد مسبقاً");
+      try{
+        if(typeof refreshAfterCanonicalApproval==="function") await refreshAfterCanonicalApproval({});
+        else await loadRequests();
+      }catch(_e){}
+    }else{
+      showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):"خطأ في الاعتماد"));
+      console.error(e);
+    }
   }finally{
-    // FIX 4: نُعيد تفعيل الزر دائماً سواء نجح أو فشل
-    S.approvingReqId=null; R();
+    S.approvingReqId=null;
+    S.year=keepY;S.month=keepM;S.tab=keepTab;
+    R();
   }
 }
 
@@ -3027,7 +2966,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI OPERATING-NET-20261001T2105Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3257,7 +3196,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI OPERATING-NET-20261001T2105Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -3408,8 +3347,8 @@ function renderApp(){
     // Same canonical fields Manager uses — never companyCollected for "المحصّل" label.
     const yhTarget = engY ? (Number(engY.targetFils)||0)/100 : 0;
     const yhCollected = engY ? (Number(engY.collectedFils ?? engY.tenantPaidFils)||0)/100 : 0;
-    // عند الموظفين = current GLOBAL shared custody (not monthly atEmployeesMonthFils).
-    const yhHolding = engY ? (Number(engY.sharedEmployeeHoldingFils ?? engY.holdingFils)||0)/100 : 0;
+    // عند الموظفين = Holding for the SELECTED month only (shared among employees within that month).
+    const yhHolding = engY ? (Number(engY.sharedEmployeeHoldingFils ?? engY.holdingFils)||0)/100 : 0; // period Holding
     const yhAtEmp = yhHolding;
     const yhMonthCash = engY ? (Number(engY.atEmployeesMonthFils)||0)/100 : 0;
     const yhUnpaid = engY ? (Number(engY.tenantUnpaidFils ?? engY.remainingFils)||0)/100 : 0;
@@ -3567,20 +3506,24 @@ function renderApp(){
               const paidNow=Number(p._enginePaid||0);
               const remNow=Math.max(0,(Number(p.rent)||0)-paidNow);
               let vacMsg=(val==="vacant"?"إخلاء وتحويل لفارغ":"تحويل لموظفين")+"\n\n"
+                +"سيصبح البارتشن فارغاً، وسيتم مسح بيانات المستأجر الحالي من هذا البارتشن.\n\n"
                 +"• لا يعكس التحصيلات الصحيحة\n"
                 +"• لا ينقص عهدة الموظف\n"
-                +"• يحفظ سجل المستأجر ودوراته\n";
-              if(paidNow>0) vacMsg+="• تحصيل سابق معترف به: "+paidNow.toLocaleString()+" د.إ (يبقى)\n";
-              if(remNow>0) vacMsg+="• متأخرات: "+remNow.toLocaleString()+" د.إ — ستبقى مسجّلة\n";
-              vacMsg+="\nلإلغاء تحصيل خاطئ استخدم «متأخر»/زر إلغاء التحصيل — وليس فارغ.";
+                +"• السجل المالي التاريخي يبقى للتدقيق\n"
+                +"• بيانات المستأجر الحالي (الاسم/الهاتف/العقد) تُمسح من الشاشة\n";
+              if(paidNow>0) vacMsg+="• تحصيل سابق معترف به: "+paidNow.toLocaleString()+" د.إ (يبقى في السجل)\n";
+              if(remNow>0) vacMsg+="• متأخرات: "+remNow.toLocaleString()+" د.إ — تبقى للتحصيل دون عرض كمستأجر حالي\n";
+              vacMsg+="\nتأكيد = تنفيذ الإخلاء ومسح بيانات المستأجر الحالي.\nإلغاء = لا تغيير.\n\nلإلغاء تحصيل خاطئ استخدم «متأخر»/زر إلغاء التحصيل — وليس فارغ.";
               if(!confirm(vacMsg)){
                 p.status=prevStatus||"late";
                 set({editPart:unit.id+"-"+p.id});
                 return;
               }
-              // Explicit vacate/staff — mark residue so hydrate will not resurrect collect draft.
+              // Explicit vacate/staff — clear CURRENT tenant projection immediately (history stays).
               p.collectionMethod="";p.collectedBy="";p.partial=false;p.paid_amount=0;p._collectDraft=false;
               p.draftClearedByVacate=true;p.draftSessionId="";p.draftReverseGen=null;
+              p.tenant="";p.phone="";p.start_date="";p.end_date="";p.due_date="";p.deposit="";
+              p._tenantCommitted="";p.rent=0;p.note=(val==="staff"?"موظفين":"فارغ");
             }
             if(val==="collected"||val==="late"||val==="pending"){
               if(p.note==="فارغ") p.note="";
@@ -3841,10 +3784,10 @@ function renderApp(){
               if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
               const paid=Number(p._enginePaid||0);
               const rem=Math.max(0,(Number(p.rent)||0)-paid);
-              let msg="إخلاء وتحويل لفارغ\n\n• لا يعكس التحصيل ولا ينقص العهدة\n• يحفظ السجل المالي السابق\n";
-              if(paid>0) msg+="• تحصيل معترف به يبقى: "+paid.toLocaleString()+" د.إ\n";
-              if(rem>0) msg+="• متأخرات ستبقى: "+rem.toLocaleString()+" د.إ\n";
-              if(!confirm(msg+"متابعة؟"))return;
+              let msg="إخلاء وتحويل لفارغ\n\nسيصبح البارتشن فارغاً، وسيتم مسح بيانات المستأجر الحالي من هذا البارتشن.\n\n• لا يعكس التحصيل ولا ينقص العهدة\n• السجل المالي التاريخي يبقى للتدقيق\n• الاسم/الهاتف/بيانات العقد الحالية تُمسح\n";
+              if(paid>0) msg+="• تحصيل معترف به يبقى في السجل: "+paid.toLocaleString()+" د.إ\n";
+              if(rem>0) msg+="• متأخرات تبقى للتحصيل: "+rem.toLocaleString()+" د.إ (بدون عرض كمستأجر حالي)\n";
+              if(!confirm(msg+"\nتأكيد = تنفيذ.\nإلغاء = لا تغيير."))return;
               try{
                 // CASE B — real move-out: always endTenancy+retain (debt stays collectible).
                 const key=typeof intentKey==="function"?intentKey("end-tenancy",p._rentalId,"retain"):("end-"+p._rentalId+"-retain").slice(0,120);
@@ -4015,12 +3958,14 @@ function renderApp(){
               const paidNow=Number(u._enginePaid||0);
               const remNow=Math.max(0,(Number(u.rent)||0)-paidNow);
               let vacMsg=(val==="vacant"?"إخلاء وتحويل لفارغ":"تحويل لموظفين")+"\n\n"
+                +"سيصبح البارتشن فارغاً، وسيتم مسح بيانات المستأجر الحالي من هذا البارتشن.\n\n"
                 +"• لا يعكس التحصيلات الصحيحة\n"
                 +"• لا ينقص عهدة الموظف\n"
-                +"• يحفظ سجل المستأجر ودوراته\n";
-              if(paidNow>0) vacMsg+="• تحصيل سابق معترف به: "+paidNow.toLocaleString()+" د.إ (يبقى)\n";
-              if(remNow>0) vacMsg+="• متأخرات: "+remNow.toLocaleString()+" د.إ — ستبقى مسجّلة\n";
-              vacMsg+="\nلإلغاء تحصيل خاطئ استخدم «متأخر»/زر إلغاء التحصيل — وليس فارغ.";
+                +"• السجل المالي التاريخي يبقى للتدقيق\n"
+                +"• بيانات المستأجر الحالي (الاسم/الهاتف/العقد) تُمسح من الشاشة\n";
+              if(paidNow>0) vacMsg+="• تحصيل سابق معترف به: "+paidNow.toLocaleString()+" د.إ (يبقى في السجل)\n";
+              if(remNow>0) vacMsg+="• متأخرات: "+remNow.toLocaleString()+" د.إ — تبقى للتحصيل دون عرض كمستأجر حالي\n";
+              vacMsg+="\nتأكيد = تنفيذ الإخلاء ومسح بيانات المستأجر الحالي.\nإلغاء = لا تغيير.\n\nلإلغاء تحصيل خاطئ استخدم «متأخر»/زر إلغاء التحصيل — وليس فارغ.";
               if(!confirm(vacMsg)){
                 u.status=prevStatus||"late";
                 set({editPart:"full-"+u.id});
@@ -4827,7 +4772,7 @@ function renderApp(){
             h("div",{style:{display:"flex",gap:"12px",fontSize:"13px"}},[
               h("span",{style:{color:"#888"}},["إجمالي ما حصّله: "+c.collected.toLocaleString()]),
               h("span",{style:{color:"#4ade80"}},["طلبات إيداعه المعتمدة: "+c.submitted.toLocaleString()])])]))),
-          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["الإيداع من العهدة المشتركة لا يُنسب كعهدة شخصية — لا يُعرض «المتبقي معه»"])]);
+          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["عهدة هذا الشهر مشتركة بين الموظفين — الإيداع يخص شهر العرض فقط ولا يمس عهدة شهر آخر"])]);
       })(),
       // Vacant units card
       vacantList.length>0?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1a1a1a"}},[
@@ -4847,7 +4792,7 @@ function renderApp(){
               onClick:()=>set({showAddTx:!S.showAddTx})},["+ إيداع"])]),
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},[totalIncome.toLocaleString()+" د.إ"])]),
         S.showAddTx?(()=>{
-          const tx2={sourceKind:"holding",desc:"",amount:"",date:new Date().toISOString().slice(0,10),notes:"",type:"cash"};
+          const tx2={sourceKind:"holding",sourcePeriod:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),desc:"",amount:"",date:new Date().toISOString().slice(0,10),notes:"",type:"cash"};
           const wrap=h("div",{style:{padding:"12px",background:"#0f0f0f",borderRadius:"8px",marginBottom:"10px"}});
           const sourceSel=h("select",{"data-testid":"deposit-source",style:{marginBottom:"8px"}},[
             h("option",{value:"holding"},["إيداع من العهدة"]),
@@ -5121,7 +5066,7 @@ function renderApp(){
     const addForm=S.showAddTx?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
       h("div",{style:{fontSize:"15px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["إيداع"]),
       (()=>{
-        const tx={sourceKind:"holding",type:"عام",desc:"",amount:"",date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",notes:""};
+        const tx={sourceKind:"holding",sourcePeriod:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),type:"عام",desc:"",amount:"",date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",notes:""};
         const sourceSel=h("select",{"data-testid":"deposit-source",style:{marginBottom:"8px"}},[
           h("option",{value:"holding"},["إيداع من العهدة"]),
           h("option",{value:"external"},["إيداع آخر"])
@@ -5627,21 +5572,35 @@ function renderApp(){
         if(!b.startDate||!b.endDate)return showMsg("أدخل التواريخ");
         if(!b.total||Number(b.total)<=0)return showMsg("أدخل المبلغ");
         const partLabel=allParts.find(p=>p.id===b.partId)?.label||b.partId;
-        const booking={id:Date.now(),partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user,paymentStatus:"unpaid"};
+        const bookingId="db-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+        const booking={id:bookingId,partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user,paymentStatus:"collected",prepaid:true};
         if(needsApproval){
-          await submitRequest("add_daily","حجز يومي: "+partLabel+" — "+(b.guest||"—")+" ("+b.startDate+" إلى "+b.endDate+") "+Number(b.total).toLocaleString()+" د.إ",{booking});
+          await submitRequest("add_daily","حجز يومي مدفوع مسبقاً: "+partLabel+" — "+(b.guest||"—")+" ("+b.startDate+" إلى "+b.endDate+") "+Number(b.total).toLocaleString()+" د.إ",{booking});
           set({showAddDaily:false});
         } else {
           S._savingDaily=true;R();
           try{
+            const period=typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"));
+            const fils=Math.round(Number(b.total)*100);
+            const op=("dailyprepay-"+bookingId+"-"+fils).slice(0,120);
+            const r=await engineCommand("createDailyBookingPrepaid",{
+              period,
+              bookingJson:JSON.stringify(booking),
+              amountFils:fils,
+              collectionDate:(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)),
+              note:String(b.guest||"حجز يومي").slice(0,300),
+              collectorUserId:S.user
+            },op);
+            booking.receiptId=r&&r.receiptId;
+            booking.paymentStatus="collected";
             if(!data.dailyBookings)data.dailyBookings=[];
             data.dailyBookings.push(booking);
-            addLog&&addLog(data,nm+" أضاف حجز يومي: "+partLabel);
+            addLog&&addLog(data,nm+" أضاف حجز يومي مدفوع: "+partLabel);
             await saveCurData(data,false);
-            showMsg("تم الحفظ");
+            showMsg("تم الحفظ — محصّل / لم يودع");
             set({showAddDaily:false});
           }catch(e){
-            const ix=(data.dailyBookings||[]).indexOf(booking);
+            const ix=(data.dailyBookings||[]).findIndex(x=>x&&String(x.id)===String(bookingId));
             if(ix>=0) data.dailyBookings.splice(ix,1);
             const code=String((e&&(e.message||e.code))||e);
             if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
