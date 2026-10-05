@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="ACCT-PERIOD-TODAY-DATE-20261004T2355Z"/>
-<title>قمة الرواسي · ACCT-PERIOD-TODAY-DATE-20261004T2355Z</title>
+<meta name="qama-ui-build" content="HOLDING-BY-MONTH-20261005T0015Z"/>
+<title>قمة الرواسي · HOLDING-BY-MONTH-20261005T0015Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -79,6 +79,76 @@ async function pinHash(userKey,pin){
 
 // ========== DATA ==========
 const MONTHS=["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+/** Arabic label for canonical YYYY-MM period — never hardcodes amounts. */
+function periodMonthLabel(period){
+  const m=String(period||"").match(/^(\d{4})-(\d{2})$/);
+  if(!m) return String(period||"—");
+  const mi=Number(m[2])-1;
+  const name=(mi>=0&&mi<12)?MONTHS[mi]:m[2];
+  return name+" "+m[1];
+}
+/** Canonical Holding fields from dashboard summary (fils→AED helpers). */
+function holdingSummaryFromEng(eng){
+  if(!eng) return {
+    periodHolding:0, allPeriods:0, cash:0, deposited:0, byPeriod:[],
+  };
+  const periodHolding=(Number(eng.periodHoldingFils??eng.sharedEmployeeHoldingFils??eng.holdingFils)||0)/100;
+  const allPeriods=(Number(eng.sharedHoldingAllPeriodsFils??eng.globalHoldingFils)||0)/100;
+  const cash=(Number(eng.periodCashCollectedFils)||0)/100;
+  const deposited=(Number(eng.periodApprovedHoldingDepositsFils)||0)/100;
+  const byPeriod=Array.isArray(eng.holdingByPeriod)?eng.holdingByPeriod.map(r=>({
+    period:r.period,
+    cash:(Number(r.cashCollectedFils)||0)/100,
+    deposited:(Number(r.approvedHoldingDepositsFils)||0)/100,
+    holding:(Number(r.holdingFils)||0)/100,
+  })):[];
+  return { periodHolding, allPeriods, cash, deposited, byPeriod };
+}
+/** Shared Holding card: عهدة هذا الشهر + إجمالي + حسب الشهر. */
+function renderHoldingBreakdownCard(eng, opts){
+  const o=opts||{};
+  const hs=holdingSummaryFromEng(eng);
+  const selectedPeriod=o.period||null;
+  const rows=hs.byPeriod.filter(r=>r.cash!==0||r.deposited!==0||r.holding!==0);
+  return h("div",{"data-testid":"holding-breakdown",class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #3a2e0c",background:"linear-gradient(135deg,#1a1505,#111)"}},[
+    h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fbbf24",marginBottom:"10px"}},["💼 العهدة المشتركة"]),
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"10px"}},[
+      h("div",{style:{background:"#0f0f0f",borderRadius:"8px",padding:"10px",textAlign:"center"}},[
+        h("div",{"data-testid":"holding-this-month-label",style:{fontSize:"11px",color:"#888",marginBottom:"4px"}},["عهدة هذا الشهر"]),
+        h("div",{"data-testid":"holding-this-month",style:{fontSize:"20px",fontWeight:"900",color:"#60a5fa"}},[hs.periodHolding.toLocaleString()]),
+        h("div",{style:{fontSize:"11px",color:"#444"}},["د.إ"])]),
+      h("div",{style:{background:"#0f0f0f",borderRadius:"8px",padding:"10px",textAlign:"center"}},[
+        h("div",{"data-testid":"holding-all-periods-label",style:{fontSize:"11px",color:"#888",marginBottom:"4px"}},["إجمالي العهدة المشتركة"]),
+        h("div",{"data-testid":"holding-all-periods",style:{fontSize:"20px",fontWeight:"900",color:"#fbbf24"}},[hs.allPeriods.toLocaleString()]),
+        h("div",{style:{fontSize:"11px",color:"#444"}},["د.إ"])])]),
+    h("div",{style:{fontSize:"11px",color:"#665510",marginBottom:"8px"}},[
+      "محصل نقداً هذا الشهر: "+hs.cash.toLocaleString()+" · مودع من العهدة: "+hs.deposited.toLocaleString()
+    ]),
+    rows.length?h("div",{"data-testid":"holding-by-month"},[
+      h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#ccc",marginBottom:"6px"}},["العهدة حسب الشهر"]),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr 1fr",gap:"4px",fontSize:"11px",color:"#666",marginBottom:"4px",paddingBottom:"4px",borderBottom:"1px solid #222"}},[
+        h("div",{},["الشهر"]),h("div",{},["محصل نقداً"]),h("div",{},["مودع من العهدة"]),h("div",{},["العهدة المتبقية"])
+      ]),
+      ...rows.map(r=>h("div",{
+        "data-testid":"holding-month-row",
+        "data-period":r.period,
+        style:{
+          display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr 1fr",gap:"4px",
+          fontSize:"12px",padding:"5px 0",borderBottom:"1px solid #151515",
+          background:(selectedPeriod&&r.period===selectedPeriod)?"#1a1508":"transparent",
+        },
+      },[
+        h("div",{style:{color:"#fff",fontWeight:selectedPeriod&&r.period===selectedPeriod?"700":"500"}},[periodMonthLabel(r.period)]),
+        h("div",{style:{color:"#4ade80"}},[r.cash.toLocaleString()]),
+        h("div",{style:{color:"#93c5fd"}},[r.deposited.toLocaleString()]),
+        h("div",{style:{color:"#fbbf24",fontWeight:"700"}},[r.holding.toLocaleString()]),
+      ]))
+    ]):h("div",{style:{fontSize:"11px",color:"#555"}},["لا نشاط عهدة مسجّل بعد"]),
+    h("div",{style:{fontSize:"10px",color:"#555",marginTop:"8px"}},[
+      "إجمالي العهدة = مجموع عهدة كل الأشهر · التحويل البنكي والإيداع الخارجي لا يدخلان العهدة"
+    ]),
+  ]);
+}
 const CY=2026;
 const NOW_M=new Date().getMonth();
 const NOW_Y=new Date().getFullYear();
@@ -2966,7 +3036,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI ACCT-PERIOD-TODAY-DATE-20261004T2355Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI HOLDING-BY-MONTH-20261005T0015Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3196,7 +3266,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI ACCT-PERIOD-TODAY-DATE-20261004T2355Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI HOLDING-BY-MONTH-20261005T0015Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -3348,10 +3418,13 @@ function renderApp(){
     const yhTarget = engY ? (Number(engY.targetFils)||0)/100 : 0;
     const yhCollected = engY ? (Number(engY.collectedFils ?? engY.tenantPaidFils)||0)/100 : 0;
     // عند الموظفين = Holding for the SELECTED month only (shared among employees within that month).
-    const yhHolding = engY ? (Number(engY.sharedEmployeeHoldingFils ?? engY.holdingFils)||0)/100 : 0; // period Holding
+    const yhHs = holdingSummaryFromEng(engY);
+    const yhHolding = yhHs.periodHolding; // عهدة هذا الشهر
     const yhAtEmp = yhHolding;
+    const yhAllHolding = yhHs.allPeriods; // إجمالي العهدة المشتركة
     const yhMonthCash = engY ? (Number(engY.atEmployeesMonthFils)||0)/100 : 0;
     const yhUnpaid = engY ? (Number(engY.tenantUnpaidFils ?? engY.remainingFils)||0)/100 : 0;
+    const yhPeriod = (typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0")));
     const yhPct=yhTarget>0?Math.min(100,Math.round(yhCollected/yhTarget*100)):0;
     const yhColor=yhPct>=100?"#4ade80":yhPct>=70?"#facc15":"#f87171";
     content=h("div",{},[
@@ -3379,8 +3452,9 @@ function renderApp(){
             h("div",{style:{fontSize:"13px",color:"#555",marginBottom:"6px"}},["المتبقي للتحصيل"]),
             h("div",{style:{fontSize:"22px",fontWeight:"900",color:yhUnpaid===0?"#4ade80":"#f87171"}},[yhUnpaid.toLocaleString()]),
             h("div",{style:{fontSize:"12px",color:"#444"}},["د.إ"])])]),
-        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"10px"}},["العهدة المشتركة الإجمالية: "+yhHolding.toLocaleString()+" د.إ"]),
-        h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["نقد محصل هذا الشهر ولم يودع: "+yhMonthCash.toLocaleString()+" د.إ"])])]);
+        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"10px"}},["عهدة هذا الشهر: "+yhHolding.toLocaleString()+" د.إ · إجمالي العهدة المشتركة: "+yhAllHolding.toLocaleString()+" د.إ"]),
+        h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["نقد محصل هذا الشهر ولم يودع: "+yhMonthCash.toLocaleString()+" د.إ"])]),
+      renderHoldingBreakdownCard(engY,{period:yhPeriod})]);
   }
 
   // ======= UNITS =======
@@ -4486,7 +4560,8 @@ function renderApp(){
     _vReceived+=(mData.dailyBookings||[]).reduce((s,b)=>s+Number(b.total||0),0);
     const _vUndeposited=Math.max(0,_vReceived-_vDeposited);
     // Core rent equation: TARGET = TENANT COLLECTED + TENANT UNPAID.
-    // Tenant collected splits as company/deposited + at-employees (month). Holding is GLOBAL.
+    // Tenant collected splits as company/deposited + at-employees (month).
+    // عند الموظفين = Holding(selected month). إجمالي العهدة = sum of all months.
     const eng = _engFin || ((typeof S !== "undefined" && S._dash && S._dash.summary) ? S._dash.summary : null);
     const _vTarget = eng ? (Number(eng.targetFils)||0)/100 : (()=>{ let t=0; mData.units.forEach(u=>u.partitions.forEach(p=>{if(displayStatus(p)!=="vacant"&&displayStatus(p)!=="staff")t+=Number(p.rent)||0;})); (mData.full||[]).forEach(u=>{if(displayStatus(u)!=="vacant"&&displayStatus(u)!=="staff")t+=Number(u.rent)||0;}); return t; })();
     const _vCollected = eng ? (Number(eng.collectedFils ?? eng.tenantPaidFils)||0)/100 : _vReceived;
@@ -4498,8 +4573,11 @@ function renderApp(){
     const _vSum = _vCollected + _vRemaining;
     const _vDiff = Math.round((_vTarget - _vSum)*100)/100;
     const _vBalanced = Math.abs(_vDiff) < 1;
-    const _vHolding = eng ? (Number(eng.sharedEmployeeHoldingFils ?? eng.holdingFils)||0)/100 : _vUndeposited;
-    // عند الموظفين / محصل ولم يودع = current shared custody (same number everywhere).
+    const _vHs = holdingSummaryFromEng(eng);
+    const _vHolding = _vHs.periodHolding;
+    const _vAllHolding = _vHs.allPeriods;
+    const _vFinPeriod = (typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0")));
+    // عند الموظفين = selected-month shared Holding (same for Manager and employees).
     const _vAtEmp = _vHolding;
     const _vYahiaCollected = (()=>{ const c=(eng&&eng.custody)||[]; const r=c.find(x=>String(x.userId||"").includes("yahia")||x.displayName==="يحيى"); return r?Number(r.cashCollectedFils||0)/100:0; })();
     const _vNaderCollected = (()=>{ const c=(eng&&eng.custody)||[]; const r=c.find(x=>String(x.userId||"").includes("nader")||x.displayName==="نادر"); return r?Number(r.cashCollectedFils||0)/100:0; })();
@@ -4515,8 +4593,9 @@ function renderApp(){
           h("div",{},[h("div",{style:{fontSize:"11px",color:"#888"}},["المتبقي"]),h("div",{style:{fontSize:"18px",fontWeight:"800",color:"#f87171"}},[_vRemaining.toLocaleString()])]),
           h("div",{},[h("div",{style:{fontSize:"11px",color:"#888"}},["عند الموظفين"]),h("div",{style:{fontSize:"18px",fontWeight:"800",color:"#60a5fa"}},[_vAtEmp.toLocaleString()])])]),
         h("div",{style:{fontSize:"11px",color:"#999",marginTop:"8px"}},["المستهدف = المحصل + المتبقي · المودع للشركة "+_vCompany.toLocaleString()+" · المتأخر "+_vLateEng.toLocaleString()]),
-        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"4px"}},["العهدة المشتركة "+_vHolding.toLocaleString()+" د.إ (عهدة مجمّعة)"]),
+        h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"4px"}},["عهدة هذا الشهر "+_vHolding.toLocaleString()+" د.إ · إجمالي العهدة المشتركة "+_vAllHolding.toLocaleString()+" د.إ"]),
         h("div",{style:{fontSize:"11px",color:"#555",marginTop:"4px"}},["نقد محصل هذا الشهر ولم يودع: "+_vMonthAtEmp.toLocaleString()+" · إجمالي ما حصّله يحيى "+_vYahiaCollected.toLocaleString()+( _vNaderCollected?(" · نادر "+_vNaderCollected.toLocaleString()):"")])]),
+      renderHoldingBreakdownCard(eng,{period:_vFinPeriod}),
       h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #166534",background:"linear-gradient(135deg,#052e16,#111)"}},[
         h("div",{style:{fontSize:"13px",color:"#4ade80",fontWeight:"600",marginBottom:"6px"}},["💰 إجمالي السيولة المالية"]),
         h("div",{style:{fontSize:"28px",fontWeight:"900",color:"#4ade80",marginBottom:"10px"}},[totalLiquidity.toLocaleString()+" د.إ"]),
@@ -4736,26 +4815,22 @@ function renderApp(){
                 h("div",{style:{fontSize:"12px",color:"#666"}},[x.tenant+" | دفع "+x.paid.toLocaleString()+" من "+x.rent.toLocaleString()])]),
               h("span",{style:{fontSize:"14px",fontWeight:"700",color:"#fbbf24"}},["متبقي "+x.remaining.toLocaleString()+" د.إ"])])))]):null]);
       })(),
-      // Undeposited = current shared custody (same as عند الموظفين / العهدة المشتركة)
+      // Undeposited card = عهدة هذا الشهر (selected-month Holding)
       (()=>{
-        const engHold = (typeof S !== "undefined" && S._dash && S._dash.summary)
-          ? (Number(S._dash.summary.sharedEmployeeHoldingFils ?? S._dash.summary.holdingFils)||0)/100
-          : null;
-        const undeposited = engHold != null ? engHold : Math.max(0, _vHolding);
+        const undeposited = Math.max(0, _vHolding);
         if(undeposited<=0) return null;
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #1e3a5f",background:"linear-gradient(135deg,#0c1a2e,#111)"}},[
           h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
             h("div",{},[
-              h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#60a5fa",marginBottom:"4px"}},["💼 محصّل ولم يُودع بعد"]),
-              h("div",{style:{fontSize:"12px",color:"#555"}},["العهدة المشتركة الحالية — نقد لا يزال عند الموظفين"])]),
+              h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#60a5fa",marginBottom:"4px"}},["💼 محصّل ولم يُودع بعد (هذا الشهر)"]),
+              h("div",{style:{fontSize:"12px",color:"#555"}},["عهدة هذا الشهر — نقد لا يزال عند الموظفين لهذا الشهر المحاسبي"])]),
             h("div",{style:{fontSize:"26px",fontWeight:"900",color:"#60a5fa"}},[undeposited.toLocaleString()+" د.إ"])]),
           h("div",{style:{fontSize:"12px",color:"#3b82f6",background:"#1e3a5f",borderRadius:"6px",padding:"6px 10px",marginTop:"4px"}},
-            ["يساوي العهدة المشتركة / عند الموظفين (عهدة مجمّعة حالية)"])]);
+            ["يساوي عهدة هذا الشهر / عند الموظفين · إجمالي كل الأشهر: "+_vAllHolding.toLocaleString()+" د.إ"])]);
       })(),
-      // ======= تحصيل الموظفين (تدقيق) — العهدة مجمّعة =======
+      // ======= تحصيل الموظفين (تدقيق) — العهدة مجمّعة حسب الشهر =======
       (()=>{
-        const eng=(typeof S!=="undefined"&&S._dash&&S._dash.summary)?S._dash.summary:null;
-        const shared=eng?(Number(eng.sharedEmployeeHoldingFils??eng.holdingFils)||0)/100:0;
+        const shared=_vHolding;
         const rows=(eng&&Array.isArray(eng.custody)?eng.custody:[]).map(c=>({
           name:c.displayName||c.userId||"—",
           collected:(Number(c.cashCollectedFils)||0)/100,
@@ -4764,7 +4839,7 @@ function renderApp(){
         if(rows.length===0 && shared<=0) return null;
         return h("div",{class:"card",style:{padding:"16px",marginBottom:"12px",border:"1px solid #3a2e0c",background:"linear-gradient(135deg,#1a1505,#111)"}},[
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fbbf24",marginBottom:"6px"}},["👥 تحصيل الموظفين (تدقيق)"]),
-          h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"10px"}},["العهدة الحالية المشتركة: "+shared.toLocaleString()+" د.إ — ليست عهدة شخصية لكل موظف"]),
+          h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"10px"}},["عهدة هذا الشهر المشتركة: "+shared.toLocaleString()+" د.إ — ليست عهدة شخصية لكل موظف"]),
           h("div",{},rows.map(c=>h("div",{style:{padding:"10px 0",borderBottom:"1px solid #1a1a1a"}},[
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},[
               h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[c.name]),
@@ -4772,7 +4847,7 @@ function renderApp(){
             h("div",{style:{display:"flex",gap:"12px",fontSize:"13px"}},[
               h("span",{style:{color:"#888"}},["إجمالي ما حصّله: "+c.collected.toLocaleString()]),
               h("span",{style:{color:"#4ade80"}},["طلبات إيداعه المعتمدة: "+c.submitted.toLocaleString()])])]))),
-          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["عهدة هذا الشهر مشتركة بين الموظفين — الإيداع يخص شهر العرض فقط ولا يمس عهدة شهر آخر"])]);
+          h("div",{style:{fontSize:"11px",color:"#665510",marginTop:"8px"}},["عهدة هذا الشهر مشتركة بين الموظفين — الإيداع يخص sourcePeriod فقط ولا يمس عهدة شهر آخر"])]);
       })(),
       // Vacant units card
       vacantList.length>0?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #1a1a1a"}},[

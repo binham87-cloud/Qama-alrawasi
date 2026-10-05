@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   parseAedToFils, formatFils, obligationView, deriveStatus, assertReceiptFits,
-  holdingByEmployee, sharedHoldingFils, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
+  holdingByEmployee, sharedHoldingFils, holdingByPeriodFils, sharedHoldingAllPeriodsFils,
+  holdingByPeriodMap, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
   totalHoldingFils, periodSummary, checkInvariants,
   receiptMoneyEffect, depositMoneyEffect, isDisplayOnlyMoneyProjection, assertProjectionsDoNotMoveMoney,
   STATUS, RECEIPT_STATE, APPROVAL_STATE, DomainError, periodOf, dueDateFor, obligationIdFor,
@@ -507,6 +508,13 @@ test("PERIOD HOLDING: Sep cash/deposit isolated from Oct", () => {
   assert.equal(sharedHoldingFils({ receipts, deposits, period: "2026-09" }), 500000);
   assert.equal(sharedHoldingFils({ receipts, deposits, period: "2026-10" }), 500000);
   assert.equal(sharedHoldingFils({ receipts, deposits }), 1000000);
+  const by = holdingByPeriodFils({ receipts, deposits });
+  assert.deepEqual(holdingByPeriodMap(by), { "2026-09": 500000, "2026-10": 500000 });
+  assert.equal(sharedHoldingAllPeriodsFils({ receipts, deposits }), 1000000);
+  assert.equal(
+    by.reduce((s, r) => s + r.holdingFils, 0),
+    sharedHoldingAllPeriodsFils({ receipts, deposits }),
+  );
   assert.throws(
     () => assertDepositFitsCustody({
       employeeId: "yahia", amountFils: 600000, receipts, deposits, sourcePeriod: "2026-09",

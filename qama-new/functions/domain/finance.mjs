@@ -419,6 +419,74 @@ export function sharedHoldingFils({
 }
 
 /**
+ * Canonical Holding breakdown by accounting period.
+ *
+ * Each row:
+ *   cashCollectedFils  = recognized CASH receipts with receipt.period = P
+ *   approvedHoldingDepositsFils = approved holding deposits with sourcePeriod = P
+ *   holdingFils = cashCollectedFils − approvedHoldingDepositsFils
+ *
+ * Bank / external / pending / rejected / reversed / display-only are excluded.
+ * Ambiguous records (no period / no sourcePeriod) are omitted — never guessed.
+ *
+ * sharedHoldingAllPeriodsFils MUST equal sum(holdingFils) — no independent global formula.
+ */
+export function holdingByPeriodFils({ receipts, deposits, excludeReceiptIds = [], excludeDepositIds = [] }) {
+  const skipR = new Set(excludeReceiptIds);
+  const skipD = new Set(excludeDepositIds);
+  const cashBy = new Map();
+  const depBy = new Map();
+
+  for (const r of receipts || []) {
+    if (skipR.has(r.id)) continue;
+    if (!isRecognizedReceipt(r) || r.method !== "cash") continue;
+    const p = receiptHoldingPeriod(r);
+    if (!p) continue;
+    cashBy.set(p, (cashBy.get(p) || 0) + toSafeFils(r.amountFils));
+  }
+  for (const d of deposits || []) {
+    if (skipD.has(d.id)) continue;
+    if (!isApproved(d)) continue;
+    if (d.sourceKind === "external") continue;
+    if (isDisplayOnlyMoneyProjection(d)) continue;
+    const p = depositSourcePeriod(d);
+    if (!p) continue;
+    depBy.set(p, (depBy.get(p) || 0) + toSafeFils(d.amountFils));
+  }
+
+  const periods = new Set([...cashBy.keys(), ...depBy.keys()]);
+  const rows = [];
+  for (const period of periods) {
+    const cashCollectedFils = cashBy.get(period) || 0;
+    const approvedHoldingDepositsFils = depBy.get(period) || 0;
+    rows.push({
+      period,
+      cashCollectedFils,
+      approvedHoldingDepositsFils,
+      holdingFils: cashCollectedFils - approvedHoldingDepositsFils,
+    });
+  }
+  rows.sort((a, b) => String(a.period).localeCompare(String(b.period)));
+  return rows;
+}
+
+/** Sum of Holding(P) over all periods — the only all-period shared Holding total. */
+export function sharedHoldingAllPeriodsFils({ receipts, deposits, excludeReceiptIds = [], excludeDepositIds = [] }) {
+  return holdingByPeriodFils({ receipts, deposits, excludeReceiptIds, excludeDepositIds })
+    .reduce((s, row) => s + row.holdingFils, 0);
+}
+
+/** Map period → holdingFils for convenience. */
+export function holdingByPeriodMap(rowsOrArgs) {
+  const rows = Array.isArray(rowsOrArgs)
+    ? rowsOrArgs
+    : holdingByPeriodFils(rowsOrArgs || {});
+  const map = {};
+  for (const row of rows) map[row.period] = row.holdingFils;
+  return map;
+}
+
+/**
  * Audit only: cash collected BY each employee. Not a spendable limit.
  * depositedFils here is deposits that employee submitted (audit), not their personal pool.
  * Optional `period` scopes attribution to that holding period.
