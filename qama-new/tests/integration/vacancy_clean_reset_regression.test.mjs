@@ -25,26 +25,30 @@ async function setup() {
   return { db, owner, building, yahia };
 }
 
-test("VACANT → REFRESH → STILL VACANT", async () => {
+test("VACANT in October → September history still rented; October vacant", async () => {
   const { db, owner, building } = await setup();
   await run(db, owner, "setSpaceOccupancy", { spaceId: building.space.spaceId, occupancy: "vacant" });
-  const dash = buildDashboardFromDump(db, building.period, "2026-09-15");
-  const sp = dash.spaces.find((s) => s.id === building.space.spaceId);
-  assert.equal(sp.occupancy, "vacant");
-  assert.equal(dash.summary.targetFils, 0);
-  assert.equal(dash.summary.counts.late || 0, 0);
+  // Live space is vacant
+  assert.equal(db.dump("spaces").find((s) => s.id === building.space.spaceId).occupancy, "vacant");
+  // September read model stays historically rented (vacate effective = today/Oct)
+  const sep = buildDashboardFromDump(db, building.period, "2026-10-05");
+  const sp = sep.spaces.find((s) => s.id === building.space.spaceId);
+  assert.equal(sp.occupancy, "rented");
+  assert.equal(sep.summary.targetFils, 920000);
+  const oct = buildDashboardFromDump(db, "2026-10", "2026-10-05");
+  assert.equal(oct.spaces.find((s) => s.id === building.space.spaceId).occupancy, "vacant");
 });
 
-test("VACANT → GENERATE OBLIGATIONS → STILL VACANT / NO REGEN", async () => {
+test("VACANT → GENERATE OBLIGATIONS → no regen; Sep history preserved", async () => {
   const { db, owner, building } = await setup();
   await run(db, owner, "setSpaceOccupancy", { spaceId: building.space.spaceId, occupancy: "vacant" });
   const gen = await run(db, owner, "generateObligations", { period: building.period }, opId("gen-vac"));
   assert.equal(gen.created, 0);
-  const dash = buildDashboardFromDump(db, building.period, "2026-09-15");
-  assert.equal(dash.spaces.find((s) => s.id === building.space.spaceId).occupancy, "vacant");
-  assert.equal(dash.summary.targetFils, 0);
+  const dash = buildDashboardFromDump(db, building.period, "2026-10-05");
+  assert.equal(dash.spaces.find((s) => s.id === building.space.spaceId).occupancy, "rented");
+  assert.equal(dash.summary.targetFils, 920000);
   const ob = db.dump("obligations").find((o) => o.id === building.obligationId);
-  assert.equal(ob.state, "cancelled");
+  assert.equal(ob.state, "active");
 });
 
 test("CLOSED RENTAL DOES NOT REGENERATE OBLIGATION", async () => {
@@ -54,6 +58,7 @@ test("CLOSED RENTAL DOES NOT REGENERATE OBLIGATION", async () => {
   });
   const gen = await run(db, owner, "generateObligations", { period: building.period }, opId("gen-closed"));
   assert.equal(gen.created, 0);
+  // Explicit September endDate → Sep unpaid cancelled (period not covered)
   assert.equal(db.dump("obligations").find((o) => o.id === building.obligationId).state, "cancelled");
 });
 
@@ -98,7 +103,13 @@ test("ONE ACTIVE OBLIGATION PER ACTIVE RENTAL/PERIOD", async () => {
 
 test("NEW RENTAL AFTER VACANCY", async () => {
   const { db, owner, building } = await setup();
-  await run(db, owner, "setSpaceOccupancy", { spaceId: building.space.spaceId, occupancy: "vacant" });
+  // Same-month explicit vacate so September unpaid is cleared before replacement.
+  await run(db, owner, "closeRental", {
+    rentalId: building.rental.rentalId,
+    endDate: "2026-09-04",
+    reason: "إخلاء قبل مستأجر جديد",
+    setVacant: true,
+  });
   const neu = await run(db, owner, "createRental", {
     spaceId: building.space.spaceId, tenantName: "مستأجر جديد",
     contractualAmountFils: 140000, dueDayOfMonth: 1, startDate: "2026-09-05",

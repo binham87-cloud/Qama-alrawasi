@@ -1077,9 +1077,12 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const engineDue = dashSp ? Number(dashSp.dueFils || 0) : -1;
     const rentFils = aedToFils(item.rent);
     if (engineDue !== rentFils) {
+      const effectivePeriod = `${S.year}-${String(S.month).padStart(2, "0")}`;
       await engineCommand("updateRentalRent", {
-        rentalId, contractualAmountFils: rentFils
-      }, intentKey("rent", rentalId, rentFils));
+        rentalId,
+        contractualAmountFils: rentFils,
+        effectivePeriod,
+      }, intentKey("rent", rentalId, rentFils, effectivePeriod));
     }
   }
   // Definitive due rule: contract start day-of-month is the recurring due day.

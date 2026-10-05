@@ -102,16 +102,72 @@ export function isPlaceholderTenant(name) {
   return !t || t === "-" || t === "–" || t === "—" || /^[\s\-—–_]+$/.test(t);
 }
 
+/** Last calendar day of YYYY-MM as ISO date. */
+export function lastDayOfPeriod(period) {
+  const p = String(period || "");
+  if (!/^\d{4}-\d{2}$/.test(p)) throw new DomainError("INVALID_PERIOD", { period });
+  const [y, m] = p.split("-").map(Number);
+  return `${p}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
+}
+
+/**
+ * Whether a rental's occupancy lifecycle covers month `period`.
+ * endDate is the vacancy effective date (exclusive end of occupancy):
+ *   start Sep 1, vacate Oct 1 → September covered, October not.
+ * Past months stay historically rented after a later vacancy.
+ */
+export function rentalCoversPeriod(rental, period) {
+  if (!rental || !period) return false;
+  if (rental.baselineExcluded === true) return false;
+  const start = String(rental.startDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return false;
+  if (periodOf(start) > period) return false;
+  const end = rental.endDate ? String(rental.endDate).slice(0, 10) : null;
+  if (!end) return true; // still open (or closed without end — treat as covering)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return true;
+  // Covered iff vacancy effective date is after the last day of the period.
+  return end > lastDayOfPeriod(period);
+}
+
+/** Rental that was valid for this space during `period` (active or closed history). */
+export function rentalForPeriod(spaceId, rentals, period) {
+  const hits = (rentals || []).filter(
+    (r) => r && r.spaceId === spaceId && rentalCoversPeriod(r, period),
+  );
+  if (!hits.length) return null;
+  hits.sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")));
+  return hits[hits.length - 1];
+}
+
+/**
+ * Period-aware occupancy for dashboards. Never use live space.occupancy alone
+ * to reconstruct a past month.
+ * - Covering rental → rented
+ * - Else staff only when live space is staff AND selected period is current/future
+ * - Else vacant
+ */
+export function occupancyForPeriod({ space, rentals, period, asOfDate = null }) {
+  if (rentalForPeriod(space?.id || space?.spaceId, rentals, period)) return "rented";
+  const live = space?.occupancy || "vacant";
+  if (live === "staff") {
+    const asOfPeriod = asOfDate ? periodOf(String(asOfDate).slice(0, 10)) : period;
+    if (String(period) >= String(asOfPeriod)) return "staff";
+  }
+  return "vacant";
+}
+
 /**
  * Monthly Target/Collected/Remaining count:
  *  - active obligations on an active rental
  *  - unpaid arrears explicitly retained after vacate
  *  - historically earned obligations (recognized receipts) even after vacate
+ *  - frozen historical obligations whose rental still covers that period after close
  * Cancelled future-unpaid obligations never contribute.
  *
  * Pass `receipts` so vacated-but-earned months stay reproducible.
  */
 export function liveObligationsForPeriod(obligations, rentals, receipts = null) {
+  const rentalsById = new Map((rentals || []).filter(Boolean).map((r) => [r.id, r]));
   const activeRentalIds = new Set(
     (rentals || []).filter((r) => r && r.state === "active" && r.baselineExcluded !== true).map((r) => r.id),
   );
@@ -128,6 +184,10 @@ export function liveObligationsForPeriod(obligations, rentals, receipts = null) 
     if (o.retainArrearsAfterVacate === true) return true;
     // Historical earned month after vacate — keep Target/Collected history.
     if (earnedObIds.has(o.id)) return true;
+    // Frozen past-month obligation: rental ended later, but this period was covered.
+    const rental = rentalsById.get(o.rentalId);
+    const obPeriod = o.period || (o.dueDate ? periodOf(o.dueDate) : null);
+    if (rental && obPeriod && rentalCoversPeriod(rental, obPeriod)) return true;
     return false;
   });
 }

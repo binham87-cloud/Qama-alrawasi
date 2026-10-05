@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="VACATE-NO-FALSE-HOLDING-20261005T0055Z"/>
-<title>قمة الرواسي · VACATE-NO-FALSE-HOLDING-20261005T0055Z</title>
+<meta name="qama-ui-build" content="MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"/>
+<title>قمة الرواسي · MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1132,9 +1132,12 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const engineDue = dashSp ? Number(dashSp.dueFils || 0) : -1;
     const rentFils = aedToFils(item.rent);
     if (engineDue !== rentFils) {
+      const effectivePeriod = `${S.year}-${String(S.month).padStart(2, "0")}`;
       await engineCommand("updateRentalRent", {
-        rentalId, contractualAmountFils: rentFils
-      }, intentKey("rent", rentalId, rentFils));
+        rentalId,
+        contractualAmountFils: rentFils,
+        effectivePeriod,
+      }, intentKey("rent", rentalId, rentFils, effectivePeriod));
     }
   }
   // Definitive due rule: contract start day-of-month is the recurring due day.
@@ -4742,7 +4745,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI VACATE-NO-FALSE-HOLDING-20261005T0055Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -4972,7 +4975,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI VACATE-NO-FALSE-HOLDING-20261005T0055Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),

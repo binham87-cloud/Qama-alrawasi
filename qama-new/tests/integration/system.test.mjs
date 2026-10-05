@@ -320,20 +320,35 @@ test("PIN hashing works on createUser", async () => {
   assert.equal(verifyPinConstantTime("9999", doc), false);
 });
 
-test("vacant occupancy closes rental and drops unpaid target", async () => {
+test("vacant occupancy closes rental; October vacate preserves September unpaid Target", async () => {
   const { db, owner, building } = await setup();
   const before = buildDashboardFromDump(db, building.period, "2026-09-15");
   assert.ok(before.summary.targetFils > 0);
   await run(db, owner, "setSpaceOccupancy", { spaceId: building.space.spaceId, occupancy: "vacant" });
-  const after = buildDashboardFromDump(db, building.period, "2026-09-15");
-  assert.equal(after.summary.targetFils, 0);
-  assert.equal(after.summary.remainingFils, 0);
+  const after = buildDashboardFromDump(db, building.period, "2026-10-05");
+  // Vacate effective today (October) must NOT wipe September Target.
+  assert.equal(after.summary.targetFils, before.summary.targetFils);
+  assert.equal(after.spaces.find((s) => s.id === building.space.spaceId).occupancy, "rented");
   const space = db.dump("spaces").find((s) => s.id === building.space.spaceId);
   assert.equal(space.occupancy, "vacant");
   const rental = db.dump("rentals").find((r) => r.id === building.rental.rentalId);
   assert.equal(rental.state, "closed");
   const ob = db.dump("obligations").find((o) => o.id === building.obligationId);
-  assert.equal(ob.state, "cancelled");
+  assert.equal(ob.state, "active");
+});
+
+test("explicit September vacate cancels uncovered unpaid September obligation", async () => {
+  const { db, owner, building } = await setup();
+  await run(db, owner, "closeRental", {
+    rentalId: building.rental.rentalId,
+    endDate: "2026-09-04",
+    reason: "إخلاء سبتمبر",
+    setVacant: true,
+  });
+  const after = buildDashboardFromDump(db, building.period, "2026-09-15");
+  assert.equal(after.summary.targetFils, 0);
+  assert.equal(db.dump("obligations").find((o) => o.id === building.obligationId).state, "cancelled");
+  assert.equal(after.spaces.find((s) => s.id === building.space.spaceId).occupancy, "vacant");
 });
 
 test("close rental after cash keeps holding (إخلاء ≠ إلغاء تحصيل); uncollect clears it", async () => {

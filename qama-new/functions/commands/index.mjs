@@ -14,6 +14,7 @@ import {
   assertReceiptFits, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
   periodOf, dueDateFor, obligationIdFor, depositSourcePeriod,
   assertPositiveFils, isFils, isPlaceholderTenant, parseAedToFils,
+  rentalCoversPeriod,
 } from "../domain/finance.mjs";
 import {
   buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
@@ -21,10 +22,18 @@ import {
 } from "../domain/rental_cycle.mjs";
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
 
-/** Cancel unpaid active obligations for a rental (no live receipts). History with money is kept. */
-async function cancelUnpaidObligationsForRental(ctx, rentalId, reason, { ignoreReceiptIds = [] } = {}) {
+/**
+ * Cancel unpaid obligations that fall AFTER the vacancy effective date.
+ * Past-month (historically covered) unpaid obligations stay frozen — never
+ * rewrite September when vacating in October.
+ */
+async function cancelUnpaidObligationsForRental(
+  ctx, rentalId, reason, { ignoreReceiptIds = [], endDate = null, rental = null } = {},
+) {
   const skip = new Set(ignoreReceiptIds || []);
+  const vacateDay = String(endDate || ctx.now.slice(0, 10)).slice(0, 10);
   const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
+  const rentalDoc = rental || await ctx.tx.get("rentals", rentalId);
   const cancelled = [];
   for (const ob of obligations) {
     if (ob.state !== "active") continue;
@@ -35,11 +44,27 @@ async function cancelUnpaidObligationsForRental(ctx, rentalId, reason, { ignoreR
         (r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING),
     );
     if (live.length) continue;
+    const due = String(ob.dueDate || `${ob.period || "9999-99"}-01`).slice(0, 10);
+    const obPeriod = ob.period || periodOf(due);
+    // Preserve historical months covered by this rental before vacancy.
+    const covered = rentalDoc
+      ? rentalCoversPeriod({ ...rentalDoc, endDate: vacateDay }, obPeriod)
+      : due <= vacateDay;
+    if (covered && due <= vacateDay) {
+      // Past/current-due unpaid: freeze as historical — do not cancel.
+      ctx.tx.update("obligations", ob.id, {
+        frozenHistoricalObligation: true,
+        frozenAtVacateOn: vacateDay,
+      });
+      continue;
+    }
+    // Future unpaid after vacancy effective date → cancel (not Target/Holding).
     ctx.tx.update("obligations", ob.id, {
       state: "cancelled",
       cancelledBy: ctx.actor.userId,
       cancelledAt: ctx.now,
       cancelReason: reason,
+      cancelledAsFutureUnpaidOnVacate: due > vacateDay,
     });
     cancelled.push(ob.id);
   }
@@ -122,19 +147,22 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
   if (reverseLiveMoney) {
     reversed = await reverseLiveReceiptsForRental(ctx, rental.id, closeReason);
   }
+  const vacateDay = String(endDate || ctx.now.slice(0, 10)).slice(0, 10);
   ctx.tx.update("rentals", rental.id, {
     state: "closed",
-    endDate,
+    endDate: vacateDay,
     closedBy: ctx.actor.userId,
     closedAt: ctx.now,
     closeReason,
   });
   if (setVacant) ctx.tx.update("spaces", rental.spaceId, { occupancy: "vacant" });
 
+  // Closed rental snapshot used for period-coverage checks while cancelling.
+  const closedRental = { ...rental, state: "closed", endDate: vacateDay };
+
   let cancelledObligationIds = [];
   if (retainArrears) {
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
-    const vacateDay = String(endDate || ctx.now.slice(0, 10)).slice(0, 10);
     for (const ob of obligations) {
       if (ob.state !== "active") continue;
       const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
@@ -143,6 +171,7 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
         .reduce((s, r) => s + Number(r.amountFils || 0), 0);
       const remaining = Math.max(0, Number(ob.amountFils || 0) - livePaid);
       const due = String(ob.dueDate || `${ob.period || "9999-99"}-01`).slice(0, 10);
+      const obPeriod = ob.period || periodOf(due);
       // Future not-yet-due unpaid obligation: CANCEL — never Target/Collected/Holding.
       // Vacancy must never invent collection. No receipts ⇒ no money event.
       if (remaining > 0 && !livePaid && due > vacateDay) {
@@ -158,12 +187,14 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
       }
       if (remaining > 0) {
         // Due/past unpaid arrears: retain collectible debt (not Holding).
+        // Past months covered by the rental stay historically attributable.
         ctx.tx.update("obligations", ob.id, {
           retainArrearsAfterVacate: true,
           arrearsRemainingFilsSnapshot: remaining,
+          frozenHistoricalObligation: rentalCoversPeriod(closedRental, obPeriod),
         });
-      } else if (!livePaid) {
-        // Fully unpaid with no money movement — cancel clean vacancy leftover.
+      } else if (!livePaid && !rentalCoversPeriod(closedRental, obPeriod)) {
+        // Zero leftover in a non-covered (future) period — cancel.
         ctx.tx.update("obligations", ob.id, {
           state: "cancelled",
           cancelledBy: ctx.actor.userId,
@@ -172,12 +203,16 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
         });
         cancelledObligationIds.push(ob.id);
       }
-      // Fully paid with receipts: leave as active history (money lifecycle separate).
-      // Vacancy NEVER creates/reverses receipts here.
+      // Fully paid with receipts, or unpaid covered historical month with remaining 0:
+      // leave as active history (money lifecycle separate). Vacancy NEVER reverses receipts.
     }
   } else {
     cancelledObligationIds = await cancelUnpaidObligationsForRental(
-      ctx, rental.id, closeReason, { ignoreReceiptIds: reversed.reversedReceiptIds },
+      ctx, rental.id, closeReason, {
+        ignoreReceiptIds: reversed.reversedReceiptIds,
+        endDate: vacateDay,
+        rental: closedRental,
+      },
     );
   }
   audit(ctx, "rental_closed", "rental", rental.id, {
@@ -402,8 +437,18 @@ export const SCHEMAS = Object.freeze({
     contractualAmountFils: S.fils(), dueDayOfMonth: S.int(1, 31),
     startDate: S.date(), securityDepositFils: S.opt(S.fils()),
   },
-  updateRentalRent: { rentalId: S.id(), contractualAmountFils: S.fils() },
-  updateRentalTenant: { rentalId: S.id(), tenantName: S.opt(S.str(160)), tenantPhone: S.opt(S.str(40)) },
+  updateRentalRent: {
+    rentalId: S.id(),
+    contractualAmountFils: S.fils(),
+    /** YYYY-MM — only this period and later unpaid obligations may be revised. */
+    effectivePeriod: S.opt(S.period()),
+  },
+  updateRentalTenant: {
+    rentalId: S.id(),
+    tenantName: S.opt(S.str(160)),
+    tenantPhone: S.opt(S.str(40)),
+    effectivePeriod: S.opt(S.period()),
+  },
   updateRentalSchedule: {
     rentalId: S.id(),
     startDate: S.opt(S.date()),
@@ -716,16 +761,37 @@ const HANDLERS = {
     return { spaceId };
   },
 
-  /** Correcting the tenant's name or phone. Obligation snapshots already issued stay as they were. */
+  /** Correcting the tenant's name or phone. Past-period obligation snapshots stay frozen. */
   async updateRentalTenant(ctx) {
-    const { rentalId, ...patch } = ctx.payload;
+    const { rentalId, effectivePeriod: effPeriod, ...patch } = ctx.payload;
     const rental = await ctx.tx.get("rentals", rentalId);
     if (!rental) throw new DomainError("RENTAL_NOT_FOUND");
     if (rental.state !== "active") throw new DomainError("RENTAL_NOT_ACTIVE");
-    if (!Object.keys(patch).length) throw new DomainError("NOTHING_TO_UPDATE");
-    ctx.tx.update("rentals", rentalId, patch);
-    audit(ctx, "rental_tenant_updated", "rental", rentalId, { before: { tenantName: rental.tenantName }, after: patch });
-    return { rentalId };
+    const tenantPatch = {};
+    if (patch.tenantName != null) tenantPatch.tenantName = patch.tenantName;
+    if (patch.tenantPhone != null) tenantPatch.tenantPhone = patch.tenantPhone;
+    if (!Object.keys(tenantPatch).length) throw new DomainError("NOTHING_TO_UPDATE");
+    ctx.tx.update("rentals", rentalId, tenantPatch);
+    const effectivePeriod = effPeriod || periodOf(ctx.now.slice(0, 10));
+    const revised = [];
+    if (tenantPatch.tenantName != null) {
+      const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
+      for (const ob of obligations) {
+        if (ob.state !== "active") continue;
+        const obPeriod = ob.period || (ob.dueDate ? periodOf(ob.dueDate) : null);
+        if (obPeriod && String(obPeriod) < String(effectivePeriod)) continue;
+        if (ob.tenantNameSnapshot === tenantPatch.tenantName) continue;
+        ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: tenantPatch.tenantName });
+        revised.push(ob.id);
+      }
+    }
+    audit(ctx, "rental_tenant_updated", "rental", rentalId, {
+      before: { tenantName: rental.tenantName },
+      after: tenantPatch,
+      effectivePeriod,
+      revisedObligationSnapshots: revised,
+    });
+    return { rentalId, effectivePeriod, revisedObligationSnapshotIds: revised };
   },
 
   /**
@@ -782,17 +848,25 @@ const HANDLERS = {
   /**
    * Rent on the rental always updates. Period obligations that already have
    * live receipts stay frozen (historical snapshot). Unpaid obligations of the
-   * same rental are revised so the current month's card matches the edit.
+   * same rental are revised only for effectivePeriod and later — never silently
+   * rewrite earlier months (Oct rent change must not mutate Sep obligation).
    */
   async updateRentalRent(ctx) {
     const rental = await ctx.tx.get("rentals", ctx.payload.rentalId);
     if (!rental) throw new DomainError("RENTAL_NOT_FOUND");
     if (rental.state !== "active") throw new DomainError("RENTAL_NOT_ACTIVE");
     ctx.tx.update("rentals", rental.id, { contractualAmountFils: ctx.payload.contractualAmountFils });
+    const effectivePeriod = ctx.payload.effectivePeriod || periodOf(ctx.now.slice(0, 10));
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
     const revised = [];
+    const skippedHistorical = [];
     for (const ob of obligations) {
       if (ob.state !== "active") continue;
+      const obPeriod = ob.period || (ob.dueDate ? periodOf(ob.dueDate) : null);
+      if (obPeriod && String(obPeriod) < String(effectivePeriod)) {
+        skippedHistorical.push(ob.id);
+        continue;
+      }
       const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
       const live = receipts.filter(
         (r) => r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING,
@@ -803,9 +877,18 @@ const HANDLERS = {
       revised.push(ob.id);
     }
     audit(ctx, "rental_rent_updated", "rental", rental.id, {
-      before: rental.contractualAmountFils, after: ctx.payload.contractualAmountFils, revised,
+      before: rental.contractualAmountFils,
+      after: ctx.payload.contractualAmountFils,
+      effectivePeriod,
+      revised,
+      skippedHistorical,
     });
-    return { rentalId: rental.id, revisedObligationIds: revised };
+    return {
+      rentalId: rental.id,
+      effectivePeriod,
+      revisedObligationIds: revised,
+      skippedHistoricalObligationIds: skippedHistorical,
+    };
   },
   /**
    * Recurring due day must follow the contract start day-of-month.

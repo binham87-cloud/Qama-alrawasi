@@ -10,6 +10,7 @@ import {
   deriveStatus, dueDateFor, liveObligationsForPeriod,
   dailyBookingsTargetFils, paidInstallmentsFilsForPeriod, profitTransfersFils,
   operatingNetFils,
+  rentalForPeriod, occupancyForPeriod, rentalCoversPeriod,
 } from "../domain/finance.mjs";
 
 /**
@@ -241,8 +242,12 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
    * Unit tree — the shape the old QAMA screens used: apartment → partitions → tenant.
    * Includes spaces with no obligation (vacant / staff) so the operational picture is
    * complete, while every money figure still comes from the derived views above.
+   *
+   * Occupancy / tenant / rent for the selected period are resolved from effective-dated
+   * rental history — NEVER from live space.occupancy alone (Oct vacate must not paint Sep vacant).
    */
-  const activeRental = (spaceId) => rentals.find((r) => r.spaceId === spaceId && r.state === "active") || null;
+  const liveActiveRental = (spaceId) => rentals.find((r) => r.spaceId === spaceId && r.state === "active") || null;
+  const periodRental = (spaceId) => rentalForPeriod(spaceId, rentals, period);
   // Latest cycle across periods — renew button metadata ONLY (never money/status for this period).
   const latestCycleForRental = (rentalId) => {
     if (!rentalId) return null;
@@ -271,12 +276,13 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
     if (rentalId) {
       // Period-scoped views only — do not bind September money into an October dashboard.
       const matched = views.find((v) => v.spaceId === spaceId && v.rentalId === rentalId);
-      return matched || null;
+      if (matched) return matched;
     }
-    // No active rental: still surface retained-after-vacate arrears on the vacant card
-    // so Manager can see and collect historical debt without a live tenancy.
+    // Historical / retained: any period view for this space (arrears after vacate).
     const retained = views.find((v) => v.spaceId === spaceId && Number(v.remainingFils || 0) > 0);
-    return retained || null;
+    if (retained) return retained;
+    // Paid historical month after vacate — still bind the period obligation view.
+    return views.find((v) => v.spaceId === spaceId) || null;
   };
   const spacePartNum = (sp) => {
     const m = String(sp.name || "").match(/\/\s*(\d+)\s*$/);
@@ -324,11 +330,24 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
         .slice()
         .sort((a, b) => spacePartNum(a) - spacePartNum(b) || String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }))
         .map((sp) => {
-          const rental = activeRental(sp.id);
+          const rental = periodRental(sp.id);
+          const liveRental = liveActiveRental(sp.id);
+          const periodOcc = occupancyForPeriod({
+            space: sp, rentals, period, asOfDate,
+          });
           const v = viewFor(sp.id, rental?.id || null);
-          const display = spaceDisplay({ space: sp, view: v, rental, period, asOfDate });
+          const display = spaceDisplay({
+            space: sp,
+            view: v,
+            rental,
+            period,
+            asOfDate,
+            occupancyOverride: periodOcc,
+          });
           const periodOb = rental ? periodCycleForRental(rental.id) : null;
-          const latestOb = rental ? latestCycleForRental(rental.id) : null;
+          const latestOb = (liveRental && rentalCoversPeriod(liveRental, period))
+            ? latestCycleForRental(liveRental.id)
+            : (rental ? latestCycleForRental(rental.id) : null);
           const anniversaryDay = Number(
             rental?.dueDayOfMonth
             || periodOb?.anniversaryDay
@@ -342,7 +361,12 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
           const nextStart = nextFrom && anniversaryDay
             ? nextCycleStart(nextFrom, 1, anniversaryDay)
             : (nextFrom ? nextCycleStart(nextFrom, 1) : null);
-          const renewVisible = !!(rental && nextStart && renewButtonVisible(nextStart, asOfDate, 7));
+          const renewVisible = !!(
+            liveRental
+            && rentalCoversPeriod(liveRental, period)
+            && nextStart
+            && renewButtonVisible(nextStart, asOfDate, 7)
+          );
           // Per-space receipts for the current period — used by the receipt history
           // panel and the Manager حذف الإيصال control. We include ALL states so the
           // history panel can show reversed receipts as cancelled/audited.
@@ -363,17 +387,28 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
               reversedByReversalId: r.reversedByReversalId || null,
             }));
 
+          // Tenant/rent for THIS period: prefer frozen obligation snapshot, then covering rental.
+          const tenantName = periodOb?.tenantNameSnapshot
+            || rental?.tenantName
+            || null;
+          const tenantPhone = rental?.tenantPhone || null;
+
           return {
-            spaceId: sp.id, name: sp.name, occupancy: sp.occupancy || "vacant",
+            spaceId: sp.id,
+            name: sp.name,
+            // Period-aware occupancy (not live space.occupancy).
+            occupancy: periodOcc,
+            liveOccupancy: sp.occupancy || "vacant",
             rentalId: rental?.id || null,
-            // Current tenant only from LIVE rental. Retained-arrears snapshot must NOT
-            // appear as the vacant partition's current tenant (history stays on the obligation).
-            tenantName: rental?.tenantName || null,
-            tenantPhone: rental?.tenantPhone || null,
-            arrearsTenantName: (!rental && v?.tenantName) || null,
+            rentalState: rental?.state || null,
+            // Historical tenant for the selected month — not the live successor tenant.
+            tenantName,
+            tenantPhone,
+            arrearsTenantName: (periodOcc === "vacant" && v?.tenantName) || null,
             // Card "start" for the selected month = this period's cycle start (not contract start alone).
             startDate: cycleStart || rental?.startDate || null,
             contractStartDate: rental?.startDate || null,
+            rentalEndDate: rental?.endDate || null,
             dueDayOfMonth: rental?.dueDayOfMonth || null,
             obligationId: v?.obligationId || periodOb?.id || null,
             rentalCycleId: periodOb?.rentalCycleId || periodOb?.id || null,
@@ -386,7 +421,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             remainingFils: display.remainingFils,
             dueDate: display.dueDate,
             status: display.status,
-            receiptCount: v?.receiptCount ?? 0,
+            receiptCount: v?.receiptCount ?? spaceReceipts.filter((r) => r.state === "recognized").length,
             spaceReceipts,
           };
         });
@@ -512,9 +547,12 @@ export function bankReceiptHistoryRows({ receipts, viewerUserId, isOwner, nameOf
  * but the status chip stays vacant/staff so move-out never looks "collected" after refresh.
  * A rented space with no obligation yet this period shows late/not_due from rent,
  * never vacant.
+ *
+ * `occupancyOverride` is the period-aware occupancy (from rental lifecycle). When set,
+ * live space.occupancy is ignored for historical months.
  */
-function spaceDisplay({ space, view, rental, period, asOfDate }) {
-  const occupancy = space.occupancy || "vacant";
+function spaceDisplay({ space, view, rental, period, asOfDate, occupancyOverride = null }) {
+  const occupancy = occupancyOverride || space.occupancy || "vacant";
   if (occupancy === "staff") {
     if (view && Number(view.remainingFils || 0) > 0) {
       return {
@@ -529,6 +567,17 @@ function spaceDisplay({ space, view, rental, period, asOfDate }) {
   }
   if (occupancy === "vacant") {
     if (view && Number(view.remainingFils || 0) > 0) {
+      return {
+        status: "vacant",
+        dueFils: view.dueFils,
+        paidFils: view.paidFils,
+        remainingFils: view.remainingFils,
+        dueDate: view.dueDate,
+      };
+    }
+    // Paid historical month after vacate: still show collected money, but vacant chip
+    // only when the period truly has no covering rental (override already vacant).
+    if (view && Number(view.paidFils || 0) > 0) {
       return {
         status: "vacant",
         dueFils: view.dueFils,
@@ -612,14 +661,14 @@ export function buildDashboardFromDump(db, period, asOfDate) {
   const receipts = dump("receipts").filter((r) => r.period === period);
   const deposits = dump("deposits").filter((d) => d.period === period);
   const expenses = dump("expenses").filter((e) => e.period === period);
-  const spaces = dump("spaces");
+  const spacesRaw = dump("spaces");
   const units = dump("units");
   const users = dump("users");
   const accounts = dump("accounts");
   const rentals = dump("rentals");
 
   const nameOf = (id) => users.find((u) => u.id === id)?.displayName || id;
-  const spaceName = (id) => spaces.find((s) => s.id === id)?.name || "—";
+  const spaceName = (id) => spacesRaw.find((s) => s.id === id)?.name || "—";
   const unitName = (id) => units.find((u) => u.id === id)?.name || "—";
 
   const allReceipts = dump("receipts");
@@ -691,6 +740,66 @@ export function buildDashboardFromDump(db, period, asOfDate) {
       return { ...v, spaceId: o.spaceId, rentalId: o.rentalId, spaceName: spaceName(o.spaceId), unitName: unitName(o.unitId) };
     });
 
+  // Period-aware space projection (tests + callers must not read live occupancy as history).
+  const spaces = spacesRaw.map((sp) => {
+    const rental = rentalForPeriod(sp.id, rentals, period);
+    const periodOb = rental
+      ? allObligations.find((o) => o.rentalId === rental.id && o.period === period && o.state === "active")
+      : null;
+    const occ = occupancyForPeriod({ space: sp, rentals, period, asOfDate });
+    const v = views.find((x) => x.spaceId === sp.id) || null;
+    return {
+      ...sp,
+      liveOccupancy: sp.occupancy || "vacant",
+      occupancy: occ,
+      rentalId: rental?.id || null,
+      tenantName: periodOb?.tenantNameSnapshot || rental?.tenantName || null,
+      obligationId: v?.obligationId || periodOb?.id || null,
+      dueFils: v?.dueFils ?? periodOb?.amountFils ?? 0,
+      status: occ === "vacant" || occ === "staff"
+        ? occ
+        : (v?.status || "not_due"),
+    };
+  });
+
+  const unitsTree = units
+    .filter((u) => u.active !== false)
+    .map((u) => {
+      const mySpaces = spaces.filter((sp) => sp.unitId === u.id && sp.active !== false);
+      return {
+        unitId: u.id,
+        name: u.name,
+        kind: u.kind,
+        isWhole: u.kind === "whole",
+        spaces: mySpaces.map((sp) => {
+          const rental = rentalForPeriod(sp.id, rentals, period);
+          const v = views.find((x) => x.spaceId === sp.id) || null;
+          const display = spaceDisplay({
+            space: sp,
+            view: v,
+            rental,
+            period,
+            asOfDate,
+            occupancyOverride: sp.occupancy,
+          });
+          return {
+            spaceId: sp.id,
+            name: sp.name,
+            occupancy: sp.occupancy,
+            liveOccupancy: sp.liveOccupancy,
+            rentalId: sp.rentalId,
+            tenantName: sp.tenantName,
+            obligationId: sp.obligationId,
+            dueFils: display.dueFils,
+            paidFils: display.paidFils,
+            remainingFils: display.remainingFils,
+            dueDate: display.dueDate,
+            status: display.status,
+          };
+        }),
+      };
+    });
+
   return {
     period,
     summary: {
@@ -701,6 +810,7 @@ export function buildDashboardFromDump(db, period, asOfDate) {
     problems,
     views,
     obligations: views,
+    unitsTree,
     receipts,
     // Same display-only bank history enrichment as buildDashboard (owner view for tests).
     deposits: [

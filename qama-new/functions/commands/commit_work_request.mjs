@@ -168,7 +168,9 @@ async function applySpaceFields(ctx, payload) {
     }
     if (rentFils > 0) {
       await ctx.run(ctx.actor, "updateRentalRent", {
-        rentalId: rental.id, contractualAmountFils: rentFils,
+        rentalId: rental.id,
+        contractualAmountFils: rentFils,
+        effectivePeriod: ctx.period,
       }, STEP(ctx.requestId, "rent"));
     }
     // Contract start = first due day. Changing start must never leave +1-month leftovers.

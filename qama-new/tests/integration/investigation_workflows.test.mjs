@@ -58,10 +58,13 @@ test("vacate→rent→vacate: second vacate closes NEW rental (distinct opIds)",
   assert.equal(vac2.replay, false);
   assert.equal(vac2.occupancy, "vacant");
 
-  const dash = buildDashboardFromDump(db, building.period, "2026-09-15");
-  const sp = dash.spaces.find((s) => s.id === spaceId);
-  assert.equal(sp.occupancy, "vacant");
   assert.equal(db.dump("rentals").find((r) => r.id === r2.rentalId).state, "closed");
+  assert.equal(db.dump("spaces").find((s) => s.id === spaceId).occupancy, "vacant");
+  // Vacate effective = today (October): September remains historically rented; October vacant.
+  const sep = buildDashboardFromDump(db, building.period, "2026-10-05");
+  assert.equal(sep.spaces.find((s) => s.id === spaceId).occupancy, "rented");
+  const oct = buildDashboardFromDump(db, "2026-10", "2026-10-05");
+  assert.equal(oct.spaces.find((s) => s.id === spaceId).occupancy, "vacant");
 });
 
 test("partial 40 then 60 then reverse one receipt", async () => {
