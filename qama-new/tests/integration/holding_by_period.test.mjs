@@ -35,8 +35,10 @@ async function seedSepOct(db, owner) {
 function assertHoldingInvariant(summary) {
   const by = summary.holdingByPeriod || [];
   const sum = by.reduce((s, r) => s + Number(r.holdingFils || 0), 0);
-  assert.equal(sum, Number(summary.sharedHoldingAllPeriodsFils));
+  // Rent-month sum ≤ global physical Holding (unallocated cash may make global larger).
+  assert.ok(sum <= Number(summary.sharedHoldingAllPeriodsFils));
   assert.equal(Number(summary.sharedHoldingAllPeriodsFils), Number(summary.globalHoldingFils));
+  assert.equal(Number(summary.rentMonthHoldingSumFils ?? sum), sum);
 }
 
 test("HBP1 Sep cash → Sep Holding only", async () => {

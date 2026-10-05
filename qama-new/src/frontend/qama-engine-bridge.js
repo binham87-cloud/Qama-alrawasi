@@ -1280,6 +1280,12 @@ async function applyEngineDiff(data) {
       await maybeUncollect(item, dashSp);
       await syncOccupancyAndTenant(item, dashSp);
       let fresh = dashSpaceById(item._spaceId) || dashSp;
+      // Vacancy/staff is rental-lifecycle ONLY — never create/recognize payment or Holding.
+      if (item.status === "vacant" || item.status === "staff") {
+        item._commitIntent = false;
+        item._collectDraft = false;
+        continue;
+      }
       // _collectDraft + method means the operator confirmed محصّل in the form even if
       // a prior hydrate left mapped.status as late (unpaid engine truth).
       const wantsPay = item.status === "collected" || item.partial

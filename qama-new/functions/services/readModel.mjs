@@ -12,14 +12,22 @@ import {
   operatingNetFils,
 } from "../domain/finance.mjs";
 
-/** Attach canonical Holding(P) + all-period shared Holding onto a period summary. */
-function attachHoldingProjection(summary, { allReceipts, allDeposits, period }) {
-  const byPeriod = holdingByPeriodFils({ receipts: allReceipts, deposits: allDeposits });
-  const allPeriodsHolding = sharedHoldingAllPeriodsFils({
+/**
+ * Attach rent-month Holding(P) + GLOBAL physical shared Holding.
+ * liveRentMonthObligationIds scopes monthly attribution (vacated future unpaid → 0).
+ * Global Holding stays physical cash truth (all recognized cash − holding deposits).
+ */
+function attachHoldingProjection(summary, {
+  allReceipts, allDeposits, period, liveRentMonthObligationIds = null,
+}) {
+  const byPeriod = holdingByPeriodFils({
+    receipts: allReceipts, deposits: allDeposits, liveRentMonthObligationIds,
+  });
+  const globalHolding = sharedHoldingAllPeriodsFils({
     receipts: allReceipts, deposits: allDeposits,
   });
   const periodHolding = sharedHoldingFils({
-    receipts: allReceipts, deposits: allDeposits, period,
+    receipts: allReceipts, deposits: allDeposits, period, liveRentMonthObligationIds,
   });
   const periodRow = byPeriod.find((r) => r.period === period) || {
     period,
@@ -27,17 +35,19 @@ function attachHoldingProjection(summary, { allReceipts, allDeposits, period }) 
     approvedHoldingDepositsFils: 0,
     holdingFils: 0,
   };
-  // Invariant: Holding(P) from sharedHoldingFils === row.holdingFils (when period has activity).
+  const sumMonths = byPeriod.reduce((s, r) => s + Number(r.holdingFils || 0), 0);
   summary.holdingFils = periodHolding;
   summary.sharedEmployeeHoldingFils = periodHolding;
   summary.periodHoldingFils = periodHolding;
   summary.periodCashCollectedFils = periodRow.cashCollectedFils;
   summary.periodApprovedHoldingDepositsFils = periodRow.approvedHoldingDepositsFils;
-  summary.globalHoldingFils = allPeriodsHolding;
-  summary.sharedHoldingAllPeriodsFils = allPeriodsHolding;
+  summary.globalHoldingFils = globalHolding;
+  summary.sharedHoldingAllPeriodsFils = globalHolding;
   summary.holdingByPeriod = byPeriod;
   summary.holdingByPeriodFils = holdingByPeriodMap(byPeriod);
-  return { periodHolding, allPeriodsHolding, byPeriod };
+  summary.rentMonthHoldingSumFils = sumMonths;
+  summary.unallocatedHoldingFils = globalHolding - sumMonths;
+  return { periodHolding, allPeriodsHolding: globalHolding, byPeriod, sumMonths };
 }
 import { nextCycleStart, renewButtonVisible } from "../domain/rental_cycle.mjs";
 
@@ -101,19 +111,26 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   const spaceName = (id) => spaces.find((s) => s.id === id)?.name || "—";
   const unitName = (id) => units.find((u) => u.id === id)?.name || "—";
 
-  // Monthly KPIs count ONLY obligations belonging to a CURRENT active rental.
+  // Monthly KPIs: live rentals + retained arrears + historically earned (receipts).
   const obligations = periodObligations;
-  const liveObs = liveObligationsForPeriod(obligations, rentals);
+  const liveObs = liveObligationsForPeriod(obligations, rentals, allReceipts);
+  // Holding-by-month attribution must consider ALL periods' live/earned obligations,
+  // not only the selected month's obligation docs (otherwise other months vanish).
+  const liveRentMonthObligationIds = new Set(
+    liveObligationsForPeriod(allObligations, rentals, allReceipts).map((o) => o.id),
+  );
   // Pass ALL receipts/deposits into periodSummary for Holding(P) via holdingPeriod,
   // while obligation/receipt money for the month still uses period-filtered arrays below.
   const summary = periodSummary({
     obligations: liveObs, receipts, deposits, expenses, asOfDate, holdingPeriod: period,
   });
-  // Month screens: عند الموظفين = Holding(P). إجمالي = sum of Holding over all periods.
+  // عند الموظفين = rent-month Holding(P). إجمالي = GLOBAL physical shared Holding.
   const { periodHolding, allPeriodsHolding } = attachHoldingProjection(summary, {
-    allReceipts, allDeposits, period,
+    allReceipts, allDeposits, period, liveRentMonthObligationIds,
   });
-  const collectedBy = holdingByEmployee({ receipts: allReceipts, deposits: allDeposits, period });
+  const collectedBy = holdingByEmployee({
+    receipts: allReceipts, deposits: allDeposits, period, liveRentMonthObligationIds,
+  });
   summary.custody = collectedBy;
 
   // Daily booking targets live in uiPeriods extras (not obligations).
@@ -147,13 +164,12 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   const problems = checkInvariants({
     ...summary, custody: collectedBy, holdingFils: periodHolding,
   }).problems;
-  // All-period invariant: sum(Holding(P)) === sharedHoldingAllPeriodsFils (same derivation).
-  const sumMonths = (summary.holdingByPeriod || [])
-    .reduce((s, r) => s + Number(r.holdingFils || 0), 0);
-  if (sumMonths !== allPeriodsHolding) {
+  // Rent-month sum may be < global when cash is unallocated (e.g. orphaned) —
+  // never invent Holding from obligations. Global stays physical cash truth.
+  if (Number(summary.rentMonthHoldingSumFils || 0) > allPeriodsHolding) {
     problems.push({
-      code: "HOLDING_PERIOD_SUM_MISMATCH",
-      detail: "sum(monthly Holding) ≠ shared all-period Holding",
+      code: "HOLDING_PERIOD_EXCEEDS_GLOBAL",
+      detail: "sum(rent-month Holding) > global shared Holding",
     });
   }
 
@@ -606,16 +622,22 @@ export function buildDashboardFromDump(db, period, asOfDate) {
   const spaceName = (id) => spaces.find((s) => s.id === id)?.name || "—";
   const unitName = (id) => units.find((u) => u.id === id)?.name || "—";
 
-  const liveObs = liveObligationsForPeriod(obligations, rentals);
   const allReceipts = dump("receipts");
   const allDeposits = dump("deposits");
+  const allObligations = dump("obligations");
+  const liveObs = liveObligationsForPeriod(obligations, rentals, allReceipts);
+  const liveRentMonthObligationIds = new Set(
+    liveObligationsForPeriod(allObligations, rentals, allReceipts).map((o) => o.id),
+  );
   const summary = periodSummary({
     obligations: liveObs, receipts, deposits, expenses, asOfDate, holdingPeriod: period,
   });
   const { periodHolding, allPeriodsHolding } = attachHoldingProjection(summary, {
-    allReceipts, allDeposits, period,
+    allReceipts, allDeposits, period, liveRentMonthObligationIds,
   });
-  const collectedBy = holdingByEmployee({ receipts: allReceipts, deposits: allDeposits, period });
+  const collectedBy = holdingByEmployee({
+    receipts: allReceipts, deposits: allDeposits, period, liveRentMonthObligationIds,
+  });
   summary.custody = collectedBy;
 
   const uiPeriods = dump("uiPeriods").filter((p) => p.period === period);
@@ -657,12 +679,10 @@ export function buildDashboardFromDump(db, period, asOfDate) {
   const problems = checkInvariants({
     ...summary, custody: collectedBy, holdingFils: periodHolding,
   }).problems;
-  const sumMonths = (summary.holdingByPeriod || [])
-    .reduce((s, r) => s + Number(r.holdingFils || 0), 0);
-  if (sumMonths !== allPeriodsHolding) {
+  if (Number(summary.rentMonthHoldingSumFils || 0) > allPeriodsHolding) {
     problems.push({
-      code: "HOLDING_PERIOD_SUM_MISMATCH",
-      detail: "sum(monthly Holding) ≠ shared all-period Holding",
+      code: "HOLDING_PERIOD_EXCEEDS_GLOBAL",
+      detail: "sum(rent-month Holding) > global shared Holding",
     });
   }
   const views = liveObs

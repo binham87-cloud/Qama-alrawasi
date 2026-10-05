@@ -103,18 +103,38 @@ export function isPlaceholderTenant(name) {
 }
 
 /**
- * Monthly Target/Collected/Remaining count active obligations whose rental
- * is still active, PLUS unpaid arrears explicitly retained after vacate.
+ * Monthly Target/Collected/Remaining count:
+ *  - active obligations on an active rental
+ *  - unpaid arrears explicitly retained after vacate
+ *  - historically earned obligations (recognized receipts) even after vacate
+ * Cancelled future-unpaid obligations never contribute.
+ *
+ * Pass `receipts` so vacated-but-earned months stay reproducible.
  */
-export function liveObligationsForPeriod(obligations, rentals) {
+export function liveObligationsForPeriod(obligations, rentals, receipts = null) {
   const activeRentalIds = new Set(
     (rentals || []).filter((r) => r && r.state === "active" && r.baselineExcluded !== true).map((r) => r.id),
   );
+  const earnedObIds = new Set();
+  if (Array.isArray(receipts)) {
+    for (const r of receipts) {
+      if (!isRecognizedReceipt(r) || !r.obligationId) continue;
+      earnedObIds.add(r.obligationId);
+    }
+  }
   return (obligations || []).filter((o) => {
     if (!o || o.state !== "active" || o.baselineExcluded === true) return false;
     if (activeRentalIds.has(o.rentalId)) return true;
-    return o.retainArrearsAfterVacate === true;
+    if (o.retainArrearsAfterVacate === true) return true;
+    // Historical earned month after vacate — keep Target/Collected history.
+    if (earnedObIds.has(o.id)) return true;
+    return false;
   });
+}
+
+/** Obligation ids that may attribute cash to rent-month Holding. */
+export function rentMonthHoldingObligationIds(obligations, rentals, receipts) {
+  return new Set(liveObligationsForPeriod(obligations, rentals, receipts).map((o) => o.id));
 }
 
 /* ───────────────────── receipt recognition ───────────────────── */
@@ -336,19 +356,21 @@ export function assertReceiptFits({ obligation, receipts, amountFils, asOfDate }
 /* ───────────────────── custody / holding ───────────────────── */
 
 /**
- * Operational cash custody is SHARED among employees, but ISOLATED by financial period.
+ * Operational cash custody is SHARED among employees.
  *
- * Holding(P) =
- *   SUM(recognized CASH receipts whose canonical period is P)
- * − SUM(APPROVED holding deposits whose sourcePeriod is P)
+ * TWO DISTINCT concepts (never conflate):
  *
- * Employees remain pooled within each month (no Nader vs Yahya spendable split).
- * collectorUserId / deposit employeeId are audit fields only.
- * Bank receipts never enter Holding. Pending/rejected deposits do not reduce it.
- * External ("إيداع آخر") deposits never reduce Holding.
- * Reversed cash receipts leave the set via state. NO CLAMPING.
+ * A) GLOBAL SHARED HOLDING = all recognized CASH − approved holding deposits
+ *    (physical cash still held — independent of rental/vacancy state)
  *
- * Global all-period Holding (internal) = sum of Holding(P) over periods.
+ * B) RENT-MONTH HOLDING(P) = recognized CASH attributable to LIVE rent-month
+ *    obligations (or daily prepaid) for period P
+ *    − approved holding deposits with sourcePeriod = P
+ *
+ * Vacating an unpaid future obligation cancels it → zero rent-month Holding.
+ * Vacancy NEVER creates receipts or Holding. No receipt ⇒ no Holding.
+ *
+ * Bank / external / pending / rejected / reversed never affect Holding.
  */
 
 const PERIOD_RE = /^\d{4}-\d{2}$/;
@@ -383,9 +405,29 @@ export function depositSourcePeriod(deposit) {
   return depositSourcePeriodInfo(deposit).period;
 }
 
-/** Shared spendable custody. When `period` is set, only that month's Holding. Integer fils. */
+/**
+ * Does this cash receipt attribute to rent-month Holding?
+ * - daily prepaid: yes (by receipt.period)
+ * - obligation cash: only when obligationId is in liveRentMonthObligationIds
+ * - when live set omitted (null): legacy all-period cash (global physical)
+ */
+function cashReceiptCountsForRentMonth(r, liveRentMonthObligationIds) {
+  if (!isRecognizedReceipt(r) || r.method !== "cash") return false;
+  if (r.sourceType === "daily_booking") return true;
+  if (liveRentMonthObligationIds == null) return true; // global / unscoped
+  if (!r.obligationId) return false;
+  return liveRentMonthObligationIds.has(r.obligationId);
+}
+
+/**
+ * Shared spendable custody.
+ * - period=null: GLOBAL physical Holding (all recognized cash − holding deposits)
+ * - period set: RENT-MONTH Holding(P); pass liveRentMonthObligationIds to exclude
+ *   cash on cancelled/vacated-future obligations.
+ */
 export function sharedHoldingFils({
   receipts, deposits, period = null, excludeReceiptIds = [], excludeDepositIds = [],
+  liveRentMonthObligationIds = null,
 }) {
   const skipR = new Set(excludeReceiptIds);
   const skipD = new Set(excludeDepositIds);
@@ -393,7 +435,7 @@ export function sharedHoldingFils({
   let cash = 0;
   for (const r of receipts || []) {
     if (skipR.has(r.id)) continue;
-    if (!isRecognizedReceipt(r) || r.method !== "cash") continue;
+    if (!cashReceiptCountsForRentMonth(r, wantPeriod ? liveRentMonthObligationIds : null)) continue;
     if (wantPeriod) {
       const rp = receiptHoldingPeriod(r);
       // Ambiguous (no period) receipts are excluded from period Holding — never guess.
@@ -419,19 +461,17 @@ export function sharedHoldingFils({
 }
 
 /**
- * Canonical Holding breakdown by accounting period.
+ * Rent-month Holding breakdown (B). Not the global physical total.
  *
- * Each row:
- *   cashCollectedFils  = recognized CASH receipts with receipt.period = P
- *   approvedHoldingDepositsFils = approved holding deposits with sourcePeriod = P
- *   holdingFils = cashCollectedFils − approvedHoldingDepositsFils
+ * Pass liveRentMonthObligationIds from liveObligationsForPeriod(+receipts)
+ * so cancelled future-unpaid vacates contribute 0.
  *
- * Bank / external / pending / rejected / reversed / display-only are excluded.
- * Ambiguous records (no period / no sourcePeriod) are omitted — never guessed.
- *
- * sharedHoldingAllPeriodsFils MUST equal sum(holdingFils) — no independent global formula.
+ * Daily prepaid cash still attributes by receipt.period.
  */
-export function holdingByPeriodFils({ receipts, deposits, excludeReceiptIds = [], excludeDepositIds = [] }) {
+export function holdingByPeriodFils({
+  receipts, deposits, excludeReceiptIds = [], excludeDepositIds = [],
+  liveRentMonthObligationIds = null,
+}) {
   const skipR = new Set(excludeReceiptIds);
   const skipD = new Set(excludeDepositIds);
   const cashBy = new Map();
@@ -439,7 +479,7 @@ export function holdingByPeriodFils({ receipts, deposits, excludeReceiptIds = []
 
   for (const r of receipts || []) {
     if (skipR.has(r.id)) continue;
-    if (!isRecognizedReceipt(r) || r.method !== "cash") continue;
+    if (!cashReceiptCountsForRentMonth(r, liveRentMonthObligationIds)) continue;
     const p = receiptHoldingPeriod(r);
     if (!p) continue;
     cashBy.set(p, (cashBy.get(p) || 0) + toSafeFils(r.amountFils));
@@ -470,10 +510,9 @@ export function holdingByPeriodFils({ receipts, deposits, excludeReceiptIds = []
   return rows;
 }
 
-/** Sum of Holding(P) over all periods — the only all-period shared Holding total. */
+/** GLOBAL physical shared Holding (A) — all recognized cash − holding deposits. */
 export function sharedHoldingAllPeriodsFils({ receipts, deposits, excludeReceiptIds = [], excludeDepositIds = [] }) {
-  return holdingByPeriodFils({ receipts, deposits, excludeReceiptIds, excludeDepositIds })
-    .reduce((s, row) => s + row.holdingFils, 0);
+  return sharedHoldingFils({ receipts, deposits, excludeReceiptIds, excludeDepositIds });
 }
 
 /** Map period → holdingFils for convenience. */
@@ -491,13 +530,15 @@ export function holdingByPeriodMap(rowsOrArgs) {
  * depositedFils here is deposits that employee submitted (audit), not their personal pool.
  * Optional `period` scopes attribution to that holding period.
  */
-export function holdingByEmployee({ receipts, deposits, period = null }) {
+export function holdingByEmployee({
+  receipts, deposits, period = null, liveRentMonthObligationIds = null,
+}) {
   const collected = new Map();
   const submitted = new Map();
   const wantPeriod = period && PERIOD_RE.test(String(period)) ? String(period) : null;
 
   for (const r of receipts || []) {
-    if (!isRecognizedReceipt(r) || r.method !== "cash") continue;
+    if (!cashReceiptCountsForRentMonth(r, wantPeriod ? liveRentMonthObligationIds : null)) continue;
     if (wantPeriod && receiptHoldingPeriod(r) !== wantPeriod) continue;
     const who = r.collectorUserId;
     if (!who) continue;

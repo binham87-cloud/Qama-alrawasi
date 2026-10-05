@@ -347,9 +347,12 @@ test("close rental after cash keeps holding (إخلاء ≠ إلغاء تحصي�
     rentalId: building.rental.rentalId, endDate: "2026-09-30", reason: "انتهاء", setVacant: true,
   });
   const afterClose = buildDashboardFromDump(db, building.period, "2026-09-15");
-  assert.equal(afterClose.summary.targetFils, 0);
+  // Historically earned month remains reproducible after close (Target/Collected/Holding).
+  assert.equal(afterClose.summary.targetFils, 920000);
+  assert.equal(afterClose.summary.collectedFils, 920000);
   // Paid cash remains in Shared Holding until deposit or explicit uncollect/reverse.
   assert.equal(afterClose.summary.sharedEmployeeHoldingFils, 920000);
+  assert.equal(afterClose.summary.sharedHoldingAllPeriodsFils, 920000);
   const rcpt = db.dump("receipts").find((r) => r.obligationId === building.obligationId);
   assert.equal(rcpt.state, "recognized");
   await run(db, owner, "uncollectObligation", {

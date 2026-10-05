@@ -134,6 +134,7 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
   let cancelledObligationIds = [];
   if (retainArrears) {
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+    const vacateDay = String(endDate || ctx.now.slice(0, 10)).slice(0, 10);
     for (const ob of obligations) {
       if (ob.state !== "active") continue;
       const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
@@ -141,7 +142,22 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
         .filter((r) => r.state === RECEIPT_STATE.RECOGNIZED)
         .reduce((s, r) => s + Number(r.amountFils || 0), 0);
       const remaining = Math.max(0, Number(ob.amountFils || 0) - livePaid);
+      const due = String(ob.dueDate || `${ob.period || "9999-99"}-01`).slice(0, 10);
+      // Future not-yet-due unpaid obligation: CANCEL — never Target/Collected/Holding.
+      // Vacancy must never invent collection. No receipts ⇒ no money event.
+      if (remaining > 0 && !livePaid && due > vacateDay) {
+        ctx.tx.update("obligations", ob.id, {
+          state: "cancelled",
+          cancelledBy: ctx.actor.userId,
+          cancelledAt: ctx.now,
+          cancelReason: closeReason,
+          cancelledAsFutureUnpaidOnVacate: true,
+        });
+        cancelledObligationIds.push(ob.id);
+        continue;
+      }
       if (remaining > 0) {
+        // Due/past unpaid arrears: retain collectible debt (not Holding).
         ctx.tx.update("obligations", ob.id, {
           retainArrearsAfterVacate: true,
           arrearsRemainingFilsSnapshot: remaining,
@@ -156,8 +172,8 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
         });
         cancelledObligationIds.push(ob.id);
       }
-      // Fully paid with receipts: leave as active history; KPI excludes via closed rental
-      // unless retainArrearsAfterVacate (not set when remaining=0).
+      // Fully paid with receipts: leave as active history (money lifecycle separate).
+      // Vacancy NEVER creates/reverses receipts here.
     }
   } else {
     cancelledObligationIds = await cancelUnpaidObligationsForRental(
