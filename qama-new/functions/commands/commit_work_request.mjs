@@ -329,6 +329,7 @@ async function addExpense(ctx, expense) {
     category: String(expense.category || "عام").slice(0, 60),
     expenseDate: validDate(expense.date) || ctx.now.slice(0, 10),
     paidFromAccountId: acc.id,
+    period: ctx.period,
     ...(requestedBy ? { requestedBy } : {}),
   }, STEP(ctx.requestId, "exp"));
 }
@@ -360,6 +361,7 @@ async function addDeposit(ctx, tx) {
     employeeId: ctx.collectorUserId,
     sourceKind: tx.sourceKind === "external" ? "external" : "holding",
     sourcePeriod: tx.sourcePeriod || ctx.period,
+    period: tx.period || ctx.period,
   }, STEP(ctx.requestId, "dep"));
   // Owner submitDeposit auto-approves; employee-attributed submit stays pending until approve.
   if (submitted.state === "pending" && submitted.depositId) {
@@ -381,6 +383,7 @@ async function addMaintenance(ctx, key, row) {
       expenseDate: validDate(row.date) || ctx.now.slice(0, 10),
       paidFromAccountId: acc.id,
       maintenanceLinkId: String(ctx.requestId || row.id || "").slice(0, 120) || undefined,
+      period: ctx.period,
     }, STEP(ctx.requestId, "mexp"));
     expenseId = submitted.expenseId || null;
   }

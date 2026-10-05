@@ -1114,12 +1114,16 @@ async function applyUiExpenses(data) {
     const fils = aedToFils(exp.amount);
     if (fils <= 0) throw new Error("INVALID_AMOUNT");
     const date = (exp.date && /^\d{4}-\d{2}-\d{2}$/.test(exp.date)) ? exp.date : engineToday();
+    const accountingPeriod = exp.period
+      || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
+      || String(date).slice(0, 7);
     const r = await engineCommand("submitExpense", {
       amountFils: fils,
       reason: String(exp.desc || "مصروف").slice(0, 300),
       category: String(exp.category || "عام").slice(0, 60),
       expenseDate: date,
       paidFromAccountId: acc,
+      period: accountingPeriod,
       ...(exp._maintenanceLinkId ? { maintenanceLinkId: String(exp._maintenanceLinkId).slice(0, 120) } : {})
     }, ("uiexp-" + String(exp.id || Date.now()) + "-" + fils).slice(0, 120));
     if (r && r.expenseId) {
@@ -1158,6 +1162,10 @@ async function applyUiDeposits(data) {
     const sourcePeriod = tx.sourcePeriod
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
+    const accountingPeriod = tx.period
+      || sourcePeriod
+      || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
+      || String(date).slice(0, 7);
     const r = await engineCommand("submitDeposit", {
       amountFils: fils,
       depositDate: date,
@@ -1166,6 +1174,7 @@ async function applyUiDeposits(data) {
       reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
       sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
       sourcePeriod,
+      period: accountingPeriod,
     }, ("uiddep-" + String(tx.id || Date.now()) + "-" + fils).slice(0, 120));
     if (r && r.depositId) {
       tx._engineId = r.depositId;
@@ -1202,13 +1211,17 @@ async function applyUiMaintenance(data) {
       continue;
     }
     const date = (row.date && /^\d{4}-\d{2}-\d{2}$/.test(row.date)) ? row.date : engineToday();
+    const accountingPeriod = row.period
+      || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
+      || String(date).slice(0, 7);
     const r = await engineCommand("submitExpense", {
       amountFils: fils,
       reason: String(row.desc || row.description || "صيانة").slice(0, 300),
       category: "صيانة",
       expenseDate: date,
       paidFromAccountId: acc,
-      maintenanceLinkId: linkId.slice(0, 120) || undefined
+      maintenanceLinkId: linkId.slice(0, 120) || undefined,
+      period: accountingPeriod,
     }, ("uimaint-" + String(row.id || Date.now()) + "-" + fils).slice(0, 120));
     if (r && r.expenseId) {
       row._engineId = r.expenseId;
@@ -1457,6 +1470,10 @@ async function setDoc(ref, data) {
                 const sourcePeriod = tx.sourcePeriod
                   || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
                   || String(date).slice(0, 7);
+                const accountingPeriod = tx.period
+                  || sourcePeriod
+                  || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
+                  || String(date).slice(0, 7);
                 const dep = await engineCommand("submitDeposit", {
                   amountFils: fils,
                   depositDate: date,
@@ -1465,9 +1482,14 @@ async function setDoc(ref, data) {
                   reference: String(tx.desc || data.id || "إيداع").slice(0, 120),
                   sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
                   sourcePeriod,
+                  period: accountingPeriod,
                 }, ("reqdep-" + (data.id || ref._id)).slice(0, 120));
                 if (dep && dep.depositId) {
-                  payload = { ...payload, depositId: dep.depositId, transaction: { ...tx, depositId: dep.depositId } };
+                  payload = {
+                    ...payload,
+                    depositId: dep.depositId,
+                    transaction: { ...tx, depositId: dep.depositId, sourcePeriod, period: accountingPeriod },
+                  };
                 }
               } catch (depErr) {
                 // Still create the work request so Manager sees the attempt + error context.

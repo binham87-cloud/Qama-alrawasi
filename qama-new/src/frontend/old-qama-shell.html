@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z"/>
-<title>قمة الرواسي · PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z</title>
+<meta name="qama-ui-build" content="ACCT-PERIOD-TODAY-DATE-20261004T2355Z"/>
+<title>قمة الرواسي · ACCT-PERIOD-TODAY-DATE-20261004T2355Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2966,7 +2966,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI ACCT-PERIOD-TODAY-DATE-20261004T2355Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3196,7 +3196,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI PERIOD-HOLD-VACATE-FULLPAY-PERF-DAILYPREPAY-20261004T2315Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI ACCT-PERIOD-TODAY-DATE-20261004T2355Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -3241,7 +3241,7 @@ function renderApp(){
     const recentLogs=(data.logs||[]).slice(0,12);
     const addMoneyForm=(type)=>{
       const isProfit=type==="profit";
-      let amount="", note="", date=S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",selectedAccount="company";
+      let amount="", note="", date=(typeof todayISO==="function"?todayISO():new Date().toISOString().slice(0,10)),selectedAccount="company";
       return h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
         h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff",marginBottom:"10px"}},[isProfit?"تحويل أرباح لصاحب المبنى":"دفع القسط"]),
         (()=>{const inp=h("input",{type:"number",placeholder:"المبلغ",style:{marginBottom:"8px"}});inp.addEventListener("input",e=>amount=e.target.value);return inp;})(),
@@ -4792,7 +4792,7 @@ function renderApp(){
               onClick:()=>set({showAddTx:!S.showAddTx})},["+ إيداع"])]),
           h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#4ade80"}},[totalIncome.toLocaleString()+" د.إ"])]),
         S.showAddTx?(()=>{
-          const tx2={sourceKind:"holding",sourcePeriod:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),desc:"",amount:"",date:new Date().toISOString().slice(0,10),notes:"",type:"cash"};
+          const tx2={sourceKind:"holding",sourcePeriod:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),period:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),desc:"",amount:"",date:(typeof todayISO==="function"?todayISO():new Date().toISOString().slice(0,10)),notes:"",type:"cash"};
           const wrap=h("div",{style:{padding:"12px",background:"#0f0f0f",borderRadius:"8px",marginBottom:"10px"}});
           const sourceSel=h("select",{"data-testid":"deposit-source",style:{marginBottom:"8px"}},[
             h("option",{value:"holding"},["إيداع من العهدة"]),
@@ -4826,7 +4826,7 @@ function renderApp(){
                 }
               }
               const label=tx2.sourceKind==="external"?"إيداع آخر":"إيداع من العهدة";
-              const t={id:Date.now(),desc:tx2.desc,amount:amt,date:tx2.date,notes:tx2.notes,type:tx2.type,by:S.user,sourceKind:tx2.sourceKind,sourceLabel:label};
+              const t={id:Date.now(),desc:tx2.desc,amount:amt,date:tx2.date,notes:tx2.notes,type:tx2.type,by:S.user,sourceKind:tx2.sourceKind,sourceLabel:label,sourcePeriod:tx2.sourcePeriod,period:tx2.period||tx2.sourcePeriod};
               S._savingDeposit=true;R();
               try{
                 mData.transactions.push(t);
@@ -4887,7 +4887,7 @@ function renderApp(){
     const addExpForm=S.showAddExp?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
       h("div",{style:{fontSize:"15px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["مصروف جديد"]),
       (()=>{
-        let desc="",amount="",cat="عام",date=S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01";
+        let desc="",amount="",cat="عام",date=(typeof todayISO==="function"?todayISO():(typeof engineToday==="function"?engineToday():new Date().toISOString().slice(0,10)));
         const descInp=h("input",{"data-testid":"expense-desc",type:"text",placeholder:"الوصف",style:{marginBottom:"8px"}});
         descInp.addEventListener("input",e=>desc=e.target.value);
         const amtInp=h("input",{"data-testid":"expense-amount",type:"number",placeholder:"المبلغ"});
@@ -4903,7 +4903,7 @@ function renderApp(){
               const amt=Number(amount);
               if(!String(desc||"").trim()){showMsg("⚠ أدخل وصف المصروف");return;}
               if(!Number.isFinite(amt)||amt<=0){showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");return;}
-              const expense={id:Date.now(),desc:String(desc).trim(),amount:amt,category:cat,date,by:S.user};
+              const _acctPeriod=(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))); const expense={id:Date.now(),desc:String(desc).trim(),amount:amt,category:cat,date,period:_acctPeriod,by:S.user};
               if(isOwner){
                 S._savingExpense=true;R();
                 try{
@@ -4930,7 +4930,7 @@ function renderApp(){
     const addUnitMaintForm=S.showAddUnitMaint?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
       h("div",{style:{fontSize:"13px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["صيانة شقة"]),
       (()=>{
-        const fm={unitId:"",desc:"",amount:0,date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",contractor:""};
+        const fm={unitId:"",desc:"",amount:0,date:(typeof todayISO==="function"?todayISO():new Date().toISOString().slice(0,10)),period:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),contractor:""};
         const unitSel=h("select",{style:{marginBottom:"8px"}},
           [h("option",{value:""},"اختر الشقة"),...units.map(u=>h("option",{value:u.id},[u.name])),...full.map(u=>h("option",{value:"full_"+u.id},["شقة "+u.id+" (كاملة)"]))]);
         unitSel.addEventListener("change",e=>fm.unitId=e.target.value);
@@ -4958,7 +4958,7 @@ function renderApp(){
     const addFacMaintForm=S.showAddFacMaint?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
       h("div",{style:{fontSize:"13px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["صيانة مرافق"]),
       (()=>{
-        const fm={facility:"المصاعد",desc:"",amount:0,date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",contractor:""};
+        const fm={facility:"المصاعد",desc:"",amount:0,date:(typeof todayISO==="function"?todayISO():new Date().toISOString().slice(0,10)),period:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),contractor:""};
         const facSel=h("select",{style:{marginBottom:"8px"}},FACILITIES.map(f=>{const o=h("option",{value:f},[f]);if(f===fm.facility)o.selected=true;return o;}));
         facSel.addEventListener("change",e=>fm.facility=e.target.value);
         const descInp=h("input",{type:"text",placeholder:"وصف الصيانة",style:{marginBottom:"8px"}});
@@ -5066,7 +5066,7 @@ function renderApp(){
     const addForm=S.showAddTx?h("div",{class:"card",style:{padding:"14px",marginBottom:"12px",border:"1px solid #2a2a2a"}},[
       h("div",{style:{fontSize:"15px",fontWeight:"600",color:"#fff",marginBottom:"10px"}},["إيداع"]),
       (()=>{
-        const tx={sourceKind:"holding",sourcePeriod:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),type:"عام",desc:"",amount:"",date:S.year+"-"+(S.month+1<10?"0"+(S.month+1):S.month+1)+"-01",notes:""};
+        const tx={sourceKind:"holding",sourcePeriod:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),period:(typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"))),type:"عام",desc:"",amount:"",date:(typeof todayISO==="function"?todayISO():new Date().toISOString().slice(0,10)),notes:""};
         const sourceSel=h("select",{"data-testid":"deposit-source",style:{marginBottom:"8px"}},[
           h("option",{value:"holding"},["إيداع من العهدة"]),
           h("option",{value:"external"},["إيداع آخر"])
@@ -5101,7 +5101,7 @@ function renderApp(){
               }
             }
             const label=tx.sourceKind==="external"?"إيداع آخر":"إيداع من العهدة";
-            const transaction={id:Date.now(),type:tx.type,desc:tx.desc,amount:amt,date:tx.date,notes:tx.notes,by:S.user,sourceKind:tx.sourceKind,sourceLabel:label};
+            const transaction={id:Date.now(),type:tx.type,desc:tx.desc,amount:amt,date:tx.date,notes:tx.notes,by:S.user,sourceKind:tx.sourceKind,sourceLabel:label,sourcePeriod:tx.sourcePeriod,period:tx.period||tx.sourcePeriod};
             if(isOwner){
               S._savingDeposit=true;R();
               try{

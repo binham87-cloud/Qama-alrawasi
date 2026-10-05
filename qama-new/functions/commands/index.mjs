@@ -440,6 +440,8 @@ export const SCHEMAS = Object.freeze({
     sourceKind: S.opt(S.enum(["holding", "external"])),
     /** Financial period whose Holding this deposit reduces (required for holding deposits). */
     sourcePeriod: S.opt(S.period()),
+    /** Accounting period for list/P&L visibility — independent of depositDate. */
+    period: S.opt(S.period()),
   },
   approveDeposit: { depositId: S.id() },
   rejectDeposit: { depositId: S.id(), reason: S.str(300) },
@@ -450,6 +452,8 @@ export const SCHEMAS = Object.freeze({
     paidFromAccountId: S.id(),
     maintenanceLinkId: S.opt(S.str(120)),
     requestedBy: S.opt(S.id()),
+    /** Accounting period (viewed month) — independent of expenseDate. */
+    period: S.opt(S.period()),
   },
   approveExpense: { expenseId: S.id() },
   rejectExpense: { expenseId: S.id(), reason: S.str(300) },
@@ -1379,20 +1383,25 @@ const HANDLERS = {
 
   /* ---------- deposits ---------- */
   async submitDeposit(ctx) {
-    await assertEmployeePeriodOpen(ctx, periodOf(ctx.payload.depositDate));
     const account = await ctx.tx.get("accounts", ctx.payload.destinationAccountId);
     if (!account || account.active === false) throw new DomainError("ACCOUNT_NOT_FOUND");
 
     const employeeId = await depositEmployeeFor(ctx);
     const sourceKind = ctx.payload.sourceKind || "holding";
+    // Accounting period (list/P&L) is independent of depositDate.
+    // Prefer explicit period; else sourcePeriod; else legacy periodOf(depositDate).
+    const accountingPeriod = (ctx.payload.period && PERIOD_RE.test(String(ctx.payload.period)))
+      ? String(ctx.payload.period)
+      : null;
     // Holding deposits must name the source period they reduce. Never infer from "today".
-    // Prefer explicit sourcePeriod; else (legacy callers) depositDate's period.
     const sourcePeriod = sourceKind === "external"
-      ? (ctx.payload.sourcePeriod || periodOf(ctx.payload.depositDate))
-      : (ctx.payload.sourcePeriod || periodOf(ctx.payload.depositDate));
-    if (sourceKind !== "external" && !/^\d{4}-\d{2}$/.test(String(sourcePeriod || ""))) {
+      ? (ctx.payload.sourcePeriod || accountingPeriod || periodOf(ctx.payload.depositDate))
+      : (ctx.payload.sourcePeriod || accountingPeriod || periodOf(ctx.payload.depositDate));
+    if (sourceKind !== "external" && !PERIOD_RE.test(String(sourcePeriod || ""))) {
       throw new DomainError("SOURCE_PERIOD_REQUIRED", { sourcePeriod });
     }
+    const listPeriod = accountingPeriod || sourcePeriod || periodOf(ctx.payload.depositDate);
+    await assertEmployeePeriodOpen(ctx, listPeriod);
     const receipts = await ctx.tx.query("receipts", []);
     const deposits = await ctx.tx.query("deposits", []);
     // Holding deposits must fit Holding(sourcePeriod) only. External does not reduce Holding.
@@ -1409,7 +1418,7 @@ const HANDLERS = {
       employeeId,
       amountFils: ctx.payload.amountFils,
       depositDate: ctx.payload.depositDate,
-      period: periodOf(ctx.payload.depositDate),
+      period: listPeriod,
       sourcePeriod,
       destinationAccountId: account.id,
       note: ctx.payload.note || null, reference: ctx.payload.reference || null,
@@ -1419,7 +1428,7 @@ const HANDLERS = {
       ...base(ctx),
     });
     audit(ctx, "deposit_submitted", "deposit", id, {
-      amountFils: ctx.payload.amountFils, sourceKind, sourcePeriod,
+      amountFils: ctx.payload.amountFils, sourceKind, sourcePeriod, period: listPeriod,
     });
     if (approved) {
       await creditRevenueAccount(ctx, {
@@ -1434,6 +1443,7 @@ const HANDLERS = {
       depositId: id,
       state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING,
       sourcePeriod,
+      period: listPeriod,
     };
   },
   async approveDeposit(ctx) {
@@ -1508,7 +1518,11 @@ const HANDLERS = {
 
   /* ---------- expenses ---------- */
   async submitExpense(ctx) {
-    await assertEmployeePeriodOpen(ctx, periodOf(ctx.payload.expenseDate));
+    // Accounting period is independent of expenseDate (invoice may arrive in a later month).
+    const accountingPeriod = (ctx.payload.period && PERIOD_RE.test(String(ctx.payload.period)))
+      ? String(ctx.payload.period)
+      : periodOf(ctx.payload.expenseDate);
+    await assertEmployeePeriodOpen(ctx, accountingPeriod);
     const account = await ctx.tx.get("accounts", ctx.payload.paidFromAccountId);
     if (!account || account.active === false) throw new DomainError("ACCOUNT_NOT_FOUND");
     const id = newId("exp", ctx);
@@ -1518,7 +1532,7 @@ const HANDLERS = {
     ctx.tx.create("expenses", id, {
       id, amountFils: ctx.payload.amountFils, reason: ctx.payload.reason,
       category: ctx.payload.category, expenseDate: ctx.payload.expenseDate,
-      period: periodOf(ctx.payload.expenseDate),
+      period: accountingPeriod,
       paidFromAccountId: account.id, submittedBy: ctx.actor.userId,
       maintenanceLinkId,
       requestedBy,
@@ -1526,7 +1540,9 @@ const HANDLERS = {
       ...(approved ? { approvedBy: ctx.actor.userId, approvedAt: ctx.now } : {}),
       ...base(ctx),
     });
-    audit(ctx, "expense_submitted", "expense", id, { amountFils: ctx.payload.amountFils, maintenanceLinkId, requestedBy });
+    audit(ctx, "expense_submitted", "expense", id, {
+      amountFils: ctx.payload.amountFils, maintenanceLinkId, requestedBy, period: accountingPeriod,
+    });
     // Recognized expenses are paid from حساب الإيرادات exactly once.
     if (approved) {
       await debitRevenueAccount(ctx, {
@@ -1538,7 +1554,11 @@ const HANDLERS = {
         requirePriorCredit: false,
       });
     }
-    return { expenseId: id, state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING };
+    return {
+      expenseId: id,
+      state: approved ? APPROVAL_STATE.APPROVED : APPROVAL_STATE.PENDING,
+      period: accountingPeriod,
+    };
   },
   async approveExpense(ctx) {
     const exp = await ctx.tx.get("expenses", ctx.payload.expenseId);
