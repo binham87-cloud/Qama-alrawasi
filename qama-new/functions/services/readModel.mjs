@@ -11,6 +11,7 @@ import {
   dailyBookingsTargetFils, paidInstallmentsFilsForPeriod, profitTransfersFils,
   operatingNetFils,
   rentalForPeriod, occupancyForPeriod, rentalCoversPeriod,
+  tenantNameForPeriod, tenantPhoneForPeriod, rentAmountForPeriod,
 } from "../domain/finance.mjs";
 
 /**
@@ -387,11 +388,9 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
               reversedByReversalId: r.reversedByReversalId || null,
             }));
 
-          // Tenant/rent for THIS period: prefer frozen obligation snapshot, then covering rental.
-          const tenantName = periodOb?.tenantNameSnapshot
-            || rental?.tenantName
-            || null;
-          const tenantPhone = rental?.tenantPhone || null;
+          // Tenant/rent for THIS period: frozen snapshot, then revision — never a later tenant.
+          const tenantName = tenantNameForPeriod(rental, period, periodOb?.tenantNameSnapshot);
+          const tenantPhone = tenantPhoneForPeriod(rental, period);
 
           return {
             spaceId: sp.id,
@@ -603,7 +602,7 @@ function spaceDisplay({ space, view, rental, period, asOfDate, occupancyOverride
       dueDate: view.dueDate,
     };
   }
-  const dueFils = rental?.contractualAmountFils ?? 0;
+  const dueFils = rentAmountForPeriod(rental, period, null);
   const dueDate = rental && period ? dueDateFor(period, rental.dueDayOfMonth) : null;
   return {
     status: deriveStatus({ dueFils, paidFils: 0, dueDate, asOfDate }),
@@ -753,9 +752,10 @@ export function buildDashboardFromDump(db, period, asOfDate) {
       liveOccupancy: sp.occupancy || "vacant",
       occupancy: occ,
       rentalId: rental?.id || null,
-      tenantName: periodOb?.tenantNameSnapshot || rental?.tenantName || null,
+      tenantName: tenantNameForPeriod(rental, period, periodOb?.tenantNameSnapshot),
+      tenantPhone: tenantPhoneForPeriod(rental, period),
       obligationId: v?.obligationId || periodOb?.id || null,
-      dueFils: v?.dueFils ?? periodOb?.amountFils ?? 0,
+      dueFils: v?.dueFils ?? periodOb?.amountFils ?? rentAmountForPeriod(rental, period, null),
       status: occ === "vacant" || occ === "staff"
         ? occ
         : (v?.status || "not_due"),
@@ -789,6 +789,7 @@ export function buildDashboardFromDump(db, period, asOfDate) {
             liveOccupancy: sp.liveOccupancy,
             rentalId: sp.rentalId,
             tenantName: sp.tenantName,
+            tenantPhone: sp.tenantPhone || null,
             obligationId: sp.obligationId,
             dueFils: display.dueFils,
             paidFils: display.paidFils,

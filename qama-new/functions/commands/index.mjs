@@ -14,7 +14,7 @@ import {
   assertReceiptFits, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
   periodOf, dueDateFor, obligationIdFor, depositSourcePeriod,
   assertPositiveFils, isFils, isPlaceholderTenant, parseAedToFils,
-  rentalCoversPeriod,
+  rentalCoversPeriod, isObligationAfterTenancyEnd,
 } from "../domain/finance.mjs";
 import {
   buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
@@ -215,9 +215,11 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
       },
     );
   }
+  const suppressedFutureIds = await suppressFutureRentMonthObligations(ctx, closedRental, vacateDay);
   audit(ctx, "rental_closed", "rental", rental.id, {
     reason: closeReason,
     cancelledObligationIds,
+    suppressedFutureObligationIds: suppressedFutureIds,
     reversedReceiptIds: reversed.reversedReceiptIds,
     reversalIds: reversed.reversalIds,
     reverseLiveMoney: !!reverseLiveMoney,
@@ -226,9 +228,57 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
   return {
     rentalId: rental.id,
     cancelledObligationIds,
+    suppressedFutureObligationIds: suppressedFutureIds,
     reversedReceiptIds: reversed.reversedReceiptIds,
     reversalIds: reversed.reversalIds,
   };
+}
+
+/**
+ * Months strictly after the vacancy month lose rent-month attribution.
+ * Receipts are never reversed or deleted here. Physical cash stays in global Holding.
+ */
+async function suppressFutureRentMonthObligations(ctx, rental, vacateDay) {
+  const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+  const suppressed = [];
+  for (const ob of obligations) {
+    if (!ob || ob.baselineExcluded === true) continue;
+    if (!isObligationAfterTenancyEnd(ob, rental)) continue;
+    if (ob.rentMonthSuppressed === true && ob.state !== "active") {
+      suppressed.push(ob.id);
+      continue;
+    }
+    const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
+    const live = receipts.filter(
+      (r) => r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING,
+    );
+    if (live.length) {
+      // Keep the receipt. Drop November (etc.) Target/Collected/Holding only.
+      ctx.tx.update("obligations", ob.id, {
+        rentMonthSuppressed: true,
+        suppressedReason: "tenancy_ended_before_period",
+        suppressedAt: ctx.now,
+      });
+    } else if (ob.state === "active") {
+      ctx.tx.update("obligations", ob.id, {
+        state: "cancelled",
+        rentMonthSuppressed: true,
+        suppressedReason: "tenancy_ended_before_period",
+        cancelledAsFutureUnpaidOnVacate: true,
+        cancelledBy: ctx.actor.userId,
+        cancelledAt: ctx.now,
+        cancelReason: "tenancy ended before period",
+      });
+    } else if (!ob.rentMonthSuppressed) {
+      ctx.tx.update("obligations", ob.id, {
+        rentMonthSuppressed: true,
+        suppressedReason: "tenancy_ended_before_period",
+      });
+    }
+    suppressed.push(ob.id);
+  }
+  void vacateDay;
+  return suppressed;
 }
 
 const REVENUE_ACCOUNT_ID = "mig:acc:revenue";
@@ -453,6 +503,8 @@ export const SCHEMAS = Object.freeze({
     rentalId: S.id(),
     startDate: S.opt(S.date()),
     dueDayOfMonth: S.opt(S.int(1, 31)),
+    /** Only this period and later obligation due dates may move. */
+    effectivePeriod: S.opt(S.period()),
   },
   closeRental: { rentalId: S.id(), endDate: S.date(), reason: S.str(300), setVacant: S.opt(S.bool()) },
   renewRentalCycle: {
@@ -771,15 +823,45 @@ const HANDLERS = {
     if (patch.tenantName != null) tenantPatch.tenantName = patch.tenantName;
     if (patch.tenantPhone != null) tenantPatch.tenantPhone = patch.tenantPhone;
     if (!Object.keys(tenantPatch).length) throw new DomainError("NOTHING_TO_UPDATE");
-    ctx.tx.update("rentals", rentalId, tenantPatch);
     const effectivePeriod = effPeriod || periodOf(ctx.now.slice(0, 10));
+    const tenantRevisions = Array.isArray(rental.tenantRevisions) ? rental.tenantRevisions.slice() : [];
+    const nameChanged = tenantPatch.tenantName != null && tenantPatch.tenantName !== rental.tenantName;
+    const phoneChanged = tenantPatch.tenantPhone != null && tenantPatch.tenantPhone !== (rental.tenantPhone || null);
+    if (nameChanged || phoneChanged) {
+      const startPeriod = periodOf(String(rental.startDate || ctx.now).slice(0, 10));
+      if (!tenantRevisions.some((r) => r && r.effectivePeriod === startPeriod)) {
+        tenantRevisions.push({
+          effectivePeriod: startPeriod,
+          tenantName: rental.tenantName,
+          tenantPhone: rental.tenantPhone || null,
+        });
+      }
+      const nextRevs = tenantRevisions.filter((r) => r && r.effectivePeriod !== effectivePeriod);
+      nextRevs.push({
+        effectivePeriod,
+        tenantName: nameChanged ? tenantPatch.tenantName : rental.tenantName,
+        tenantPhone: phoneChanged
+          ? tenantPatch.tenantPhone
+          : (tenantPatch.tenantPhone != null ? tenantPatch.tenantPhone : (rental.tenantPhone || null)),
+      });
+      tenantPatch.tenantRevisions = nextRevs;
+    }
+    ctx.tx.update("rentals", rentalId, tenantPatch);
     const revised = [];
+    const frozen = [];
     if (tenantPatch.tenantName != null) {
       const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
       for (const ob of obligations) {
         if (ob.state !== "active") continue;
         const obPeriod = ob.period || (ob.dueDate ? periodOf(ob.dueDate) : null);
-        if (obPeriod && String(obPeriod) < String(effectivePeriod)) continue;
+        if (obPeriod && String(obPeriod) < String(effectivePeriod)) {
+          // Freeze the name that was valid before this change. Never overwrite it.
+          if (!ob.tenantNameSnapshot) {
+            ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: rental.tenantName });
+            frozen.push(ob.id);
+          }
+          continue;
+        }
         if (ob.tenantNameSnapshot === tenantPatch.tenantName) continue;
         ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: tenantPatch.tenantName });
         revised.push(ob.id);
@@ -790,6 +872,7 @@ const HANDLERS = {
       after: tenantPatch,
       effectivePeriod,
       revisedObligationSnapshots: revised,
+      frozenHistoricalSnapshots: frozen,
     });
     return { rentalId, effectivePeriod, revisedObligationSnapshotIds: revised };
   },
@@ -855,8 +938,18 @@ const HANDLERS = {
     const rental = await ctx.tx.get("rentals", ctx.payload.rentalId);
     if (!rental) throw new DomainError("RENTAL_NOT_FOUND");
     if (rental.state !== "active") throw new DomainError("RENTAL_NOT_ACTIVE");
-    ctx.tx.update("rentals", rental.id, { contractualAmountFils: ctx.payload.contractualAmountFils });
     const effectivePeriod = ctx.payload.effectivePeriod || periodOf(ctx.now.slice(0, 10));
+    const rentRevisions = Array.isArray(rental.rentRevisions) ? rental.rentRevisions.slice() : [];
+    const startPeriod = periodOf(String(rental.startDate || ctx.now).slice(0, 10));
+    if (!rentRevisions.some((r) => r && r.effectivePeriod === startPeriod)) {
+      rentRevisions.push({ effectivePeriod: startPeriod, amountFils: rental.contractualAmountFils });
+    }
+    const nextRentRevs = rentRevisions.filter((r) => r && r.effectivePeriod !== effectivePeriod);
+    nextRentRevs.push({ effectivePeriod, amountFils: ctx.payload.contractualAmountFils });
+    ctx.tx.update("rentals", rental.id, {
+      contractualAmountFils: ctx.payload.contractualAmountFils,
+      rentRevisions: nextRentRevs,
+    });
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
     const revised = [];
     const skippedHistorical = [];
@@ -901,12 +994,22 @@ const HANDLERS = {
     if (rental.state !== "active") throw new DomainError("RENTAL_NOT_ACTIVE");
 
     const patch = {};
-    if (ctx.payload.startDate) patch.startDate = ctx.payload.startDate;
+    const effectivePeriod = ctx.payload.effectivePeriod || periodOf(ctx.now.slice(0, 10));
+    if (ctx.payload.startDate) {
+      const nextStart = String(ctx.payload.startDate).slice(0, 10);
+      const prevStart = String(rental.startDate || "").slice(0, 10);
+      // A later month's cycle start must not move the contract start forward
+      // (that would uncover September when October is saved).
+      if (!prevStart || periodOf(nextStart) <= periodOf(prevStart)) patch.startDate = nextStart;
+    }
     if (ctx.payload.dueDayOfMonth != null) patch.dueDayOfMonth = ctx.payload.dueDayOfMonth;
 
     // If only startDate is supplied, derive due day from it (upfront rent rule).
     if (patch.startDate && ctx.payload.dueDayOfMonth == null) {
       patch.dueDayOfMonth = Math.min(31, Math.max(1, Number(String(patch.startDate).slice(8, 10)) || 1));
+    }
+    if (!Object.keys(patch).length && ctx.payload.dueDayOfMonth == null && !ctx.payload.startDate) {
+      throw new DomainError("NOTHING_TO_UPDATE");
     }
     if (!Object.keys(patch).length) throw new DomainError("NOTHING_TO_UPDATE");
 
@@ -915,8 +1018,14 @@ const HANDLERS = {
 
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
     const revised = [];
+    const skippedHistorical = [];
     for (const ob of obligations) {
       if (ob.state !== "active") continue;
+      const obPeriod = ob.period || (ob.dueDate ? periodOf(ob.dueDate) : null);
+      if (obPeriod && String(obPeriod) < String(effectivePeriod)) {
+        skippedHistorical.push(ob.id);
+        continue;
+      }
       const nextDue = dueDateFor(ob.period, nextDueDay);
       if (ob.dueDate === nextDue) continue;
       ctx.tx.update("obligations", ob.id, { dueDate: nextDue });
@@ -925,7 +1034,9 @@ const HANDLERS = {
     audit(ctx, "rental_schedule_updated", "rental", rental.id, {
       before: { startDate: rental.startDate, dueDayOfMonth: rental.dueDayOfMonth },
       after: { ...patch, dueDayOfMonth: nextDueDay },
+      effectivePeriod,
       revised,
+      skippedHistorical,
     });
     return { rentalId: rental.id, dueDayOfMonth: nextDueDay, revisedObligationIds: revised.map((r) => r.obligationId) };
   },

@@ -101,8 +101,39 @@ function patchDashBalances( partial ) {
  * retries once with a fresh opId. Money commands surface the error — a blind
  * retry must never mint a second receipt/deposit.
  */
+function financialOfflineBlocked() {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+function isFinancialTransportError(err) {
+  const raw = String((err && (err.message || err.code)) || err || "");
+  return /OFFLINE_FINANCIAL|network|unavailable|Failed to fetch|تعذر الاتصال|بانتظار/i.test(raw);
+}
+function markUnconfirmedFinancial(data) {
+  if (!data) return data;
+  for (const t of data.transactions || []) {
+    if (!t || t._fromBankReceipt || t.sourceKind === "bank") continue;
+    if (t._engineId || (t._state && t._state !== "")) continue;
+    t._syncState = "unsynced";
+    t._state = "";
+    if (!t._operationId) {
+      t._operationId = ("uiddep-" + String(t.id || "x") + "-" + aedToFils(t.amount)).slice(0, 120);
+    }
+  }
+  for (const e of data.expenses || []) {
+    if (!e || e._engineId || (e._state && e._state !== "")) continue;
+    e._syncState = "unsynced";
+    e._state = "";
+  }
+  return data;
+}
+
 async function engineCommand(command, payload, intent) {
   const first = (intent && String(intent).slice(0, 120)) || opId(command);
+  if (MONEY_MUTATION_COMMANDS.has(String(command)) && financialOfflineBlocked()) {
+    const err = new Error("OFFLINE_FINANCIAL_BLOCKED");
+    err.code = "OFFLINE_FINANCIAL_BLOCKED";
+    throw err;
+  }
   try {
     return await callFn("command", { command, payload, operationId: first });
   } catch (e) {
@@ -153,7 +184,9 @@ function formatEngineError(err) {
   if (/DEPOSIT_NOT_APPROVED/i.test(raw)) return "الإيداع غير معتمد — لا يمكن عكسه بهذا المسار";
   if (/NEGATIVE_HOLDING/i.test(raw)) return "العهدة المشتركة سالبة — أوقف الإيداع حتى التسوية";
   if (/IDEMPOTENCY_PAYLOAD_MISMATCH/i.test(raw)) return "تعارض في مفتاح العملية — أعد المحاولة";
-  if (/network|unavailable|Failed to fetch|internal/i.test(raw)) return "تعذر الاتصال بالخادم — تحقق من الشبكة";
+  if (/OFFLINE_FINANCIAL_BLOCKED/i.test(raw)) return "لا يمكن حفظ العملية المالية بدون اتصال";
+  if (/network|unavailable|Failed to fetch/i.test(raw)) return "لم يتم الحفظ على السيرفر — بانتظار الاتصال";
+  if (/internal/i.test(raw)) return "تعذر الاتصال بالخادم — تحقق من الشبكة";
   const short = raw.replace(/^FirebaseError:\s*/i, "").replace(/^functions\//i, "").slice(0, 160);
   return short || "تعذر الحفظ أونلاين";
 }
@@ -252,9 +285,21 @@ function wholeDisplayId(unit) {
   return n;
 }
 function engineStatusToOld(sp) {
+  const occ = sp && sp.occupancy;
+  // Period occupancy wins. A later vacancy must not paint an earlier rented month vacant.
+  if (occ === "rented") {
+    const st = sp.status;
+    const paid = filsToAed(sp.paidFils);
+    const rent = filsToAed(sp.dueFils);
+    if (st === "partial") return { status: "late", partial: true, paid_amount: paid };
+    if (st === "collected") return { status: "collected", partial: false, paid_amount: paid || rent };
+    if (st === "not_due") return { status: "pending", partial: false, paid_amount: paid };
+    if (st === "late" || st === "pending") return { status: st === "pending" ? "pending" : "late", partial: false, paid_amount: paid };
+    return { status: "late", partial: false, paid_amount: paid };
+  }
   const st = sp.status;
-  if (st === "staff" || sp.occupancy === "staff") return { status: "staff", partial: false, paid_amount: 0 };
-  if (st === "vacant" || sp.occupancy === "vacant") return { status: "vacant", partial: false, paid_amount: 0 };
+  if (st === "staff" || occ === "staff") return { status: "staff", partial: false, paid_amount: 0 };
+  if (st === "vacant" || occ === "vacant") return { status: "vacant", partial: false, paid_amount: 0 };
   const paid = filsToAed(sp.paidFils);
   const rent = filsToAed(sp.dueFils);
   if (st === "partial") return { status: "late", partial: true, paid_amount: paid };
@@ -604,8 +649,12 @@ function mapDashboardToMonth(dash) {
   const liveExp = (dash.expenses || []).filter((e) => e.state !== "reversed" && e.state !== "rejected");
   // Keep display-only rejected bank-receipt history (audit). Custody deposit rejects stay hidden.
   const liveDep = (dash.deposits || []).filter((d) => {
-    if (!d || d.state === "reversed") return false;
-    if (d.state === "rejected") return d.fromBankReceipt === true;
+    if (!d) return false;
+    // Rejected bank history stays visible (fromBankReceipt === true).
+    // Rejected and reversed custody deposits stay in the audit list too.
+    // Pending / approved stay. None of these states are hard-deleted.
+    if (d.state === "rejected" && d.fromBankReceipt === true) return true;
+    if (d.state === "rejected" || d.state === "reversed" || d.state === "pending" || d.state === "approved") return true;
     return true;
   });
   S._hydratedExpenseIds = new Set(liveExp.map((e) => e.id));
@@ -1063,6 +1112,8 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const phoneChanged = item.phone && item.phone !== (dashSp?.tenantPhone || "");
     if (tenantChanged || phoneChanged) {
       const payload = { rentalId };
+      // S.month is 0-based. periodOfMonth adds 1 — "2026-09" must not be sent while viewing October.
+      payload.effectivePeriod = periodOfMonth(S.year, S.month);
       if (item.tenant) payload.tenantName = String(item.tenant).slice(0, 160);
       if (item.phone) payload.tenantPhone = String(item.phone).slice(0, 40);
       try {
@@ -1077,7 +1128,7 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const engineDue = dashSp ? Number(dashSp.dueFils || 0) : -1;
     const rentFils = aedToFils(item.rent);
     if (engineDue !== rentFils) {
-      const effectivePeriod = `${S.year}-${String(S.month).padStart(2, "0")}`;
+      const effectivePeriod = periodOfMonth(S.year, S.month);
       await engineCommand("updateRentalRent", {
         rentalId,
         contractualAmountFils: rentFils,
@@ -1096,7 +1147,8 @@ async function syncOccupancyAndTenant(item, dashSp) {
           rentalId,
           startDate: item.start_date,
           dueDayOfMonth: Math.min(31, Math.max(1, wantDay)),
-        }, intentKey("sched", rentalId, item.start_date, wantDay));
+          effectivePeriod: periodOfMonth(S.year, S.month),
+        }, intentKey("sched", rentalId, item.start_date, wantDay, S.year, S.month));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/NOTHING_TO_UPDATE/.test(code)) throw e;
@@ -1120,15 +1172,26 @@ async function applyUiExpenses(data) {
     const accountingPeriod = exp.period
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
-    const r = await engineCommand("submitExpense", {
-      amountFils: fils,
-      reason: String(exp.desc || "مصروف").slice(0, 300),
-      category: String(exp.category || "عام").slice(0, 60),
-      expenseDate: date,
-      paidFromAccountId: acc,
-      period: accountingPeriod,
-      ...(exp._maintenanceLinkId ? { maintenanceLinkId: String(exp._maintenanceLinkId).slice(0, 120) } : {})
-    }, ("uiexp-" + String(exp.id || Date.now()) + "-" + fils).slice(0, 120));
+    const expOp = (exp._operationId || ("uiexp-" + String(exp.id || Date.now()) + "-" + fils)).slice(0, 120);
+    exp._operationId = expOp;
+    let r;
+    try {
+      r = await engineCommand("submitExpense", {
+        amountFils: fils,
+        reason: String(exp.desc || "مصروف").slice(0, 300),
+        category: String(exp.category || "عام").slice(0, 60),
+        expenseDate: date,
+        paidFromAccountId: acc,
+        period: accountingPeriod,
+        ...(exp._maintenanceLinkId ? { maintenanceLinkId: String(exp._maintenanceLinkId).slice(0, 120) } : {})
+      }, expOp);
+    } catch (expErr) {
+      if (isFinancialTransportError(expErr) || financialOfflineBlocked()) {
+        exp._syncState = "unsynced";
+        exp._state = "";
+      }
+      throw expErr;
+    }
     if (r && r.expenseId) {
       exp._engineId = r.expenseId;
       exp._state = r.state || "approved";
@@ -1169,19 +1232,31 @@ async function applyUiDeposits(data) {
       || sourcePeriod
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
-    const r = await engineCommand("submitDeposit", {
-      amountFils: fils,
-      depositDate: date,
-      destinationAccountId: acc,
-      note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
-      reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
-      sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
-      sourcePeriod,
-      period: accountingPeriod,
-    }, ("uiddep-" + String(tx.id || Date.now()) + "-" + fils).slice(0, 120));
+    const opKey = (tx._operationId || ("uiddep-" + String(tx.id || Date.now()) + "-" + fils)).slice(0, 120);
+    tx._operationId = opKey;
+    let r;
+    try {
+      r = await engineCommand("submitDeposit", {
+        amountFils: fils,
+        depositDate: date,
+        destinationAccountId: acc,
+        note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
+        reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
+        sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
+        sourcePeriod,
+        period: accountingPeriod,
+      }, opKey);
+    } catch (depErr) {
+      if (isFinancialTransportError(depErr) || financialOfflineBlocked()) {
+        tx._syncState = "unsynced";
+        tx._state = "";
+      }
+      throw depErr;
+    }
     if (r && r.depositId) {
       tx._engineId = r.depositId;
       tx._state = r.state || "approved";
+      tx._syncState = "";
       known.add(r.depositId);
     }
   }
@@ -1217,15 +1292,25 @@ async function applyUiMaintenance(data) {
     const accountingPeriod = row.period
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
-    const r = await engineCommand("submitExpense", {
-      amountFils: fils,
-      reason: String(row.desc || row.description || "صيانة").slice(0, 300),
-      category: "صيانة",
-      expenseDate: date,
-      paidFromAccountId: acc,
-      maintenanceLinkId: linkId.slice(0, 120) || undefined,
-      period: accountingPeriod,
-    }, ("uimaint-" + String(row.id || Date.now()) + "-" + fils).slice(0, 120));
+    let r;
+    const maintOp = ("uimaint-" + String(row.id || Date.now()) + "-" + fils).slice(0, 120);
+    try {
+      r = await engineCommand("submitExpense", {
+        amountFils: fils,
+        reason: String(row.desc || row.description || "صيانة").slice(0, 300),
+        category: "صيانة",
+        expenseDate: date,
+        paidFromAccountId: acc,
+        maintenanceLinkId: linkId.slice(0, 120) || undefined,
+        period: accountingPeriod,
+      }, maintOp);
+    } catch (maintErr) {
+      if (isFinancialTransportError(maintErr) || financialOfflineBlocked()) {
+        row._syncState = "unsynced";
+        row._state = "";
+      }
+      throw maintErr;
+    }
     if (r && r.expenseId) {
       row._engineId = r.expenseId;
       row._expenseId = r.expenseId;
@@ -1234,33 +1319,11 @@ async function applyUiMaintenance(data) {
 }
 
 async function syncDeletedMoney(data) {
-  if (!S._moneyHydrated || !S._dash) return;
-  const keepExp = new Set((data.expenses || []).map((e) => e._engineId).filter(Boolean));
-  const knownExp = S._hydratedExpenseIds || new Set();
-  for (const e of S._dash.expenses || []) {
-    if (!e.id || keepExp.has(e.id) || !knownExp.has(e.id)) continue;
-    if (e.state !== "approved" && e.state !== "pending") continue;
-    try {
-      if (e.state === "pending") {
-        await engineCommand("rejectExpense", { expenseId: e.id, reason: "حذف من الشاشة" }, "reje-" + e.id);
-      } else {
-        await engineCommand("reverseExpense", { expenseId: e.id, reason: "حذف من الشاشة" }, "reve-" + e.id);
-      }
-    } catch (err) { console.error(err); }
-  }
-  const keepDep = new Set((data.transactions || []).map((t) => t._engineId).filter(Boolean));
-  const knownDep = S._hydratedDepositIds || new Set();
-  for (const d of S._dash.deposits || []) {
-    if (!d.id || keepDep.has(d.id) || !knownDep.has(d.id)) continue;
-    if (d.state !== "approved" && d.state !== "pending") continue;
-    try {
-      if (d.state === "pending") {
-        await engineCommand("rejectDeposit", { depositId: d.id, reason: "حذف من الشاشة" }, "rejd-" + d.id);
-      } else {
-        await engineCommand("reverseDeposit", { depositId: d.id, reason: "حذف من الشاشة" }, "revd-" + d.id);
-      }
-    } catch (err) { console.error(err); }
-  }
+  // A local month snapshot is not allowed to reject or reverse canonical deposits
+  // or expenses. Stale cache + reconnect used to do that, and the UI then hid
+  // the rejected row — the deposit "disappeared". Explicit cancel buttons call
+  // reject/reverse directly.
+  void data;
 }
 
 async function applyEngineDiff(data) {
@@ -1422,9 +1485,54 @@ async function applyEngineDiff(data) {
   await syncDeletedMoney(data);
 }
 
+function unsyncedRowsFrom(data) {
+  const tx = (data && data.transactions || []).filter((t) => t && t._syncState === "unsynced" && !t._engineId && !t._fromBankReceipt);
+  const exp = (data && data.expenses || []).filter((e) => e && e._syncState === "unsynced" && !e._engineId);
+  return { tx, exp };
+}
+function mergeUnsyncedFinancial(serverData, previous) {
+  if (!serverData) return serverData;
+  const prev = unsyncedRowsFrom(previous);
+  const seenTx = new Set((serverData.transactions || []).map((t) => String(t._engineId || "") + "|" + String(t.date || "") + "|" + String(t.amount || "") + "|" + String(t.desc || "")));
+  for (const t of prev.tx) {
+    const key = "|" + String(t.date || "") + "|" + String(t.amount || "") + "|" + String(t.desc || "");
+    const already = (serverData.transactions || []).some((s) =>
+      String(s.date || "") === String(t.date || "") && Number(s.amount) === Number(t.amount) && String(s.desc || "") === String(t.desc || "")
+    );
+    if (already || seenTx.has(key)) continue;
+    serverData.transactions = serverData.transactions || [];
+    serverData.transactions.push(t);
+  }
+  for (const e of prev.exp) {
+    const already = (serverData.expenses || []).some((s) =>
+      String(s.date || "") === String(e.date || "") && Number(s.amount) === Number(e.amount) && String(s.desc || "") === String(e.desc || "")
+    );
+    if (already) continue;
+    serverData.expenses = serverData.expenses || [];
+    serverData.expenses.push(e);
+  }
+  return serverData;
+}
+async function retryUnsyncedMonthFinancial(y, m) {
+  if (financialOfflineBlocked()) return;
+  let previous = null;
+  try {
+    const raw = localStorage.getItem("qama_month_" + y + "_" + m);
+    if (raw) previous = JSON.parse(raw);
+  } catch (e) { return; }
+  const pending = unsyncedRowsFrom(previous);
+  if (!pending.tx.length && !pending.exp.length) return;
+  if (pending.tx.length) await applyUiDeposits({ transactions: pending.tx });
+  if (pending.exp.length) await applyUiExpenses({ expenses: pending.exp });
+}
 async function hydrateMonthFromEngine(y, m) {
   const dash = await refreshEngine(y, m, true);
-  const data = mapDashboardToMonth(dash);
+  let previous = null;
+  try {
+    const raw = localStorage.getItem("qama_month_" + y + "_" + m);
+    if (raw) previous = JSON.parse(raw);
+  } catch (e) {}
+  const data = mergeUnsyncedFinancial(mapDashboardToMonth(dash), previous);
   S._moneyHydrated = true;
   try { localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(data)); } catch (e) {}
   return data;
@@ -1580,7 +1688,15 @@ async function setDoc(ref, data) {
         const code = String((e && (e.message || e.code)) || e);
         const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED/i.test(code);
         const moneyFail = /PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|createCash|submitBank|uncollect|AMOUNT_EXCEEDS_HOLDING/i.test(code);
-        if (keepDraft && draftJson) {
+        const transport = isFinancialTransportError(e) || /OFFLINE_FINANCIAL/i.test(code);
+        if (transport) {
+          // Keep the unsynced envelope. A server hydrate here used to drop the row
+          // the operator had just typed, so the deposit vanished on refresh.
+          try {
+            markUnconfirmedFinancial(monthData);
+            localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(monthData));
+          } catch (_tr) {}
+        } else if (keepDraft && draftJson) {
           try {
             const draft = JSON.parse(draftJson);
             if (moneyFail) stripFailedCollectPaintInData(draft);

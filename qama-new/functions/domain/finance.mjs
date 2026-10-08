@@ -139,6 +139,59 @@ export function rentalForPeriod(spaceId, rentals, period) {
   return hits[hits.length - 1];
 }
 
+/** Latest revision whose effectivePeriod is on or before `period`. */
+export function revisionForPeriod(revisions, period) {
+  const p = String(period || "");
+  const rows = (revisions || []).filter((r) => r && String(r.effectivePeriod || "") <= p);
+  if (!rows.length) return null;
+  rows.sort((a, b) => String(a.effectivePeriod).localeCompare(String(b.effectivePeriod)));
+  return rows[rows.length - 1];
+}
+
+/**
+ * Tenant name for a historical month. Obligation snapshot wins.
+ * Else the revision effective in that month. Never the live name from a later change.
+ */
+export function tenantNameForPeriod(rental, period, snapshot) {
+  const snap = snapshot != null ? String(snapshot).trim() : "";
+  if (snap) return snap;
+  const rev = revisionForPeriod(rental?.tenantRevisions, period);
+  if (rev && rev.tenantName) return rev.tenantName;
+  return rental?.tenantName || null;
+}
+
+/** Phone for a historical month. A later phone change must not rewrite earlier months. */
+export function tenantPhoneForPeriod(rental, period) {
+  const rev = revisionForPeriod(rental?.tenantRevisions, period);
+  if (rev) return rev.tenantPhone || null;
+  return rental?.tenantPhone || null;
+}
+
+/** Contractual rent for a month. Frozen obligation amount wins over later revisions. */
+export function rentAmountForPeriod(rental, period, obligationAmountFils = null) {
+  if (obligationAmountFils != null && Number.isFinite(Number(obligationAmountFils))) {
+    return Number(obligationAmountFils);
+  }
+  const rev = revisionForPeriod(rental?.rentRevisions, period);
+  if (rev && rev.amountFils != null) return Number(rev.amountFils);
+  return Number(rental?.contractualAmountFils || 0);
+}
+
+/**
+ * Obligation belongs to a calendar month strictly after the vacancy month.
+ * Advance cash on that obligation must leave rent-month Target/Collected/Holding
+ * and stay in global custody until refund/deposit/reversal.
+ */
+export function isObligationAfterTenancyEnd(obligation, rental) {
+  if (!obligation || !rental || rental.state !== "closed" || !rental.endDate) return false;
+  const obPeriod = obligation.period || (obligation.dueDate ? periodOf(String(obligation.dueDate).slice(0, 10)) : null);
+  if (!obPeriod) return false;
+  let vacatePeriod;
+  try { vacatePeriod = periodOf(String(rental.endDate).slice(0, 10)); }
+  catch { return false; }
+  return String(obPeriod) > String(vacatePeriod);
+}
+
 /**
  * Period-aware occupancy for dashboards. Never use live space.occupancy alone
  * to reconstruct a past month.
@@ -163,6 +216,8 @@ export function occupancyForPeriod({ space, rentals, period, asOfDate = null }) 
  *  - historically earned obligations (recognized receipts) even after vacate
  *  - frozen historical obligations whose rental still covers that period after close
  * Cancelled future-unpaid obligations never contribute.
+ * A recognized receipt on a month AFTER the tenancy ended does NOT keep that
+ * month's Target/Collected/Holding — the cash stays in global custody only.
  *
  * Pass `receipts` so vacated-but-earned months stay reproducible.
  */
@@ -180,12 +235,15 @@ export function liveObligationsForPeriod(obligations, rentals, receipts = null) 
   }
   return (obligations || []).filter((o) => {
     if (!o || o.state !== "active" || o.baselineExcluded === true) return false;
+    if (o.rentMonthSuppressed === true) return false;
+    const rental = rentalsById.get(o.rentalId);
+    // Advance cash booked to a month after move-out is not that month's rent.
+    if (isObligationAfterTenancyEnd(o, rental)) return false;
     if (activeRentalIds.has(o.rentalId)) return true;
     if (o.retainArrearsAfterVacate === true) return true;
     // Historical earned month after vacate — keep Target/Collected history.
     if (earnedObIds.has(o.id)) return true;
     // Frozen past-month obligation: rental ended later, but this period was covered.
-    const rental = rentalsById.get(o.rentalId);
     const obPeriod = o.period || (o.dueDate ? periodOf(o.dueDate) : null);
     if (rental && obPeriod && rentalCoversPeriod(rental, obPeriod)) return true;
     return false;

@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"/>
-<title>قمة الرواسي · MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z</title>
+<meta name="qama-ui-build" content="HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z"/>
+<title>قمة الرواسي · HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -217,6 +217,14 @@ async function submitRequest(type, desc, payload){
   if(!S.user)return;
   // منع الضغط المزدوج على الزر — set flag before any await
   if(S.submitting){showMsg("⏳ جاري الإرسال...");return;}
+  const financialType=/^(add_transaction|add_expense|add_unit_maintenance|add_facility_maintenance|add_daily)$/.test(String(type||""));
+  const collecting=type==="update_partition"||type==="update_full"
+    ? (payload&&payload.fields&&(payload.fields.status==="collected"||payload.fields.partial||payload.fields._collectDraft))
+    : false;
+  if((financialType||collecting) && typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+    showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+    return;
+  }
   S.submitting=true;
   try{
   if(USERS[S.user]?.role!=="owner" && isMonthLocked(S.year,S.month)){
@@ -2358,6 +2366,7 @@ function moneyText(n){return Number(n||0).toLocaleString();}
  */
 function financiallyEffectiveTxAed(t){
   if(!t) return 0;
+  if(t._syncState==="unsynced") return 0;
   const st=String(t._state||"");
   if(st==="pending"||st==="rejected"||st==="reversed") return 0;
   if(t._fromBankReceipt || t.sourceKind==="bank"){
@@ -2914,7 +2923,7 @@ async function loadMonthOnline(y,m){
     }
   }catch(e){
     console.error(e);
-    S.syncMsg="تعذر الاتصال - حفظ محلي";
+    S.syncMsg="غير متصل — بانتظار الاتصال";
   }
   S.loading=false;
   R();
@@ -3036,7 +3045,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3246,7 +3255,7 @@ function renderApp(){
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"10px"}},[
         h("div",{style:{flex:"1"}},[
           h("div",{style:{fontSize:"15px",color:"#fff",fontWeight:"500"}},[title]),
-          h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[((item.type&&item.type!=="عام")?item.type+" · ":"")+(item.date||"")+(item.notes?" · "+item.notes:"")+(item.note?" · "+item.note:"")+(item._state==="pending"?" · قيد الاعتماد":(item._state==="rejected"?" · مرفوض":(item._state==="approved"||item._fromBankReceipt?" · معتمد":"")))+(item._receiptId?" · "+item._receiptId:(item._engineId && listName==="transactions"?" · "+item._engineId:""))])
+          h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[((item.type&&item.type!=="عام")?item.type+" · ":"")+(item.date||"")+(item.notes?" · "+item.notes:"")+(item.note?" · "+item.note:"")+(item._syncState==="unsynced"?" · لم تتم المزامنة":"")+(item._state==="pending"?" · قيد الاعتماد":(item._state==="rejected"?" · مرفوض":(item._state==="approved"||item._fromBankReceipt?" · معتمد":"")))+(item._receiptId?" · "+item._receiptId:(item._engineId && listName==="transactions"?" · "+item._engineId:""))])
         ]),
         h("div",{style:{display:"flex",alignItems:"center",gap:"8px"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color,whiteSpace:"nowrap"}},[prefix+Number(item.amount||0).toLocaleString()]),
@@ -3266,7 +3275,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -3331,25 +3340,45 @@ function renderApp(){
             onClick:()=>{selectedAccount="revenue";document.getElementById("acc-revenue").style.background="#fff";document.getElementById("acc-revenue").style.color="#000";document.getElementById("acc-company").style.background="#1a1a1a";document.getElementById("acc-company").style.color="#555";}},
             ["💰 حساب الإيرادات (رصيد تراكمي) | "+S.revenueBalance.toLocaleString()+" د.إ"])]):null,
         h("div",{style:{display:"flex",gap:"8px"}},[
-          h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
+          h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
             if(!amount)return showMsg("أدخل المبلغ");
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             const item={id:Date.now(),amount:Number(amount),date,note,by:S.user,account:selectedAccount};
-            if(isProfit){data.profits.push(item);addLog&&addLog(data,"مدير حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");set({showAddProfit:false});}
+            const balBefore={company:S.companyBalance,revenue:S.revenueBalance};
+            if(isProfit){data.profits.push(item);addLog&&addLog(data,"مدير حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");}
             else{
               data.installments.push(item);
-              // Deduct from selected account
               const amt=Number(amount);
               if(selectedAccount==="company"){
                 S.companyBalance=Math.max(0,S.companyBalance-amt);
               } else {
                 S.revenueBalance=Math.max(0,S.revenueBalance-amt);
               }
-              // Save balances to Firebase
-              try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+              try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
               addLog&&addLog(data,"مدير سجّل دفع قسط: "+Number(amount).toLocaleString()+" د.إ من "+(selectedAccount==="company"?"حساب الشركة":"حساب الإيرادات"));
-              set({showAddInstallment:false});
             }
-            saveCurData(data);showMsg("✓ تم الحفظ");
+            try{
+              await saveCurData(data);
+              set(isProfit?{showAddProfit:false}:{showAddInstallment:false});
+              showMsg("✓ تم الحفظ");
+            }catch(e){
+              if(isProfit){data.profits=data.profits.filter(x=>x!==item);}
+              else{
+                data.installments=data.installments.filter(x=>x!==item);
+                S.companyBalance=balBefore.company;
+                S.revenueBalance=balBefore.revenue;
+              }
+              try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_ls){}
+              const offline=typeof financialOfflineBlocked==="function" && financialOfflineBlocked();
+              const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
+              showMsg(offline||/OFFLINE_FINANCIAL/i.test(String((e&&e.message)||e))
+                ? "لا يمكن حفظ العملية المالية بدون اتصال"
+                : (transport ? "لم يتم الحفظ على السيرفر" : (typeof formatEngineError==="function"?formatEngineError(e):"لم يتم الحفظ على السيرفر")));
+              set(isProfit?{showAddProfit:true}:{showAddInstallment:true});
+            }
           }},["حفظ"]),
           h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"15px"},onClick:()=>isProfit?set({showAddProfit:false}):set({showAddInstallment:false})},["إلغاء"])
         ])
@@ -3662,6 +3691,10 @@ function renderApp(){
           }
           const wantsPay=p.status==="collected"||p.partial||p._collectDraft;
           if(wantsPay){
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             if(!p.collectionMethod){setFieldError("partition-collection-method","اختر طريقة التحصيل قبل الحفظ");set({editPart:unit.id+"-"+p.id});return;}
             if(p.collectionMethod==="cash"&&!p.collectedBy)p.collectedBy=S.user;
           }
@@ -4104,6 +4137,10 @@ function renderApp(){
           }
           const wantsPay=u.status==="collected"||u.partial||u._collectDraft;
           if(wantsPay){
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             if(!u.collectionMethod){setFieldError("full-collection-method","اختر طريقة التحصيل قبل الحفظ");set({editPart:"full-"+u.id});return;}
             if(u.collectionMethod==="cash"&&!u.collectedBy)u.collectedBy=S.user;
           }
@@ -4891,6 +4928,10 @@ function renderApp(){
           const saveB=h("button",{"data-testid":"btn-save-deposit",class:"btn",style:{flex:"1",background:"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},
             onClick:async()=>{
               if(S._savingDeposit){showMsg("جاري الحفظ...");return;}
+              if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+                showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+                return;
+              }
               if(!String(tx2.desc||"").trim())return showMsg("⚠ أدخل وصف الإيداع");
               const amt=Number(tx2.amount);
               if(!Number.isFinite(amt)||amt<=0)return showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");
@@ -4910,10 +4951,17 @@ function renderApp(){
                 set({showAddTx:false});
                 showMsg("تم الحفظ");
               }catch(e){
-                const ix=mData.transactions.indexOf(t);
-                if(ix>=0) mData.transactions.splice(ix,1);
                 const code=String((e&&(e.message||e.code))||e);
-                if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
+                if(transport){
+                  t._syncState="unsynced";
+                  t._state="";
+                  showMsg("لم يتم الحفظ على السيرفر");
+                }else{
+                  const ix=mData.transactions.indexOf(t);
+                  if(ix>=0) mData.transactions.splice(ix,1);
+                  if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                }
                 R();
               }finally{
                 S._savingDeposit=false;
@@ -4930,7 +4978,7 @@ function renderApp(){
             h("div",{style:{flex:"1",minWidth:"0"}},[h("div",{style:{fontSize:"15px",color:"#fff"}},[
               ((t.sourceKind==="bank"||t.sourceLabel==="تحويل بنكي"||t._fromBankReceipt)?"تحويل بنكي — ":
               (t.sourceKind==="external"||t.sourceLabel==="إيداع آخر")?"إيداع آخر — ":"من العهدة — ")+(t.desc||"")
-            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._state==="approved"||t._state==="recognized"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:""))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
+            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._syncState==="unsynced"?" · لم تتم المزامنة":"")+(t._state==="approved"||t._state==="recognized"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:""))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
             h("div",{style:{display:"flex",alignItems:"center",gap:"8px",flexShrink:"0"}},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#4ade80"}},[Number(t.amount||0).toLocaleString()+" د.إ"]),
               (t._engineId||t.id)&&t._state!=="rejected"?h("button",{class:"btn",style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"7px",padding:"5px 8px",fontSize:"12px",fontWeight:"700"},
@@ -5166,6 +5214,10 @@ function renderApp(){
         const saveBtn=h("button",{"data-testid":"btn-save-deposit",class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},
           onClick:async()=>{
             if(S._savingDeposit){showMsg("جاري الحفظ...");return;}
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             if(!String(tx.desc||"").trim())return showMsg("⚠ أدخل وصف الإيداع");
             const amt=Number(tx.amount);
             if(!Number.isFinite(amt)||amt<=0)return showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");
@@ -5186,11 +5238,18 @@ function renderApp(){
                 set({showAddTx:false});
                 showMsg("تم الحفظ");
               }catch(e){
-                const ix=data.transactions.indexOf(transaction);
-                if(ix>=0) data.transactions.splice(ix,1);
                 const code=String((e&&(e.message||e.code))||e);
+                const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
                 if(code==="SAVE_SUPERSEDED")return;
-                showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                if(transport){
+                  transaction._syncState="unsynced";
+                  transaction._state="";
+                  showMsg("لم يتم الحفظ على السيرفر");
+                }else{
+                  const ix=data.transactions.indexOf(transaction);
+                  if(ix>=0) data.transactions.splice(ix,1);
+                  showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                }
                 R();
               }finally{
                 S._savingDeposit=false;
@@ -5213,7 +5272,7 @@ function renderApp(){
       prefix:"+ ",
       // Keep approved bank/deposit rows permanently visible (never drop after refresh).
       afterTitle:(x)=>h("div",{"data-testid":x._fromBankReceipt?"bank-history-row":"deposit-history-row",style:{fontSize:"11px",color:"#666",marginTop:"2px"}},[
-        (x._state==="pending"?"قيد الاعتماد":x._state==="rejected"?"مرفوض":(x._state==="approved"||(x._fromBankReceipt&&x._state!=="rejected")?"معتمد":(x._state||"")))
+        (x._syncState==="unsynced"?"لم تتم المزامنة":(x._state==="pending"?"قيد الاعتماد":x._state==="rejected"?"مرفوض":(x._state==="approved"||(x._fromBankReceipt&&x._state!=="rejected")?"معتمد":(x._state||""))))
         +(x._state==="rejected"&&x._rejectedAt?" · رفض "+String(x._rejectedAt).slice(0,16).replace("T"," "):(x._approvedAt?" · اعتماد "+String(x._approvedAt).slice(0,16).replace("T"," "):""))
         +(x._receiptId?" · "+x._receiptId:(x._engineId?" · "+x._engineId:""))
       ]),

@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"/>
-<title>قمة الرواسي · MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z</title>
+<meta name="qama-ui-build" content="HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z"/>
+<title>قمة الرواسي · HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -132,8 +132,39 @@ function patchDashBalances( partial ) {
  * retries once with a fresh opId. Money commands surface the error — a blind
  * retry must never mint a second receipt/deposit.
  */
+function financialOfflineBlocked() {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+function isFinancialTransportError(err) {
+  const raw = String((err && (err.message || err.code)) || err || "");
+  return /OFFLINE_FINANCIAL|network|unavailable|Failed to fetch|تعذر الاتصال|بانتظار/i.test(raw);
+}
+function markUnconfirmedFinancial(data) {
+  if (!data) return data;
+  for (const t of data.transactions || []) {
+    if (!t || t._fromBankReceipt || t.sourceKind === "bank") continue;
+    if (t._engineId || (t._state && t._state !== "")) continue;
+    t._syncState = "unsynced";
+    t._state = "";
+    if (!t._operationId) {
+      t._operationId = ("uiddep-" + String(t.id || "x") + "-" + aedToFils(t.amount)).slice(0, 120);
+    }
+  }
+  for (const e of data.expenses || []) {
+    if (!e || e._engineId || (e._state && e._state !== "")) continue;
+    e._syncState = "unsynced";
+    e._state = "";
+  }
+  return data;
+}
+
 async function engineCommand(command, payload, intent) {
   const first = (intent && String(intent).slice(0, 120)) || opId(command);
+  if (MONEY_MUTATION_COMMANDS.has(String(command)) && financialOfflineBlocked()) {
+    const err = new Error("OFFLINE_FINANCIAL_BLOCKED");
+    err.code = "OFFLINE_FINANCIAL_BLOCKED";
+    throw err;
+  }
   try {
     return await callFn("command", { command, payload, operationId: first });
   } catch (e) {
@@ -184,7 +215,9 @@ function formatEngineError(err) {
   if (/DEPOSIT_NOT_APPROVED/i.test(raw)) return "الإيداع غير معتمد — لا يمكن عكسه بهذا المسار";
   if (/NEGATIVE_HOLDING/i.test(raw)) return "العهدة المشتركة سالبة — أوقف الإيداع حتى التسوية";
   if (/IDEMPOTENCY_PAYLOAD_MISMATCH/i.test(raw)) return "تعارض في مفتاح العملية — أعد المحاولة";
-  if (/network|unavailable|Failed to fetch|internal/i.test(raw)) return "تعذر الاتصال بالخادم — تحقق من الشبكة";
+  if (/OFFLINE_FINANCIAL_BLOCKED/i.test(raw)) return "لا يمكن حفظ العملية المالية بدون اتصال";
+  if (/network|unavailable|Failed to fetch/i.test(raw)) return "لم يتم الحفظ على السيرفر — بانتظار الاتصال";
+  if (/internal/i.test(raw)) return "تعذر الاتصال بالخادم — تحقق من الشبكة";
   const short = raw.replace(/^FirebaseError:\s*/i, "").replace(/^functions\//i, "").slice(0, 160);
   return short || "تعذر الحفظ أونلاين";
 }
@@ -283,9 +316,21 @@ function wholeDisplayId(unit) {
   return n;
 }
 function engineStatusToOld(sp) {
+  const occ = sp && sp.occupancy;
+  // Period occupancy wins. A later vacancy must not paint an earlier rented month vacant.
+  if (occ === "rented") {
+    const st = sp.status;
+    const paid = filsToAed(sp.paidFils);
+    const rent = filsToAed(sp.dueFils);
+    if (st === "partial") return { status: "late", partial: true, paid_amount: paid };
+    if (st === "collected") return { status: "collected", partial: false, paid_amount: paid || rent };
+    if (st === "not_due") return { status: "pending", partial: false, paid_amount: paid };
+    if (st === "late" || st === "pending") return { status: st === "pending" ? "pending" : "late", partial: false, paid_amount: paid };
+    return { status: "late", partial: false, paid_amount: paid };
+  }
   const st = sp.status;
-  if (st === "staff" || sp.occupancy === "staff") return { status: "staff", partial: false, paid_amount: 0 };
-  if (st === "vacant" || sp.occupancy === "vacant") return { status: "vacant", partial: false, paid_amount: 0 };
+  if (st === "staff" || occ === "staff") return { status: "staff", partial: false, paid_amount: 0 };
+  if (st === "vacant" || occ === "vacant") return { status: "vacant", partial: false, paid_amount: 0 };
   const paid = filsToAed(sp.paidFils);
   const rent = filsToAed(sp.dueFils);
   if (st === "partial") return { status: "late", partial: true, paid_amount: paid };
@@ -659,8 +704,12 @@ function mapDashboardToMonth(dash) {
   const liveExp = (dash.expenses || []).filter((e) => e.state !== "reversed" && e.state !== "rejected");
   // Keep display-only rejected bank-receipt history (audit). Custody deposit rejects stay hidden.
   const liveDep = (dash.deposits || []).filter((d) => {
-    if (!d || d.state === "reversed") return false;
-    if (d.state === "rejected") return d.fromBankReceipt === true;
+    if (!d) return false;
+    // Rejected bank history stays visible (fromBankReceipt === true).
+    // Rejected and reversed custody deposits stay in the audit list too.
+    // Pending / approved stay. None of these states are hard-deleted.
+    if (d.state === "rejected" && d.fromBankReceipt === true) return true;
+    if (d.state === "rejected" || d.state === "reversed" || d.state === "pending" || d.state === "approved") return true;
     return true;
   });
   S._hydratedExpenseIds = new Set(liveExp.map((e) => e.id));
@@ -1118,6 +1167,8 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const phoneChanged = item.phone && item.phone !== (dashSp?.tenantPhone || "");
     if (tenantChanged || phoneChanged) {
       const payload = { rentalId };
+      // S.month is 0-based. periodOfMonth adds 1 — "2026-09" must not be sent while viewing October.
+      payload.effectivePeriod = periodOfMonth(S.year, S.month);
       if (item.tenant) payload.tenantName = String(item.tenant).slice(0, 160);
       if (item.phone) payload.tenantPhone = String(item.phone).slice(0, 40);
       try {
@@ -1132,7 +1183,7 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const engineDue = dashSp ? Number(dashSp.dueFils || 0) : -1;
     const rentFils = aedToFils(item.rent);
     if (engineDue !== rentFils) {
-      const effectivePeriod = `${S.year}-${String(S.month).padStart(2, "0")}`;
+      const effectivePeriod = periodOfMonth(S.year, S.month);
       await engineCommand("updateRentalRent", {
         rentalId,
         contractualAmountFils: rentFils,
@@ -1151,7 +1202,8 @@ async function syncOccupancyAndTenant(item, dashSp) {
           rentalId,
           startDate: item.start_date,
           dueDayOfMonth: Math.min(31, Math.max(1, wantDay)),
-        }, intentKey("sched", rentalId, item.start_date, wantDay));
+          effectivePeriod: periodOfMonth(S.year, S.month),
+        }, intentKey("sched", rentalId, item.start_date, wantDay, S.year, S.month));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/NOTHING_TO_UPDATE/.test(code)) throw e;
@@ -1175,15 +1227,26 @@ async function applyUiExpenses(data) {
     const accountingPeriod = exp.period
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
-    const r = await engineCommand("submitExpense", {
-      amountFils: fils,
-      reason: String(exp.desc || "مصروف").slice(0, 300),
-      category: String(exp.category || "عام").slice(0, 60),
-      expenseDate: date,
-      paidFromAccountId: acc,
-      period: accountingPeriod,
-      ...(exp._maintenanceLinkId ? { maintenanceLinkId: String(exp._maintenanceLinkId).slice(0, 120) } : {})
-    }, ("uiexp-" + String(exp.id || Date.now()) + "-" + fils).slice(0, 120));
+    const expOp = (exp._operationId || ("uiexp-" + String(exp.id || Date.now()) + "-" + fils)).slice(0, 120);
+    exp._operationId = expOp;
+    let r;
+    try {
+      r = await engineCommand("submitExpense", {
+        amountFils: fils,
+        reason: String(exp.desc || "مصروف").slice(0, 300),
+        category: String(exp.category || "عام").slice(0, 60),
+        expenseDate: date,
+        paidFromAccountId: acc,
+        period: accountingPeriod,
+        ...(exp._maintenanceLinkId ? { maintenanceLinkId: String(exp._maintenanceLinkId).slice(0, 120) } : {})
+      }, expOp);
+    } catch (expErr) {
+      if (isFinancialTransportError(expErr) || financialOfflineBlocked()) {
+        exp._syncState = "unsynced";
+        exp._state = "";
+      }
+      throw expErr;
+    }
     if (r && r.expenseId) {
       exp._engineId = r.expenseId;
       exp._state = r.state || "approved";
@@ -1224,19 +1287,31 @@ async function applyUiDeposits(data) {
       || sourcePeriod
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
-    const r = await engineCommand("submitDeposit", {
-      amountFils: fils,
-      depositDate: date,
-      destinationAccountId: acc,
-      note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
-      reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
-      sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
-      sourcePeriod,
-      period: accountingPeriod,
-    }, ("uiddep-" + String(tx.id || Date.now()) + "-" + fils).slice(0, 120));
+    const opKey = (tx._operationId || ("uiddep-" + String(tx.id || Date.now()) + "-" + fils)).slice(0, 120);
+    tx._operationId = opKey;
+    let r;
+    try {
+      r = await engineCommand("submitDeposit", {
+        amountFils: fils,
+        depositDate: date,
+        destinationAccountId: acc,
+        note: String(tx.notes || tx.desc || "إيداع").slice(0, 300),
+        reference: String(tx.desc || tx.id || "إيداع").slice(0, 120),
+        sourceKind: (tx.sourceKind === "external") ? "external" : "holding",
+        sourcePeriod,
+        period: accountingPeriod,
+      }, opKey);
+    } catch (depErr) {
+      if (isFinancialTransportError(depErr) || financialOfflineBlocked()) {
+        tx._syncState = "unsynced";
+        tx._state = "";
+      }
+      throw depErr;
+    }
     if (r && r.depositId) {
       tx._engineId = r.depositId;
       tx._state = r.state || "approved";
+      tx._syncState = "";
       known.add(r.depositId);
     }
   }
@@ -1272,15 +1347,25 @@ async function applyUiMaintenance(data) {
     const accountingPeriod = row.period
       || (typeof periodOfMonth === "function" ? periodOfMonth(S.year, S.month) : null)
       || String(date).slice(0, 7);
-    const r = await engineCommand("submitExpense", {
-      amountFils: fils,
-      reason: String(row.desc || row.description || "صيانة").slice(0, 300),
-      category: "صيانة",
-      expenseDate: date,
-      paidFromAccountId: acc,
-      maintenanceLinkId: linkId.slice(0, 120) || undefined,
-      period: accountingPeriod,
-    }, ("uimaint-" + String(row.id || Date.now()) + "-" + fils).slice(0, 120));
+    let r;
+    const maintOp = ("uimaint-" + String(row.id || Date.now()) + "-" + fils).slice(0, 120);
+    try {
+      r = await engineCommand("submitExpense", {
+        amountFils: fils,
+        reason: String(row.desc || row.description || "صيانة").slice(0, 300),
+        category: "صيانة",
+        expenseDate: date,
+        paidFromAccountId: acc,
+        maintenanceLinkId: linkId.slice(0, 120) || undefined,
+        period: accountingPeriod,
+      }, maintOp);
+    } catch (maintErr) {
+      if (isFinancialTransportError(maintErr) || financialOfflineBlocked()) {
+        row._syncState = "unsynced";
+        row._state = "";
+      }
+      throw maintErr;
+    }
     if (r && r.expenseId) {
       row._engineId = r.expenseId;
       row._expenseId = r.expenseId;
@@ -1289,33 +1374,11 @@ async function applyUiMaintenance(data) {
 }
 
 async function syncDeletedMoney(data) {
-  if (!S._moneyHydrated || !S._dash) return;
-  const keepExp = new Set((data.expenses || []).map((e) => e._engineId).filter(Boolean));
-  const knownExp = S._hydratedExpenseIds || new Set();
-  for (const e of S._dash.expenses || []) {
-    if (!e.id || keepExp.has(e.id) || !knownExp.has(e.id)) continue;
-    if (e.state !== "approved" && e.state !== "pending") continue;
-    try {
-      if (e.state === "pending") {
-        await engineCommand("rejectExpense", { expenseId: e.id, reason: "حذف من الشاشة" }, "reje-" + e.id);
-      } else {
-        await engineCommand("reverseExpense", { expenseId: e.id, reason: "حذف من الشاشة" }, "reve-" + e.id);
-      }
-    } catch (err) { console.error(err); }
-  }
-  const keepDep = new Set((data.transactions || []).map((t) => t._engineId).filter(Boolean));
-  const knownDep = S._hydratedDepositIds || new Set();
-  for (const d of S._dash.deposits || []) {
-    if (!d.id || keepDep.has(d.id) || !knownDep.has(d.id)) continue;
-    if (d.state !== "approved" && d.state !== "pending") continue;
-    try {
-      if (d.state === "pending") {
-        await engineCommand("rejectDeposit", { depositId: d.id, reason: "حذف من الشاشة" }, "rejd-" + d.id);
-      } else {
-        await engineCommand("reverseDeposit", { depositId: d.id, reason: "حذف من الشاشة" }, "revd-" + d.id);
-      }
-    } catch (err) { console.error(err); }
-  }
+  // A local month snapshot is not allowed to reject or reverse canonical deposits
+  // or expenses. Stale cache + reconnect used to do that, and the UI then hid
+  // the rejected row — the deposit "disappeared". Explicit cancel buttons call
+  // reject/reverse directly.
+  void data;
 }
 
 async function applyEngineDiff(data) {
@@ -1477,9 +1540,54 @@ async function applyEngineDiff(data) {
   await syncDeletedMoney(data);
 }
 
+function unsyncedRowsFrom(data) {
+  const tx = (data && data.transactions || []).filter((t) => t && t._syncState === "unsynced" && !t._engineId && !t._fromBankReceipt);
+  const exp = (data && data.expenses || []).filter((e) => e && e._syncState === "unsynced" && !e._engineId);
+  return { tx, exp };
+}
+function mergeUnsyncedFinancial(serverData, previous) {
+  if (!serverData) return serverData;
+  const prev = unsyncedRowsFrom(previous);
+  const seenTx = new Set((serverData.transactions || []).map((t) => String(t._engineId || "") + "|" + String(t.date || "") + "|" + String(t.amount || "") + "|" + String(t.desc || "")));
+  for (const t of prev.tx) {
+    const key = "|" + String(t.date || "") + "|" + String(t.amount || "") + "|" + String(t.desc || "");
+    const already = (serverData.transactions || []).some((s) =>
+      String(s.date || "") === String(t.date || "") && Number(s.amount) === Number(t.amount) && String(s.desc || "") === String(t.desc || "")
+    );
+    if (already || seenTx.has(key)) continue;
+    serverData.transactions = serverData.transactions || [];
+    serverData.transactions.push(t);
+  }
+  for (const e of prev.exp) {
+    const already = (serverData.expenses || []).some((s) =>
+      String(s.date || "") === String(e.date || "") && Number(s.amount) === Number(e.amount) && String(s.desc || "") === String(e.desc || "")
+    );
+    if (already) continue;
+    serverData.expenses = serverData.expenses || [];
+    serverData.expenses.push(e);
+  }
+  return serverData;
+}
+async function retryUnsyncedMonthFinancial(y, m) {
+  if (financialOfflineBlocked()) return;
+  let previous = null;
+  try {
+    const raw = localStorage.getItem("qama_month_" + y + "_" + m);
+    if (raw) previous = JSON.parse(raw);
+  } catch (e) { return; }
+  const pending = unsyncedRowsFrom(previous);
+  if (!pending.tx.length && !pending.exp.length) return;
+  if (pending.tx.length) await applyUiDeposits({ transactions: pending.tx });
+  if (pending.exp.length) await applyUiExpenses({ expenses: pending.exp });
+}
 async function hydrateMonthFromEngine(y, m) {
   const dash = await refreshEngine(y, m, true);
-  const data = mapDashboardToMonth(dash);
+  let previous = null;
+  try {
+    const raw = localStorage.getItem("qama_month_" + y + "_" + m);
+    if (raw) previous = JSON.parse(raw);
+  } catch (e) {}
+  const data = mergeUnsyncedFinancial(mapDashboardToMonth(dash), previous);
   S._moneyHydrated = true;
   try { localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(data)); } catch (e) {}
   return data;
@@ -1635,7 +1743,15 @@ async function setDoc(ref, data) {
         const code = String((e && (e.message || e.code)) || e);
         const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED/i.test(code);
         const moneyFail = /PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|createCash|submitBank|uncollect|AMOUNT_EXCEEDS_HOLDING/i.test(code);
-        if (keepDraft && draftJson) {
+        const transport = isFinancialTransportError(e) || /OFFLINE_FINANCIAL/i.test(code);
+        if (transport) {
+          // Keep the unsynced envelope. A server hydrate here used to drop the row
+          // the operator had just typed, so the deposit vanished on refresh.
+          try {
+            markUnconfirmedFinancial(monthData);
+            localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(monthData));
+          } catch (_tr) {}
+        } else if (keepDraft && draftJson) {
           try {
             const draft = JSON.parse(draftJson);
             if (moneyFail) stripFailedCollectPaintInData(draft);
@@ -1866,6 +1982,14 @@ async function submitRequest(type, desc, payload){
   if(!S.user)return;
   // منع الضغط المزدوج على الزر — set flag before any await
   if(S.submitting){showMsg("⏳ جاري الإرسال...");return;}
+  const financialType=/^(add_transaction|add_expense|add_unit_maintenance|add_facility_maintenance|add_daily)$/.test(String(type||""));
+  const collecting=type==="update_partition"||type==="update_full"
+    ? (payload&&payload.fields&&(payload.fields.status==="collected"||payload.fields.partial||payload.fields._collectDraft))
+    : false;
+  if((financialType||collecting) && typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+    showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+    return;
+  }
   S.submitting=true;
   try{
   if(USERS[S.user]?.role!=="owner" && isMonthLocked(S.year,S.month)){
@@ -3988,6 +4112,7 @@ function moneyText(n){return Number(n||0).toLocaleString();}
  */
 function financiallyEffectiveTxAed(t){
   if(!t) return 0;
+  if(t._syncState==="unsynced") return 0;
   const st=String(t._state||"");
   if(st==="pending"||st==="rejected"||st==="reversed") return 0;
   if(t._fromBankReceipt || t.sourceKind==="bank"){
@@ -4514,8 +4639,13 @@ async function loadMonthOnline(y,m){
   S.loading=true;
   R();
   try{
+    let previous=null;
+    try{ const raw=localStorage.getItem("qama_month_"+k); if(raw) previous=JSON.parse(raw);}catch(_p){}
+    try{ if(typeof retryUnsyncedMonthFinancial==="function") await retryUnsyncedMonthFinancial(y,m); }catch(_re){}
     const dash=await refreshEngine(y,m);
-    const data=mapDashboardToMonth(dash);
+    const data=(typeof mergeUnsyncedFinancial==="function")
+      ? mergeUnsyncedFinancial(mapDashboardToMonth(dash), previous)
+      : mapDashboardToMonth(dash);
     localStorage.setItem("qama_month_"+k,JSON.stringify(data));
     S.syncMsg="متصل";
     // Canonical request list lives in loadRequests (dedupe by requestId/depositId).
@@ -4523,7 +4653,13 @@ async function loadMonthOnline(y,m){
     if (typeof loadRequests === "function") await loadRequests();
   }catch(e){
     console.error(e);
-    S.syncMsg="تعذر الاتصال - حفظ محلي";
+    S.syncMsg="غير متصل — بانتظار الاتصال";
+    try{
+      const raw=localStorage.getItem("qama_month_"+k);
+      if(raw && typeof markUnconfirmedFinancial==="function"){
+        localStorage.setItem("qama_month_"+k, JSON.stringify(markUnconfirmedFinancial(JSON.parse(raw))));
+      }
+    }catch(_e2){}
   }
   S.loading=false;
   R();
@@ -4532,7 +4668,11 @@ async function loadMonthOnline(y,m){
 function saveMonthData(y,m,data,quiet=false){
   data=normalizeData(data);
   const k=getMonthKey(y,m);
-  try{localStorage.setItem("qama_month_"+k,JSON.stringify(data));}catch(e){}
+  try{
+    const cache=JSON.parse(JSON.stringify(data));
+    if(typeof markUnconfirmedFinancial==="function") markUnconfirmedFinancial(cache);
+    localStorage.setItem("qama_month_"+k,JSON.stringify(cache));
+  }catch(e){}
   // Return a Promise so callers can await ONE explicit submit → ONE server result.
   // Never toast success before this settles.
   return new Promise((resolve,reject)=>{
@@ -4603,9 +4743,12 @@ function saveMonthData(y,m,data,quiet=false){
       console.error(e);
       const code=String((e&&(e.message||e.code))||e);
       if(code==="SAVE_SUPERSEDED"){ try{job.reject(e);}catch(_e){} return; }
-      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED|FORBIDDEN/i.test(code);
+      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED|FORBIDDEN|OFFLINE_FINANCIAL/i.test(code);
       const moneyFail=/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|AMOUNT_EXCEEDS_HOLDING/i.test(code);
-      if(!keepDraft){
+      const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
+      if(transport){
+        try{ markUnconfirmedFinancial(snap); localStorage.setItem("qama_month_"+sk, JSON.stringify(snap)); }catch(_tr){}
+      } else if(!keepDraft){
         try { await hydrateMonthFromEngine(sy, sm); } catch (e2) {}
       } else {
         try {
@@ -4621,8 +4764,11 @@ function saveMonthData(y,m,data,quiet=false){
       S._saveOpStatus="fail";
       S._saveOpDoneId=opId;
       S._saveTDone=Date.now();
-      const ar=(typeof formatEngineError==="function"?formatEngineError(e):code);
-      S.syncMsg=ar;
+      const offline=/OFFLINE_FINANCIAL/i.test(code);
+      const ar=offline
+        ? "لا يمكن حفظ العملية المالية بدون اتصال"
+        : (transport ? "لم يتم الحفظ على السيرفر" : (typeof formatEngineError==="function"?formatEngineError(e):code));
+      S.syncMsg=offline?"غير متصل":(transport?"بانتظار الاتصال":ar);
       publishSaveState();
       if(!job.quiet){try{showMsg("⚠ "+ar);}catch(_e){}}
       if(!job.quiet)R();
@@ -4745,7 +4891,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -4955,7 +5101,7 @@ function renderApp(){
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"10px"}},[
         h("div",{style:{flex:"1"}},[
           h("div",{style:{fontSize:"15px",color:"#fff",fontWeight:"500"}},[title]),
-          h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[((item.type&&item.type!=="عام")?item.type+" · ":"")+(item.date||"")+(item.notes?" · "+item.notes:"")+(item.note?" · "+item.note:"")+(item._state==="pending"?" · قيد الاعتماد":(item._state==="rejected"?" · مرفوض":(item._state==="approved"||item._fromBankReceipt?" · معتمد":"")))+(item._receiptId?" · "+item._receiptId:(item._engineId && listName==="transactions"?" · "+item._engineId:""))])
+          h("div",{style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[((item.type&&item.type!=="عام")?item.type+" · ":"")+(item.date||"")+(item.notes?" · "+item.notes:"")+(item.note?" · "+item.note:"")+(item._syncState==="unsynced"?" · لم تتم المزامنة":"")+(item._state==="pending"?" · قيد الاعتماد":(item._state==="rejected"?" · مرفوض":(item._state==="approved"||item._fromBankReceipt?" · معتمد":"")))+(item._receiptId?" · "+item._receiptId:(item._engineId && listName==="transactions"?" · "+item._engineId:""))])
         ]),
         h("div",{style:{display:"flex",alignItems:"center",gap:"8px"}},[
           h("div",{style:{fontSize:"14px",fontWeight:"700",color,whiteSpace:"nowrap"}},[prefix+Number(item.amount||0).toLocaleString()]),
@@ -4975,7 +5121,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI MONTH-ISOLATION-EFFECTIVE-RENTAL-20261005T1015Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -5040,25 +5186,45 @@ function renderApp(){
             onClick:()=>{selectedAccount="revenue";document.getElementById("acc-revenue").style.background="#fff";document.getElementById("acc-revenue").style.color="#000";document.getElementById("acc-company").style.background="#1a1a1a";document.getElementById("acc-company").style.color="#555";}},
             ["💰 حساب الإيرادات (رصيد تراكمي) | "+S.revenueBalance.toLocaleString()+" د.إ"])]):null,
         h("div",{style:{display:"flex",gap:"8px"}},[
-          h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:()=>{
+          h("button",{class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},onClick:async()=>{
             if(!amount)return showMsg("أدخل المبلغ");
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             const item={id:Date.now(),amount:Number(amount),date,note,by:S.user,account:selectedAccount};
-            if(isProfit){data.profits.push(item);addLog&&addLog(data,"مدير حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");set({showAddProfit:false});}
+            const balBefore={company:S.companyBalance,revenue:S.revenueBalance};
+            if(isProfit){data.profits.push(item);addLog&&addLog(data,"مدير حوّل أرباح لصاحب المبنى: "+Number(amount).toLocaleString()+" د.إ");}
             else{
               data.installments.push(item);
-              // Deduct from selected account
               const amt=Number(amount);
               if(selectedAccount==="company"){
                 S.companyBalance=Math.max(0,S.companyBalance-amt);
               } else {
                 S.revenueBalance=Math.max(0,S.revenueBalance-amt);
               }
-              // Save balances to Firebase
-              try{setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
+              try{await setDoc(doc(db,"config","balances"),{companyBalance:S.companyBalance,revenueBalance:S.revenueBalance,installmentBalance:S.installmentBalance,installmentSchedule:S.installmentSchedule,updatedAt:serverTimestamp()},{merge:true});}catch(e){}
               addLog&&addLog(data,"مدير سجّل دفع قسط: "+Number(amount).toLocaleString()+" د.إ من "+(selectedAccount==="company"?"حساب الشركة":"حساب الإيرادات"));
-              set({showAddInstallment:false});
             }
-            saveCurData(data);showMsg("✓ تم الحفظ");
+            try{
+              await saveCurData(data);
+              set(isProfit?{showAddProfit:false}:{showAddInstallment:false});
+              showMsg("✓ تم الحفظ");
+            }catch(e){
+              if(isProfit){data.profits=data.profits.filter(x=>x!==item);}
+              else{
+                data.installments=data.installments.filter(x=>x!==item);
+                S.companyBalance=balBefore.company;
+                S.revenueBalance=balBefore.revenue;
+              }
+              try{localStorage.setItem("qama_month_"+getMonthKey(S.year,S.month),JSON.stringify(normalizeData(data)));}catch(_ls){}
+              const offline=typeof financialOfflineBlocked==="function" && financialOfflineBlocked();
+              const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
+              showMsg(offline||/OFFLINE_FINANCIAL/i.test(String((e&&e.message)||e))
+                ? "لا يمكن حفظ العملية المالية بدون اتصال"
+                : (transport ? "لم يتم الحفظ على السيرفر" : (typeof formatEngineError==="function"?formatEngineError(e):"لم يتم الحفظ على السيرفر")));
+              set(isProfit?{showAddProfit:true}:{showAddInstallment:true});
+            }
           }},["حفظ"]),
           h("button",{class:"btn",style:{flex:"1",background:"#1a1a1a",border:"1px solid #2a2a2a",color:"#777",borderRadius:"8px",padding:"9px",fontSize:"15px"},onClick:()=>isProfit?set({showAddProfit:false}):set({showAddInstallment:false})},["إلغاء"])
         ])
@@ -5371,6 +5537,10 @@ function renderApp(){
           }
           const wantsPay=p.status==="collected"||p.partial||p._collectDraft;
           if(wantsPay){
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             if(!p.collectionMethod){setFieldError("partition-collection-method","اختر طريقة التحصيل قبل الحفظ");set({editPart:unit.id+"-"+p.id});return;}
             if(p.collectionMethod==="cash"&&!p.collectedBy)p.collectedBy=S.user;
           }
@@ -5813,6 +5983,10 @@ function renderApp(){
           }
           const wantsPay=u.status==="collected"||u.partial||u._collectDraft;
           if(wantsPay){
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             if(!u.collectionMethod){setFieldError("full-collection-method","اختر طريقة التحصيل قبل الحفظ");set({editPart:"full-"+u.id});return;}
             if(u.collectionMethod==="cash"&&!u.collectedBy)u.collectedBy=S.user;
           }
@@ -6600,6 +6774,10 @@ function renderApp(){
           const saveB=h("button",{"data-testid":"btn-save-deposit",class:"btn",style:{flex:"1",background:"#4ade80",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"14px",fontWeight:"700"},
             onClick:async()=>{
               if(S._savingDeposit){showMsg("جاري الحفظ...");return;}
+              if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+                showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+                return;
+              }
               if(!String(tx2.desc||"").trim())return showMsg("⚠ أدخل وصف الإيداع");
               const amt=Number(tx2.amount);
               if(!Number.isFinite(amt)||amt<=0)return showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");
@@ -6619,10 +6797,17 @@ function renderApp(){
                 set({showAddTx:false});
                 showMsg("تم الحفظ");
               }catch(e){
-                const ix=mData.transactions.indexOf(t);
-                if(ix>=0) mData.transactions.splice(ix,1);
                 const code=String((e&&(e.message||e.code))||e);
-                if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
+                if(transport){
+                  t._syncState="unsynced";
+                  t._state="";
+                  showMsg("لم يتم الحفظ على السيرفر");
+                }else{
+                  const ix=mData.transactions.indexOf(t);
+                  if(ix>=0) mData.transactions.splice(ix,1);
+                  if(code!=="SAVE_SUPERSEDED") showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                }
                 R();
               }finally{
                 S._savingDeposit=false;
@@ -6639,7 +6824,7 @@ function renderApp(){
             h("div",{style:{flex:"1",minWidth:"0"}},[h("div",{style:{fontSize:"15px",color:"#fff"}},[
               ((t.sourceKind==="bank"||t.sourceLabel==="تحويل بنكي"||t._fromBankReceipt)?"تحويل بنكي — ":
               (t.sourceKind==="external"||t.sourceLabel==="إيداع آخر")?"إيداع آخر — ":"من العهدة — ")+(t.desc||"")
-            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._state==="approved"||t._state==="recognized"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:""))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
+            ]),h("div",{"data-testid":(t._fromBankReceipt?"bank-history-row":"deposit-history-row"),style:{fontSize:"15px",color:"#555",marginTop:"2px"}},[(t.date||"")+(t.notes?" · "+t.notes:"")+(t._syncState==="unsynced"?" · لم تتم المزامنة":"")+(t._state==="approved"||t._state==="recognized"||t._fromBankReceipt?" · معتمد":(t._state?" · "+t._state:""))+(t._receiptId?" · إيصال "+t._receiptId:(t._engineId?" · "+t._engineId:""))])]),
             h("div",{style:{display:"flex",alignItems:"center",gap:"8px",flexShrink:"0"}},[
               h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#4ade80"}},[Number(t.amount||0).toLocaleString()+" د.إ"]),
               (t._engineId||t.id)&&t._state!=="rejected"?h("button",{class:"btn",style:{background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"7px",padding:"5px 8px",fontSize:"12px",fontWeight:"700"},
@@ -6875,6 +7060,10 @@ function renderApp(){
         const saveBtn=h("button",{"data-testid":"btn-save-deposit",class:"btn",style:{flex:"1",background:"#fff",color:"#000",borderRadius:"8px",padding:"9px",fontSize:"15px",fontWeight:"700"},
           onClick:async()=>{
             if(S._savingDeposit){showMsg("جاري الحفظ...");return;}
+            if(typeof financialOfflineBlocked==="function" && financialOfflineBlocked()){
+              showMsg("لا يمكن حفظ العملية المالية بدون اتصال");
+              return;
+            }
             if(!String(tx.desc||"").trim())return showMsg("⚠ أدخل وصف الإيداع");
             const amt=Number(tx.amount);
             if(!Number.isFinite(amt)||amt<=0)return showMsg("⚠ المبلغ يجب أن يكون أكبر من صفر");
@@ -6895,11 +7084,18 @@ function renderApp(){
                 set({showAddTx:false});
                 showMsg("تم الحفظ");
               }catch(e){
-                const ix=data.transactions.indexOf(transaction);
-                if(ix>=0) data.transactions.splice(ix,1);
                 const code=String((e&&(e.message||e.code))||e);
+                const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
                 if(code==="SAVE_SUPERSEDED")return;
-                showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                if(transport){
+                  transaction._syncState="unsynced";
+                  transaction._state="";
+                  showMsg("لم يتم الحفظ على السيرفر");
+                }else{
+                  const ix=data.transactions.indexOf(transaction);
+                  if(ix>=0) data.transactions.splice(ix,1);
+                  showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):code));
+                }
                 R();
               }finally{
                 S._savingDeposit=false;
@@ -6922,7 +7118,7 @@ function renderApp(){
       prefix:"+ ",
       // Keep approved bank/deposit rows permanently visible (never drop after refresh).
       afterTitle:(x)=>h("div",{"data-testid":x._fromBankReceipt?"bank-history-row":"deposit-history-row",style:{fontSize:"11px",color:"#666",marginTop:"2px"}},[
-        (x._state==="pending"?"قيد الاعتماد":x._state==="rejected"?"مرفوض":(x._state==="approved"||(x._fromBankReceipt&&x._state!=="rejected")?"معتمد":(x._state||"")))
+        (x._syncState==="unsynced"?"لم تتم المزامنة":(x._state==="pending"?"قيد الاعتماد":x._state==="rejected"?"مرفوض":(x._state==="approved"||(x._fromBankReceipt&&x._state!=="rejected")?"معتمد":(x._state||""))))
         +(x._state==="rejected"&&x._rejectedAt?" · رفض "+String(x._rejectedAt).slice(0,16).replace("T"," "):(x._approvedAt?" · اعتماد "+String(x._approvedAt).slice(0,16).replace("T"," "):""))
         +(x._receiptId?" · "+x._receiptId:(x._engineId?" · "+x._engineId:""))
       ]),

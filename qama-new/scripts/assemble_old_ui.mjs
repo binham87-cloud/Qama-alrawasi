@@ -67,8 +67,13 @@ const loadMonthOnline = `async function loadMonthOnline(y,m){
   S.loading=true;
   R();
   try{
+    let previous=null;
+    try{ const raw=localStorage.getItem("qama_month_"+k); if(raw) previous=JSON.parse(raw);}catch(_p){}
+    try{ if(typeof retryUnsyncedMonthFinancial==="function") await retryUnsyncedMonthFinancial(y,m); }catch(_re){}
     const dash=await refreshEngine(y,m);
-    const data=mapDashboardToMonth(dash);
+    const data=(typeof mergeUnsyncedFinancial==="function")
+      ? mergeUnsyncedFinancial(mapDashboardToMonth(dash), previous)
+      : mapDashboardToMonth(dash);
     localStorage.setItem("qama_month_"+k,JSON.stringify(data));
     S.syncMsg="متصل";
     // Canonical request list lives in loadRequests (dedupe by requestId/depositId).
@@ -76,7 +81,13 @@ const loadMonthOnline = `async function loadMonthOnline(y,m){
     if (typeof loadRequests === "function") await loadRequests();
   }catch(e){
     console.error(e);
-    S.syncMsg="تعذر الاتصال - حفظ محلي";
+    S.syncMsg="غير متصل — بانتظار الاتصال";
+    try{
+      const raw=localStorage.getItem("qama_month_"+k);
+      if(raw && typeof markUnconfirmedFinancial==="function"){
+        localStorage.setItem("qama_month_"+k, JSON.stringify(markUnconfirmedFinancial(JSON.parse(raw))));
+      }
+    }catch(_e2){}
   }
   S.loading=false;
   R();
@@ -85,7 +96,11 @@ const loadMonthOnline = `async function loadMonthOnline(y,m){
 function saveMonthData(y,m,data,quiet=false){
   data=normalizeData(data);
   const k=getMonthKey(y,m);
-  try{localStorage.setItem("qama_month_"+k,JSON.stringify(data));}catch(e){}
+  try{
+    const cache=JSON.parse(JSON.stringify(data));
+    if(typeof markUnconfirmedFinancial==="function") markUnconfirmedFinancial(cache);
+    localStorage.setItem("qama_month_"+k,JSON.stringify(cache));
+  }catch(e){}
   // Return a Promise so callers can await ONE explicit submit → ONE server result.
   // Never toast success before this settles.
   return new Promise((resolve,reject)=>{
@@ -156,9 +171,12 @@ function saveMonthData(y,m,data,quiet=false){
       console.error(e);
       const code=String((e&&(e.message||e.code))||e);
       if(code==="SAVE_SUPERSEDED"){ try{job.reject(e);}catch(_e){} return; }
-      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED|FORBIDDEN/i.test(code);
+      const keepDraft=/TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED|FORBIDDEN|OFFLINE_FINANCIAL/i.test(code);
       const moneyFail=/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|AMOUNT_EXCEEDS_HOLDING/i.test(code);
-      if(!keepDraft){
+      const transport=typeof isFinancialTransportError==="function" && isFinancialTransportError(e);
+      if(transport){
+        try{ markUnconfirmedFinancial(snap); localStorage.setItem("qama_month_"+sk, JSON.stringify(snap)); }catch(_tr){}
+      } else if(!keepDraft){
         try { await hydrateMonthFromEngine(sy, sm); } catch (e2) {}
       } else {
         try {
@@ -174,8 +192,11 @@ function saveMonthData(y,m,data,quiet=false){
       S._saveOpStatus="fail";
       S._saveOpDoneId=opId;
       S._saveTDone=Date.now();
-      const ar=(typeof formatEngineError==="function"?formatEngineError(e):code);
-      S.syncMsg=ar;
+      const offline=/OFFLINE_FINANCIAL/i.test(code);
+      const ar=offline
+        ? "لا يمكن حفظ العملية المالية بدون اتصال"
+        : (transport ? "لم يتم الحفظ على السيرفر" : (typeof formatEngineError==="function"?formatEngineError(e):code));
+      S.syncMsg=offline?"غير متصل":(transport?"بانتظار الاتصال":ar);
       publishSaveState();
       if(!job.quiet){try{showMsg("⚠ "+ar);}catch(_e){}}
       if(!job.quiet)R();
