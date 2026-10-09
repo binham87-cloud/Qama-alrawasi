@@ -1533,16 +1533,65 @@ async function hydrateMonthFromEngine(y, m) {
     if (raw) previous = JSON.parse(raw);
   } catch (e) {}
   const data = mergeUnsyncedFinancial(mapDashboardToMonth(dash), previous);
+  stampExtrasBase(data);
   S._moneyHydrated = true;
   try { localStorage.setItem("qama_month_" + y + "_" + m, JSON.stringify(data)); } catch (e) {}
   return data;
 }
 
+function stampExtrasBase(data) {
+  if (!data) return;
+  try { data._extrasBase = JSON.parse(JSON.stringify(extrasFromData(data))); }
+  catch { data._extrasBase = {}; }
+}
+
+function extrasPatchFromData(data) {
+  const full = extrasFromData(data);
+  const base = (data && data._extrasBase) || {};
+  const removed = (data && data._extrasRemoved) || {};
+  const scopes = [];
+  const upserts = {};
+  const arrayKeys = ["dailyBookings", "unitMaintenance", "facilityMaintenance", "logs", "profits", "installments"];
+  for (const key of arrayKeys) {
+    const baseRows = Array.isArray(base[key]) ? base[key] : [];
+    const baseMap = new Map(baseRows.filter((r) => r && r.id != null).map((r) => [String(r.id), JSON.stringify(r)]));
+    const changed = [];
+    for (const row of (Array.isArray(full[key]) ? full[key] : [])) {
+      if (!row || row.id == null) continue;
+      const prev = baseMap.get(String(row.id));
+      if (prev === undefined || prev !== JSON.stringify(row)) changed.push(row);
+    }
+    const drop = Array.isArray(removed[key]) ? removed[key].filter((id) => id != null) : [];
+    if (changed.length || drop.length) {
+      scopes.push(key);
+      if (changed.length) upserts[key] = changed;
+    }
+  }
+  const spacePatches = {};
+  const touchedSpaceIds = [];
+  const baseSpaces = base.spaces && typeof base.spaces === "object" ? base.spaces : {};
+  for (const [id, fields] of Object.entries(full.spaces || {})) {
+    if (JSON.stringify(baseSpaces[id] || null) !== JSON.stringify(fields)) {
+      touchedSpaceIds.push(id);
+      spacePatches[id] = fields;
+    }
+  }
+  if (touchedSpaceIds.length) scopes.push("spaces");
+  return { scopes, body: { upserts, removedIds: removed, touchedSpaceIds, spacePatches } };
+}
+
 async function persistExtras(y, m, data) {
   const period = periodOfMonth(y, m);
+  const patch = extrasPatchFromData(data);
+  if (!patch.scopes.length) return;
   await engineCommand("savePeriodExtras", {
-    period, extrasJson: JSON.stringify(extrasFromData(data))
+    period,
+    writeMode: "patch",
+    scopes: patch.scopes.join(","),
+    extrasJson: JSON.stringify(patch.body),
   }, "extras-" + period + "-" + Date.now());
+  stampExtrasBase(data);
+  if (data) data._extrasRemoved = {};
 }
 
 async function upsertConfig(configId, obj) {

@@ -590,7 +590,12 @@ export const SCHEMAS = Object.freeze({
   resolveWorkRequest: { requestId: S.id(), decision: S.enum(["pending", "processing", "approved", "rejected", "failed"]) },
   commitWorkRequest: { requestId: S.id() },
   uncollectObligation: { obligationId: S.id(), reason: S.str(300) },
-  savePeriodExtras: { period: S.period(), extrasJson: S.str(400000) },
+  savePeriodExtras: {
+    period: S.period(),
+    extrasJson: S.str(400000),
+    writeMode: S.opt(S.enum(["replace", "patch"])),
+    scopes: S.opt(S.str(240)),
+  },
 });
 
 const ID_RE = /^[A-Za-z0-9_:.-]{1,140}$/;
@@ -2214,11 +2219,14 @@ const HANDLERS = {
     parseJsonField(ctx.payload.extrasJson, "extrasJson");
     const id = `period:${ctx.payload.period}`;
     const existing = await ctx.tx.get("uiPeriods", id);
-    // Employees save drafts, bookings, and maintenance through this blob.
-    // Owner profit transfers and installment mirrors must survive that write.
-    const extrasJson = ctx.actor.role === "owner"
-      ? ctx.payload.extrasJson
-      : preserveOwnerExtras(existing, ctx.payload.extrasJson);
+    // Default stays full replace so existing callers keep today's behavior.
+    // Patch updates only the named scopes and never drops rows the client omitted.
+    const mode = ctx.payload.writeMode || "replace";
+    const extrasJson = mode === "patch"
+      ? patchPeriodExtras(existing, ctx.payload.extrasJson, ctx.payload.scopes, ctx.actor.role === "owner")
+      : (ctx.actor.role === "owner"
+        ? ctx.payload.extrasJson
+        : preserveOwnerExtras(existing, ctx.payload.extrasJson));
     const rec = {
       id, period: ctx.payload.period, extrasJson,
       updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
@@ -2281,6 +2289,67 @@ function preserveOwnerExtras(existing, incomingJson) {
   return JSON.stringify(next);
 }
 
+const EXTRAS_PATCH_SCOPES = new Set([
+  "spaces", "dailyBookings", "unitMaintenance", "facilityMaintenance",
+  "profits", "installments", "logs",
+]);
+
+function plainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value;
+}
+
+function mergeRowsById(serverRows, upserts, removeIds) {
+  const list = Array.isArray(serverRows) ? serverRows.map((row) => ({ ...row })) : [];
+  const index = new Map();
+  list.forEach((row, i) => {
+    if (row && row.id != null) index.set(String(row.id), i);
+  });
+  for (const row of Array.isArray(upserts) ? upserts : []) {
+    if (!row || typeof row !== "object" || Array.isArray(row) || row.id == null) continue;
+    const key = String(row.id);
+    if (index.has(key)) list[index.get(key)] = { ...list[index.get(key)], ...row };
+    else {
+      index.set(key, list.length);
+      list.push({ ...row });
+    }
+  }
+  const drop = new Set((Array.isArray(removeIds) ? removeIds : []).map(String));
+  if (!drop.size) return list;
+  return list.filter((row) => !row || row.id == null || !drop.has(String(row.id)));
+}
+
+function patchPeriodExtras(existing, incomingJson, scopes, isOwner) {
+  let prev = {};
+  let patch = {};
+  try { prev = existing && existing.extrasJson ? JSON.parse(existing.extrasJson) : {}; } catch { prev = {}; }
+  try { patch = JSON.parse(incomingJson); } catch { patch = {}; }
+  prev = plainObject(prev);
+  patch = plainObject(patch);
+  const next = { ...prev };
+  const wanted = String(scopes || "").split(",").map((s) => s.trim()).filter((s) => EXTRAS_PATCH_SCOPES.has(s));
+  const upserts = plainObject(patch.upserts);
+  const removed = plainObject(patch.removedIds);
+  for (const scope of wanted) {
+    if ((scope === "profits" || scope === "installments") && !isOwner) continue;
+    if (scope === "spaces") {
+      const spaces = { ...plainObject(prev.spaces) };
+      const patches = plainObject(patch.spacePatches);
+      const allowed = new Set(Array.isArray(patch.touchedSpaceIds) ? patch.touchedSpaceIds.map(String) : []);
+      for (const [id, fields] of Object.entries(patches)) {
+        if (!allowed.has(String(id))) continue;
+        if (!fields || typeof fields !== "object" || Array.isArray(fields)) continue;
+        spaces[id] = { ...plainObject(spaces[id]), ...fields };
+      }
+      for (const id of (Array.isArray(removed.spaces) ? removed.spaces.map(String) : [])) delete spaces[id];
+      next.spaces = spaces;
+      continue;
+    }
+    next[scope] = mergeRowsById(prev[scope], upserts[scope], removed[scope]);
+  }
+  return JSON.stringify(next);
+}
+
 export { HANDLERS };
 
 async function collectorFor(ctx) {
@@ -2301,11 +2370,14 @@ async function depositEmployeeFor(ctx) {
   return ctx.actor.userId;
 }
 
-function actorKey(actor) {
+export function actorKey(actor) {
   const id = String(actor.userId || "");
   if (id.includes("nader")) return "nader";
   if (id.includes("yahia")) return "yahia";
-  return "saeed";
+  if (id.includes("saeed")) return "saeed";
+  const tail = id.split(":").filter(Boolean).pop() || "user";
+  const safe = tail.replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 40);
+  return safe || "user";
 }
 
 /** Next calendar quarter-end date after an ISO date (open-ended installment cadence). */

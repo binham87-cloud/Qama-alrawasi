@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="REQ-ORDER-AUDIT-20261009T2245Z"/>
-<title>قمة الرواسي · REQ-ORDER-AUDIT-20261009T2245Z</title>
+<meta name="qama-ui-build" content="HOLDING-EXTRAS-20261009T2304Z"/>
+<title>قمة الرواسي · HOLDING-EXTRAS-20261009T2304Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -90,7 +90,7 @@ function periodMonthLabel(period){
 /** Canonical Holding fields from dashboard summary (fils→AED helpers). */
 function holdingSummaryFromEng(eng){
   if(!eng) return {
-    periodHolding:0, allPeriods:0, cash:0, deposited:0, byPeriod:[],
+    periodHolding:0, allPeriods:0, cash:0, deposited:0, byPeriod:[], unallocated:0,
   };
   const periodHolding=(Number(eng.periodHoldingFils??eng.sharedEmployeeHoldingFils??eng.holdingFils)||0)/100;
   const allPeriods=(Number(eng.sharedHoldingAllPeriodsFils??eng.globalHoldingFils)||0)/100;
@@ -102,7 +102,8 @@ function holdingSummaryFromEng(eng){
     deposited:(Number(r.approvedHoldingDepositsFils)||0)/100,
     holding:(Number(r.holdingFils)||0)/100,
   })):[];
-  return { periodHolding, allPeriods, cash, deposited, byPeriod };
+  const unallocated=(Number(eng.unallocatedHoldingFils)||0)/100;
+  return { periodHolding, allPeriods, cash, deposited, byPeriod, unallocated };
 }
 /** Shared Holding card: عهدة هذا الشهر + إجمالي + حسب الشهر. */
 function renderHoldingBreakdownCard(eng, opts){
@@ -144,8 +145,11 @@ function renderHoldingBreakdownCard(eng, opts){
         h("div",{style:{color:"#fbbf24",fontWeight:"700"}},[r.holding.toLocaleString()]),
       ]))
     ]):h("div",{style:{fontSize:"11px",color:"#555"}},["لا نشاط عهدة مسجّل بعد"]),
+    hs.unallocated?h("div",{"data-testid":"holding-unallocated",style:{fontSize:"12px",color:"#fbbf24",marginTop:"8px"}},[
+      "نقد بعد نهاية العقد (ضمن الإجمالي فقط): "+hs.unallocated.toLocaleString()+" د.إ"
+    ]):null,
     h("div",{style:{fontSize:"10px",color:"#555",marginTop:"8px"}},[
-      "إجمالي العهدة = مجموع عهدة كل الأشهر · التحويل البنكي والإيداع الخارجي لا يدخلان العهدة"
+      "إجمالي العهدة هو النقد الفعلي. عهدة الأشهر لا تشمل نقداً محصّلاً بعد نهاية العقد. التحويل البنكي والإيداع الخارجي لا يدخلان العهدة"
     ]),
   ]);
 }
@@ -2960,7 +2964,11 @@ function changeMonth(m,y){
   loadMonthOnline(y,m);
 }
 
-function getCurData(){return normalizeData(getMonthData(S.year,S.month));}
+function getCurData(){
+  const data=normalizeData(getMonthData(S.year,S.month));
+  if(!data._extrasBase && typeof stampExtrasBase==="function") stampExtrasBase(data);
+  return data;
+}
 function saveCurData(data,quiet=false){return saveMonthData(S.year,S.month,data,quiet);}
 
 function set(o){Object.assign(S,o);R();}
@@ -3051,7 +3059,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI REQ-ORDER-AUDIT-20261009T2245Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI HOLDING-EXTRAS-20261009T2304Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3237,6 +3245,10 @@ function renderApp(){
       if(!canEdit()){showMsg("🔒 شهر مقفل");return;}
       if(!confirm("هل أنت متأكد من حذف هذه العملية؟"))return;
       const removed=list.splice(idx,1)[0];
+      if(removed&&removed.id!=null&&(listName==="profits"||listName==="installments")){
+        data._extrasRemoved=data._extrasRemoved||{};
+        data._extrasRemoved[listName]=[...(data._extrasRemoved[listName]||[]),removed.id];
+      }
       addLog(data,(USERS[S.user]?.name||S.user)+" حذف "+(opts.logName||title)+" - "+Number(removed.amount||0).toLocaleString()+" د.إ");
       saveCurData(data);set({editPart:null});showMsg("✓ تم الحذف");
     };
@@ -3281,7 +3293,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI REQ-ORDER-AUDIT-20261009T2245Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI HOLDING-EXTRAS-20261009T2304Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -5854,6 +5866,8 @@ function renderApp(){
                 isOwner?h("button",{"data-testid":"daily-delete",class:"btn",style:{fontSize:"13px",color:"#f87171",background:"#450a0a",border:"1px solid #7f1d1d",borderRadius:"6px",padding:"5px 10px"},
                   onClick:async()=>{
                     if(!confirm("حذف هذا الحجز اليومي؟"))return;
+                    data._extrasRemoved=data._extrasRemoved||{};
+                    data._extrasRemoved.dailyBookings=[...(data._extrasRemoved.dailyBookings||[]),b.id];
                     data.dailyBookings=data.dailyBookings.filter(x=>x.id!==b.id);
                     try{await saveCurData(data,false);showMsg("تم الحفظ");}catch(e){showMsg("⚠ "+(e&&e.message||e));}
                     set({editingDaily:null});
