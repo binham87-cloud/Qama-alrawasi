@@ -53,8 +53,15 @@ function attachHoldingProjection(summary, {
 }
 import { nextCycleStart, renewButtonVisible } from "../domain/rental_cycle.mjs";
 
-/** Fold valid daily booking Target into period summary (payment status is separate). */
-function applyDailyBookingTarget(summary, dailyBookings) {
+/**
+ * Fold valid daily booking Target into period summary (payment status is separate).
+ *
+ * periodSummary.targetFils is an intermediate: obligation due + recognized daily receipts.
+ * Dashboard Target replaces that receipt sum with dailyBookingsTargetFils.
+ * A recognized daily receipt whose booking row is absent increases Collected and
+ * Holding only. It must not be added again on top of the booking list.
+ */
+export function applyDailyBookingTarget(summary, dailyBookings) {
   const dailyTargetFils = dailyBookingsTargetFils(dailyBookings);
   const dailyPaidFils = Number(summary.dailyPaidFils || 0);
   const obligationTargetFils = Number(summary.targetFils || 0) - dailyPaidFils;

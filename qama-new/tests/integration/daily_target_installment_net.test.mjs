@@ -76,6 +76,34 @@ test("daily Target: unpaid + paid cash + approved bank all increase Target once"
   assert.equal(afterCancel.summary.dailyTargetFils, 135000);
 });
 
+test("orphan recognized daily receipt increases Collected only, not Target", async () => {
+  const { db, owner, building, yahia } = await setup();
+  const period = building.period;
+  await saveDailyExtras(db, owner, period, [
+    { id: "kept", total: 50, paymentStatus: "collected", startDate: "2026-09-01", endDate: "2026-09-02" },
+  ]);
+  await run(db, actorFrom(yahia), "createDailyCashReceipt", {
+    bookingId: "kept", amountFils: 5000, collectionDate: "2026-09-01", period,
+  }, opId("kept-cash"));
+  await run(db, actorFrom(yahia), "createDailyCashReceipt", {
+    bookingId: "1790349871123", amountFils: 15000, collectionDate: "2026-09-25", period,
+  }, opId("orphan-150"));
+
+  const dash = buildDashboardFromDump(db, period, "2026-09-30");
+  const orphan = db.dump("receipts").find((r) => r.obligationId === "daily:1790349871123");
+  assert.equal(orphan.amountFils, 15000);
+  assert.equal(orphan.sourceType, "daily_booking");
+  assert.equal(orphan.state, "recognized");
+  assert.equal(dash.summary.dailyTargetFils, 5000);
+  assert.equal(dash.summary.dailyPaidFils, 20000);
+  assert.equal(dash.summary.dailyPaidFils - dash.summary.dailyTargetFils, 15000);
+  assert.equal(dash.summary.targetFils, dash.summary.obligationTargetFils + 5000);
+  assert.equal(
+    dash.summary.remainingFils,
+    dash.summary.targetFils - dash.summary.collectedFils,
+  );
+});
+
 test("daily Target: Sep↔Oct↔Sep no duplicate; crossing-month booking counts once in Sep extras", async () => {
   const { db, owner, building } = await setup();
   const bookings = [

@@ -24,6 +24,61 @@ async function seedSepWithNov(db, owner) {
   return { building, yahia, novOb };
 }
 
+test("paid cash after tenancy-end month is global custody only", () => {
+  const db = freshDb();
+  const rentalId = "rental:rentnew-9b7bd25dd27c4400a13a1edcf6280739";
+  const obId = `${rentalId}_2026-10-25`;
+  const spaceId = "mig:space:space:legacy:bf5421c78d93b0a512bd50a1";
+  const unitId = "mig:unit:unit:legacy:2d158626c4f7a1704daa3e07";
+  db.seed("rentals", rentalId, {
+    id: rentalId,
+    state: "closed",
+    startDate: "2026-09-25",
+    endDate: "2026-09-25",
+    spaceId,
+    tenantName: "هندي",
+    contractualAmountFils: 100000,
+    baselineExcluded: false,
+  });
+  db.seed("spaces", spaceId, { id: spaceId, name: "ميزان 3 / 2", unitId, active: true });
+  db.seed("units", unitId, { id: unitId, name: "ميزان 3", active: true });
+  db.seed("obligations", obId, {
+    id: obId,
+    rentalId,
+    spaceId,
+    unitId,
+    period: "2026-10",
+    state: "active",
+    amountFils: 100000,
+    dueDate: "2026-10-25",
+    retainArrearsAfterVacate: true,
+    rentMonthSuppressed: false,
+    baselineExcluded: false,
+  });
+  const receiptId = "rcpt:pay-rental:rentnew-9b7bd25dd_cf6280739_2026-10-25-w100000-d100000-L0-A0";
+  db.seed("receipts", receiptId, {
+    id: receiptId,
+    obligationId: obId,
+    rentalId,
+    period: "2026-10",
+    amountFils: 100000,
+    method: "cash",
+    state: "recognized",
+    collectionDate: "2026-10-01",
+    collectorUserId: "mig:user:yahia",
+  });
+
+  const dash = buildDashboardFromDump(db, "2026-10", "2026-10-09");
+  assert.equal(dash.obligations.length, 0);
+  assert.equal(dash.summary.targetFils, 0);
+  assert.equal(dash.summary.collectedFils, 0);
+  assert.equal(dash.summary.remainingFils, 0);
+  assert.equal(dash.summary.holdingFils, 0);
+  assert.equal(dash.summary.globalHoldingFils, 100000);
+  assert.equal(dash.summary.unallocatedHoldingFils, 100000);
+  assert.equal(dash.summary.depositedFils, 0);
+});
+
 test("1 unpaid future vacate: Target/Collected/Holding stay 0; global Holding unchanged", async () => {
   const db = freshDb();
   const owner = await bootstrapOwner(db);

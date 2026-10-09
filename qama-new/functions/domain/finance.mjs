@@ -799,8 +799,9 @@ export function periodSummary({ obligations, receipts, deposits, expenses, asOfD
     .filter((r) => isRecognizedReceipt(r) && r.sourceType === "daily_booking" && r.method === "cash")
     .reduce((s, r) => s + toSafeFils(r.amountFils), 0);
 
-  // Include paid daily in target so TARGET = COLLECTED + UNPAID still holds until
-  // buildDashboard adds the unpaid daily remainder.
+  // Intermediate only. Dashboard Target is obligationTarget + valid booking list
+  // (applyDailyBookingTarget), not this receipt sum. An orphan daily receipt stays
+  // in dailyPaidFils / Collected and is removed from Target when bookings are applied.
   const targetFils = obligationTargetFils + dailyPaidFils;
   const tenantPaidFils = obligationPaidFils + dailyPaidFils;
   const tenantUnpaidFils = obligationTargetFils - obligationPaidFils;
