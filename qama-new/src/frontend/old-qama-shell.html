@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="RECON-CLOSE-POSTVACATE-20261009T0207Z"/>
-<title>قمة الرواسي · RECON-CLOSE-POSTVACATE-20261009T0207Z</title>
+<meta name="qama-ui-build" content="REQ-ORDER-AUDIT-20261009T2245Z"/>
+<title>قمة الرواسي · REQ-ORDER-AUDIT-20261009T2245Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -403,7 +403,7 @@ async function loadRequests(){
         month: S.month,
         year: S.year,
         status: "pending",
-        createdAt: "",
+        createdAt: (typeof canonicalRequestCreatedAt==="function"?canonicalRequestCreatedAt(p):(p.createdAt||"")),
         payload: {
           depositId: p.approvePayload?.depositId,
           expenseId: p.approvePayload?.expenseId,
@@ -454,7 +454,9 @@ async function loadRequests(){
         month: S.month,
         year: S.year,
         status: d.state === "rejected" ? "rejected" : "approved",
-        createdAt: d.depositDate || d.approvedAt || d.rejectedAt || "",
+        createdAt: (typeof canonicalRequestCreatedAt==="function"
+          ? canonicalRequestCreatedAt({createdAt:d.createdAt||"",submittedAt:d.depositDate||""})
+          : (d.createdAt||d.depositDate||"")),
         approvedAt: d.state === "approved" ? (d.approvedAt || null) : null,
         rejectedAt: d.state === "rejected" ? (d.rejectedAt || null) : null,
         resolvedAt: d.approvedAt || d.rejectedAt || null,
@@ -479,8 +481,12 @@ async function loadRequests(){
         _receiptId: d.receiptId || d.id,
         _approvedAt: d.approvedAt || null,
       }));
-    // bank_history first so Manager "السابقة" / employee "طلباتي" never lose rejected bank cards.
-    S.pendingRequests = [...terminalBank, ...byReqId.values(), ...enginePending];
+    // Merge every card, then apply the canonical creation order (newest first).
+    // Prepending bank history or appending engine cards used to ignore createdAt.
+    const mergedRequests = [...byReqId.values(), ...enginePending, ...terminalBank];
+    S.pendingRequests = (typeof sortRequestsNewestFirst==="function")
+      ? sortRequestsNewestFirst(mergedRequests)
+      : mergedRequests;
     S.notifCount = S.pendingRequests.filter((r) => r.status === "pending").length;
     R();
   }catch(e){console.error(e);}
@@ -3045,7 +3051,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI RECON-CLOSE-POSTVACATE-20261009T0207Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI REQ-ORDER-AUDIT-20261009T2245Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3275,7 +3281,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI RECON-CLOSE-POSTVACATE-20261009T0207Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI REQ-ORDER-AUDIT-20261009T2245Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -5362,8 +5368,9 @@ function renderApp(){
 
   // ======= REQUESTS (owner) =======
   if(S.tab==="requests"){
-    const pending=S.pendingRequests.filter(r=>r.status==="pending");
-    const done=S.pendingRequests.filter(r=>r.status!=="pending");
+    const orderReqRows=(rows)=>(typeof sortRequestsNewestFirst==="function")?sortRequestsNewestFirst(rows):(rows||[]);
+    const pending=orderReqRows(S.pendingRequests.filter(r=>r.status==="pending"));
+    const done=orderReqRows(S.pendingRequests.filter(r=>r.status!=="pending"));
     const typeLabel={
       update_partition:"تعديل بارتشن",update_full:"تعديل شقة كاملة",
       add_transaction:"إيداع جديد",add_expense:"مصروف جديد",
@@ -5599,18 +5606,20 @@ function renderApp(){
         h("div",{},pending.map(r=>reqCard(r,true))),
       done.length>0&&h("div",{},[
         h("div",{style:{fontSize:"12px",color:"#555",margin:"16px 0 8px",fontWeight:"600"}},["السابقة"]),
-        // Always keep bank_history (approved/rejected) visible — never bury under slice(0,20).
+        // Keep every bank_history card visible, but newest creation time first inside السابقة.
         ...(()=>{
           const bankDone=done.filter(r=>r.type==="bank_history");
           const otherDone=done.filter(r=>r.type!=="bank_history").slice(0,20);
-          return [...bankDone, ...otherDone].map(r=>reqCard(r,true));
+          return orderReqRows([...bankDone, ...otherDone]).map(r=>reqCard(r,true));
         })()])]);
   }
 
   // ======= MY REQUESTS (employee) =======
   
   if(S.tab==="myrequests"){
-    const myReqs=S.pendingRequests.filter(r=>isMyRequest(r));
+    const myReqs=(typeof sortRequestsNewestFirst==="function"
+      ? sortRequestsNewestFirst(S.pendingRequests.filter(r=>isMyRequest(r)))
+      : S.pendingRequests.filter(r=>isMyRequest(r)));
     const statusLbl=(st)=>st==="pending"?"قيد الاعتماد":st==="approved"?"معتمد":st==="rejected"?"مرفوض":(st||"—");
     const typeLbl=(t)=>({add_expense:"مصروف",add_transaction:"إيداع",bank_history:"تحويل بنكي",add_daily:"حجز يومي",update_partition:"تعديل بارتشن",update_full:"تعديل شقة",add_unit_maintenance:"صيانة شقة",add_facility_maintenance:"صيانة مرافق",engine_approval:"اعتماد"}[t]||t||"طلب");
     const detailLine=(label,value)=>value==null||value===""?null:h("div",{style:{display:"flex",justifyContent:"space-between",gap:"8px",padding:"2px 0"}},[

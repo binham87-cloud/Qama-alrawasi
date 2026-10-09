@@ -27,13 +27,13 @@ export async function login(userId, pin) {
 
 export async function cmd(name, payload, operationId) {
   const fn = httpsCallable(functions, "command");
-  const { data } = await fn({ name, payload, operationId });
+  const { data } = await fn({ command: name, payload, operationId });
   return data;
 }
 
 export async function readPeriod(period) {
   const fn = httpsCallable(functions, "read");
-  const { data } = await fn({ period });
+  const { data } = await fn({ what: "dashboard", period });
   return data;
 }
 

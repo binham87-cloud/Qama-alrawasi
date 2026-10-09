@@ -13,6 +13,7 @@ import {
   rentalForPeriod, occupancyForPeriod, rentalCoversPeriod,
   tenantNameForPeriod, tenantPhoneForPeriod, rentAmountForPeriod,
 } from "../domain/finance.mjs";
+import { canonicalRequestCreatedAt, sortRequestsNewestFirst } from "../domain/request_order.mjs";
 
 /**
  * Attach rent-month Holding(P) + GLOBAL physical shared Holding.
@@ -205,6 +206,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       id: r.id, title: `تحويل بنكي — ${unitName(r.unitId)} / ${spaceName(r.spaceId)}`,
       subtitle: `${r.tenantNameSnapshot || "—"} · ${nameOf(r.collectorUserId)} · ${r.collectionDate}`,
       amountFils: r.amountFils,
+      createdAt: canonicalRequestCreatedAt(r),
       kind: "bank",
       employeeName: nameOf(r.collectorUserId),
       depositDate: r.collectionDate,
@@ -219,6 +221,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       id: d.id, title: `إيداع — ${nameOf(d.employeeId)}`,
       subtitle: `${d.depositDate}${d.reference ? " · " + d.reference : ""}`,
       amountFils: d.amountFils,
+      createdAt: canonicalRequestCreatedAt(d),
       kind: "deposit",
       employeeName: nameOf(d.employeeId),
       employeeId: d.employeeId,
@@ -237,6 +240,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
       id: e.id, title: `مصروف — ${e.reason}`,
       subtitle: `${nameOf(e.submittedBy)} · ${e.expenseDate}`,
       amountFils: e.amountFils,
+      createdAt: canonicalRequestCreatedAt(e),
       kind: "expense",
       employeeName: nameOf(e.submittedBy),
       depositDate: e.expenseDate,
@@ -474,6 +478,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
     deposits: [
       ...visibleDeposits.map((d) => ({
         id: d.id, amountFils: d.amountFils, state: d.state, depositDate: d.depositDate,
+        createdAt: canonicalRequestCreatedAt(d),
         employeeName: nameOf(d.employeeId), employeeId: d.employeeId,
         reference: d.reference, note: d.note || null,
         sourceKind: d.sourceKind || "holding",
@@ -525,6 +530,7 @@ export function bankReceiptHistoryRows({ receipts, viewerUserId, isOwner, nameOf
       id: r.id,
       amountFils: r.amountFils,
       state: r.state === "recognized" ? "approved" : "rejected",
+      createdAt: canonicalRequestCreatedAt(r),
       depositDate: r.collectionDate || r.approvedAt?.slice?.(0, 10) || r.rejectedAt?.slice?.(0, 10) || null,
       employeeName: nameOf(r.collectorUserId),
       employeeId: r.collectorUserId || null,
@@ -647,14 +653,14 @@ async function buildUiBundle({ db, period }) {
         month: r.month,
         year: r.year,
         status: r.status,
-        createdAt: r.createdAt,
+        createdAt: canonicalRequestCreatedAt(r),
         resolvedAt: r.resolvedAt || null,
         approvedAt: r.status === "approved" ? (r.resolvedAt || r.approvedAt || null) : null,
         rejectedAt: r.status === "rejected" ? (r.resolvedAt || r.rejectedAt || null) : null,
         depositId: payload.depositId || (payload.transaction && payload.transaction.depositId) || null,
       };
-    }).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  return { config, requests: reqs, extras };
+    });
+  return { config, requests: sortRequestsNewestFirst(reqs), extras };
 }
 
 /**

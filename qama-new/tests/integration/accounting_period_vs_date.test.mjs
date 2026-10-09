@@ -205,7 +205,7 @@ test("N: owner profit transfer still excluded from operating expenses", async ()
 });
 
 test("BUILD stamp present", () => {
-  assert.match(html, /RECON-CLOSE-POSTVACATE-20261009T0207Z/);
+  assert.match(html, /REQ-ORDER-AUDIT-20261009T2245Z/);
 });
 
 test("legacy expense without period still derives from expenseDate (compat)", async () => {

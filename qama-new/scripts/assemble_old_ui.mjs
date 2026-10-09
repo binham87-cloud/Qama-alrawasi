@@ -17,6 +17,9 @@ const destPath = resolve(root, "src/frontend/index.html");
 
 const src = readFileSync(srcPath, "utf8");
 let bridge = readFileSync(bridgePath, "utf8");
+const requestOrderPath = resolve(root, "functions/domain/request_order.mjs");
+const requestOrder = readFileSync(requestOrderPath, "utf8").replace(/^export\s+/gm, "");
+bridge = requestOrder + "\n" + bridge;
 const draftPartial = readFileSync(draftPartialPath, "utf8")
   .replace(/^export\s+/gm, "")
   .replace(/\/\*\*[\s\S]*?\*\//, "/* draft_partial_merge.mjs (assembled) */");
@@ -290,5 +293,14 @@ if (!out.includes("btn-renew-cycle")) throw new Error("missing renew button");
 if (!out.includes("hydrateMonthFromEngine")) throw new Error("missing hydrate");
 if (out.includes("S.pendingRequests=[...reqs, ...enginePending]")) {
   throw new Error("regressive pendingApprovals merge still present in assembled UI");
+}
+if (!out.includes("function sortRequestsNewestFirst")) {
+  throw new Error("missing canonical request sort");
+}
+if (out.includes("S.pendingRequests = [...terminalBank, ...byReqId.values(), ...enginePending]")) {
+  throw new Error("request list still prepends bank history ahead of creation order");
+}
+if (out.includes("createdAt: d.depositDate || d.approvedAt || d.rejectedAt")) {
+  throw new Error("bank history still orders by approval time");
 }
 console.log("markers ok");

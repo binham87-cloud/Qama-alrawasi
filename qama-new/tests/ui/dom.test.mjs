@@ -21,6 +21,7 @@ const checks = [
   ["login selects user then pin", () => api.includes("listLoginUsers") && app.includes("selectedLoginUser") && api.includes("userId")],
   ["login shows arabic roles", () => app.includes("مالك / مدير") && app.includes("الموظفون")],
   ["uses server commands", () => app.includes("runCommand") && api.includes("httpsCallable")],
+  ["callable payload field is command", () => api.includes("command: name") && api.includes('what: "dashboard"')],
   ["min touch target css", () => css.includes("min-height: 44px") || css.includes("min-height: 48px")],
   ["mobile viewport", () => html.includes("viewport")],
   ["arabic title", () => html.includes("قمة الرواسي")],

@@ -15,7 +15,7 @@
   "hosting": {
     "predeploy": ["node scripts/assert_qama_new_prod_project.mjs"],
     "public": "src/frontend",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**", "**/old-qama-shell.html"],
     "rewrites": [{ "source": "**", "destination": "/index.html" }],
     "headers": [
       {

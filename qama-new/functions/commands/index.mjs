@@ -2213,11 +2213,16 @@ const HANDLERS = {
     await assertEmployeePeriodOpen(ctx, ctx.payload.period);
     parseJsonField(ctx.payload.extrasJson, "extrasJson");
     const id = `period:${ctx.payload.period}`;
+    const existing = await ctx.tx.get("uiPeriods", id);
+    // Employees save drafts, bookings, and maintenance through this blob.
+    // Owner profit transfers and installment mirrors must survive that write.
+    const extrasJson = ctx.actor.role === "owner"
+      ? ctx.payload.extrasJson
+      : preserveOwnerExtras(existing, ctx.payload.extrasJson);
     const rec = {
-      id, period: ctx.payload.period, extrasJson: ctx.payload.extrasJson,
+      id, period: ctx.payload.period, extrasJson,
       updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
     };
-    const existing = await ctx.tx.get("uiPeriods", id);
     if (existing) ctx.tx.update("uiPeriods", id, rec);
     else ctx.tx.create("uiPeriods", id, { ...rec, ...base(ctx) });
     audit(ctx, "period_extras_saved", "uiPeriod", id);
@@ -2258,6 +2263,22 @@ async function createReceipt(ctx, extra) {
     amountFils: ctx.payload.amountFils, obligationId: ob.id, method: extra.method,
   });
   return { receiptId: id, state: extra.state, method: extra.method };
+}
+
+/**
+ * Employee period saves replace the extras document. Keep owner-only mirrors
+ * (profit transfers, installment rows) from the previous canonical blob.
+ */
+function preserveOwnerExtras(existing, incomingJson) {
+  let prev = {};
+  let next = {};
+  try { prev = existing && existing.extrasJson ? JSON.parse(existing.extrasJson) : {}; } catch { prev = {}; }
+  try { next = JSON.parse(incomingJson); } catch { next = {}; }
+  if (!prev || typeof prev !== "object" || Array.isArray(prev)) prev = {};
+  if (!next || typeof next !== "object" || Array.isArray(next)) next = {};
+  next.profits = Array.isArray(prev.profits) ? prev.profits : [];
+  next.installments = Array.isArray(prev.installments) ? prev.installments : [];
+  return JSON.stringify(next);
 }
 
 export { HANDLERS };
