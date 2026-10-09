@@ -48,11 +48,10 @@ test("E2E: seeded login and read show property", async () => {
 
     const period = new Date().toISOString().slice(0, 7);
     const readFn = httpsCallable(functions, "read");
-    const { data: readData } = await readFn({ period });
-    assert.equal(readData.actor.role, "owner");
-    assert.ok(readData.app.properties.length >= 1);
-    assert.ok(readData.app.rentals.length >= 1);
-    assert.ok(readData.dashboard.obligations.length >= 1);
+    const { data: readData } = await readFn({ what: "dashboard", period });
+    assert.equal(readData.viewer.role, "owner");
+    assert.ok(readData.properties.length >= 1);
+    assert.ok(readData.views.length >= 1);
   });
 });
 
@@ -60,7 +59,7 @@ test("E2E: employee workflow partial cash receipt", async () => {
   await withClient("employee-rcpt", async ({ auth, functions }) => {
     const listFn = httpsCallable(functions, "listLoginUsers");
     const { data: listed } = await listFn({});
-    const emp = (listed.users || []).find((u) => u.displayName === "يحيى" || u.role === "employee");
+    const emp = (listed.users || []).find((u) => u.displayName === "يحيى");
     assert.ok(emp);
     const loginFn = httpsCallable(functions, "login");
     const { data: loginData } = await loginFn({ userId: emp.userId, pin: "6477" });
@@ -68,19 +67,19 @@ test("E2E: employee workflow partial cash receipt", async () => {
 
     const period = new Date().toISOString().slice(0, 7);
     const readFn = httpsCallable(functions, "read");
-    const { data: before } = await readFn({ period });
-    const ob = before.dashboard.obligations[0];
+    const { data: before } = await readFn({ what: "dashboard", period });
+    const ob = before.views[0];
     assert.ok(ob);
 
     const cmdFn = httpsCallable(functions, "command");
     await cmdFn({
-      name: "createCashReceipt",
+      command: "createCashReceipt",
       operationId: `e2e:rcpt:${Date.now()}`,
       payload: { obligationId: ob.obligationId, amountFils: 900000, collectionDate: new Date().toISOString().slice(0, 10) },
     });
 
-    const { data: after } = await readFn({ period });
-    const ob2 = after.dashboard.obligations.find((o) => o.obligationId === ob.obligationId);
+    const { data: after } = await readFn({ what: "dashboard", period });
+    const ob2 = after.views.find((o) => o.obligationId === ob.obligationId);
     assert.equal(ob2.paidFils, 900000);
     assert.equal(ob2.status, "partial");
   });

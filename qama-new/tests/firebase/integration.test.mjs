@@ -4,9 +4,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { initializeApp, getApps, deleteApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 import { getDb } from "../../functions/repositories/firestore.mjs";
 import { executeCommand } from "../../functions/commands/index.mjs";
-import { loginWithPin } from "../../functions/auth/index.mjs";
+import { verifyPinForUser } from "../../functions/auth/index.mjs";
 import { buildDashboard } from "../../functions/services/readModel.mjs";
 
 const PROJECT = process.env.GCLOUD_PROJECT || "qama-new";
@@ -33,8 +34,24 @@ test.before(async () => {
   await wipe();
 });
 
+function readerDb(fs) {
+  return {
+    async getUser(userId) {
+      const snap = await fs.collection("users").doc(String(userId)).get();
+      return snap.exists ? { id: snap.id, ...snap.data() } : null;
+    },
+    async list(collection, wheres = []) {
+      let q = fs.collection(collection);
+      for (const [f, op, v] of wheres) q = q.where(f, op, v);
+      const snap = await q.get();
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+  };
+}
+
 test("integration: M1 partial payment via real Firestore", async () => {
-  const db = getDb(PROJECT);
+  const fs = getFirestore();
+  const db = getDb(fs);
   const ownerActor = { userId: "owner1", role: "owner", active: true };
 
   await db.runTransaction(async (tx) => {
@@ -45,8 +62,12 @@ test("integration: M1 partial payment via real Firestore", async () => {
     });
   });
 
-  const login = await loginWithPin({ db, userId: "owner1", pin: "1325", rateKey: "ip:test-integration" });
-  assert.equal(login.ok, true);
+  const login = await verifyPinForUser({
+    db: readerDb(fs), userId: "owner1", pin: "1325", deviceKey: "test-integration",
+    now: Date.now(), attempts: new Map(),
+  });
+  assert.equal(login.role, "owner");
+  assert.equal(login.userId, "owner1");
 
   const prop = await executeCommand({ db, actor: ownerActor, command: "createProperty", payload: { name: "P" }, operationId: "op:prop:1", now: now() });
   const unit = await executeCommand({ db, actor: ownerActor, command: "createUnit", payload: { propertyId: prop.propertyId, name: "U", kind: "whole" }, operationId: "op:unit:1", now: now() });
@@ -62,7 +83,9 @@ test("integration: M1 partial payment via real Firestore", async () => {
     obligationId, amountFils: 900000, collectionDate: "2026-09-05",
   }, operationId: "op:rcpt:1", now: now() });
 
-  const dash = await buildDashboard(db, period, "2026-09-15");
+  const dash = await buildDashboard({
+    db: readerDb(fs), viewer: ownerActor, period, asOfDate: "2026-09-15",
+  });
   assert.equal(dash.summary.collectedFils, 900000);
   assert.equal(dash.summary.remainingFils, 20000);
 });

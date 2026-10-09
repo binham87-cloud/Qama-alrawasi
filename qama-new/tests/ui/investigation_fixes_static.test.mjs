@@ -18,9 +18,14 @@ test("formatEngineError maps AMOUNT_EXCEEDS_HOLDING to Arabic holding message", 
   assert.match(bridge, /المبلغ يتجاوز العهدة المشتركة المتاحة/);
 });
 
-test("vacate setSpaceOccupancy intent includes rentalId (cycle-safe)", () => {
-  assert.match(bridge, /intentKey\("occ", item\._spaceId, occ, rentalId \|\| "norent"\)/);
-  assert.match(bridge, /intentKey\("occ-force", item\._spaceId, occ, rentalId\)/);
+test("vacate occupancy opIds are cycle-safe", () => {
+  // A live rental vacates through endTenancy keyed by rentalId, so a later cycle
+  // cannot replay the previous close. Staff occupancy after close also includes rentalId.
+  // setSpaceOccupancy("occ") runs only when there is no rental, and the key is norent.
+  assert.match(bridge, /intentKey\("end-tenancy", rentalId, "retain"\)/);
+  assert.match(bridge, /intentKey\("occ-staff", item\._spaceId, rentalId\)/);
+  assert.match(bridge, /intentKey\("occ", item\._spaceId, occ, "norent"\)/);
+  assert.doesNotMatch(bridge, /intentKey\("occ-force"/);
 });
 
 test("uncollect opId uses live/all receipt counts (not sticky p{already})", () => {
@@ -47,10 +52,10 @@ test("revenue labeled as cumulative balance", () => {
 });
 
 test("assembled index includes bridge fixes after assemble", () => {
-  // This assertion is soft until assemble runs in the same session.
-  if (assembled.includes("formatEngineError")) {
-    assert.match(assembled, /intentKey\("occ", item\._spaceId, occ, rentalId \|\| "norent"\)/);
-    assert.match(assembled, /إلغاء الإيداع/);
-    assert.match(assembled, /رصيد تراكمي/);
-  }
+  assert.match(assembled, /formatEngineError/);
+  assert.match(assembled, /intentKey\("end-tenancy", rentalId, "retain"\)/);
+  assert.match(assembled, /intentKey\("occ-staff", item\._spaceId, rentalId\)/);
+  assert.match(assembled, /intentKey\("occ", item\._spaceId, occ, "norent"\)/);
+  assert.match(assembled, /إلغاء الإيداع/);
+  assert.match(assembled, /رصيد تراكمي/);
 });

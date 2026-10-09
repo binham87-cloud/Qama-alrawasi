@@ -40,7 +40,13 @@ test("parseAedInputToFils: no float rounding path", () => {
 
 test("app.mjs does not use float money conversion", () => {
   const app = readFileSync(new URL("../../src/frontend/app.mjs", import.meta.url), "utf8");
+  const shell = readFileSync(new URL("../../src/frontend/old-qama-shell.html", import.meta.url), "utf8");
+  // Progress width is a display percent. Money entry goes through parseAedInputToFils.
   assert.equal(app.includes("Math.round(Number"), false);
-  assert.equal(app.includes("* 100"), false);
+  assert.equal(/Number\([^)]*\)\s*\*\s*100/.test(app), false);
+  assert.match(app, /Math\.round\(\(paid \/ due\) \* 100\)/);
   assert.ok(app.includes("parseAedInputToFils"));
+  // Daily prepaid/cash amounts must not use binary float fils (Math.round(n*100)).
+  assert.doesNotMatch(shell, /Math\.round\(Number\(b\.total\)\*100\)/);
+  assert.match(shell, /aedToFils\(b\.total\)/);
 });

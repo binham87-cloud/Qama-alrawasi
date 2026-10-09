@@ -42,7 +42,8 @@ const OWNER_ID = "seed-owner";
 const ownerActor = { userId: OWNER_ID, role: "owner", active: true, displayName: "سعيد" };
 
 async function ensureOwner() {
-  const existing = await db.getUser(OWNER_ID);
+  // Command repository exposes reads only inside a transaction. getUser lives on the read model.
+  const existing = await db.runTransaction(async (tx) => tx.get("users", OWNER_ID));
   if (existing) return;
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync("1325", salt, 64).toString("hex");

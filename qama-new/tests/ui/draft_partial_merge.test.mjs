@@ -94,6 +94,26 @@ const late0 = { status: "late", partial: false, paid_amount: 0 };
 }
 
 {
+  // Rejected bank + late engine must not revive محصّل. A newer pending bank may.
+  const rejected = mergeDraftStatus(
+    { status: "late" },
+    { status: "collected", tenant: "أحمد", collectionMethod: "bank" },
+    { rentalId: "r1", spaceReceipts: [{ method: "bank", state: "rejected" }], tenantName: "أحمد" }
+  );
+  assert.equal(rejected._collectDraft, undefined);
+  assert.equal(rejected.collectionMethod, undefined);
+  assert.notEqual(rejected.status, "collected");
+  const pending = mergeDraftStatus(
+    { status: "late" },
+    { status: "collected", tenant: "أحمد", collectionMethod: "bank" },
+    { rentalId: "r1", spaceReceipts: [{ method: "bank", state: "pending" }], tenantName: "أحمد" }
+  );
+  assert.equal(pending._collectDraft, true);
+  assert.equal(pending.collectionMethod, "bank");
+  assert.notEqual(pending.status, "collected");
+}
+
+{
   const r = mergeDraftStatus(
     { status: "late" },
     { status: "collected", tenant: "أحمد" },

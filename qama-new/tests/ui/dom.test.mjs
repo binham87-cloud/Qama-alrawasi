@@ -44,8 +44,9 @@ const checks = [
   ["emulator config placeholder", () => config.includes("USE_EMULATOR")],
   ["unit hierarchy apartment cards", () => app.includes("unitListCard") && app.includes("unitTree") && app.includes("البارتشنات")],
   ["apartment drill-in", () => app.includes("unitDetail") && app.includes("spaceRowCard")],
-  ["familiar tabs", () => app.includes("الوحدات") && app.includes("الرئيسية") && app.includes("الإيداعات")],
-  ["backend finance untouched marker", () => finance.includes("STATUS_AR") && auth.includes("loginWithPin")],
+  // Light app has no الرئيسية tab. Familiar manager tabs live on the assembled shell.
+  ["familiar tabs", () => app.includes("الوحدات") && app.includes("الإيداعات") && app.includes("المالية")],
+  ["backend finance untouched marker", () => finance.includes("STATUS_AR") && (auth.includes("verifyPin") || auth.includes("verifyPinForUser"))],
 ];
 
 for (const [name, fn] of checks) {

@@ -7,7 +7,7 @@
  *
  * There is no debug endpoint, no test shortcut and no privileged client path.
  * Deploy marker: deposit-expense-revenue-2026-09-04
- * Deploy marker: HIST-MONTH-HOLDING-DEPOSIT-OFFLINE-20261008T1815Z
+ * Deploy marker: FRESH-DRAFT-DAILY-FILS-20261009T0200Z
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { initializeApp } from "firebase-admin/app";

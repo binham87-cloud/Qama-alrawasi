@@ -31,7 +31,7 @@ async function employeeSession(fn) {
   try {
     const listFn = httpsCallable(functions, "listLoginUsers");
     const { data: listed } = await listFn({});
-    const emp = (listed.users || []).find((u) => u.role === "employee");
+    const emp = (listed.users || []).find((u) => u.displayName === "يحيى");
     assert.ok(emp, "employee user listed");
     const loginFn = httpsCallable(functions, "login");
     const { data } = await loginFn({ userId: emp.userId, pin: "6477" });
@@ -46,14 +46,16 @@ async function employeeSession(fn) {
 function assertForbidden(err) {
   const code = err?.code || "";
   const msg = err?.message || "";
-  return code === "functions/failed-precondition" && (msg.includes("FORBIDDEN") || msg.includes("forbidden"));
+  const forbidden = msg.includes("FORBIDDEN") || msg.includes("forbidden");
+  // functions/index.mjs maps FORBIDDEN to HttpsError permission-denied.
+  return forbidden && (code === "functions/permission-denied" || code === "functions/failed-precondition");
 }
 
 test("authenticated employee cannot createProperty via callable", async () => {
   await employeeSession(async ({ cmdFn }) => {
     await assert.rejects(
       () => cmdFn({
-        name: "createProperty",
+        command: "createProperty",
         operationId: `sec:prop:${Date.now()}`,
         payload: { name: "hack" },
       }),
@@ -66,7 +68,7 @@ test("authenticated employee cannot approveDeposit via callable", async () => {
   await employeeSession(async ({ cmdFn }) => {
     await assert.rejects(
       () => cmdFn({
-        name: "approveDeposit",
+        command: "approveDeposit",
         operationId: `sec:dep:${Date.now()}`,
         payload: { depositId: "dep:fake" },
       }),
@@ -79,7 +81,7 @@ test("authenticated employee cannot approveBankReceipt via callable", async () =
   await employeeSession(async ({ cmdFn }) => {
     await assert.rejects(
       () => cmdFn({
-        name: "approveBankReceipt",
+        command: "approveBankReceipt",
         operationId: `sec:bank:${Date.now()}`,
         payload: { receiptId: "rcpt:fake" },
       }),
@@ -92,7 +94,7 @@ test("authenticated employee cannot createUser via callable", async () => {
   await employeeSession(async ({ cmdFn }) => {
     await assert.rejects(
       () => cmdFn({
-        name: "createUser",
+        command: "createUser",
         operationId: `sec:user:${Date.now()}`,
         payload: { displayName: "hack", role: "owner", pin: "9999" },
       }),

@@ -246,8 +246,9 @@ test("UI: no addMonthsISO due formula; manager cancel wired; canonical due label
   assert.match(html, /rejectDeposit/);
   assert.match(html, /rejectExpense/);
   assert.match(html, /updateRentalSchedule/);
-  // start_date change must not use addMonthsISO for monthly due
+  // Due day comes from the contract start day via updateRentalSchedule.
+  // addMonthsISO still exists for calendar display, but it must not assign due_date.
+  // The shell does not carry the old English comment; the assignments are the invariant.
   assert.ok(!/p\.due_date\s*=\s*addMonthsISO/.test(html), "partition start must not use addMonthsISO");
   assert.ok(!/u\.due_date\s*=\s*addMonthsISO/.test(html), "full start must not use addMonthsISO");
-  assert.match(html, /never invent "start \+ 1 month"/i);
 });

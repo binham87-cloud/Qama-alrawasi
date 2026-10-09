@@ -4,6 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { initializeApp, getApps, deleteApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 import { getDb } from "../../functions/repositories/firestore.mjs";
 import { executeCommand } from "../../functions/commands/index.mjs";
 import { buildDashboard } from "../../functions/services/readModel.mjs";
@@ -23,6 +24,21 @@ async function wipe() {
       await batch.commit();
     }
   }
+}
+
+function readerDb(fs) {
+  return {
+    async list(collection, wheres = []) {
+      let q = fs.collection(collection);
+      for (const [f, op, v] of wheres) q = q.where(f, op, v);
+      const snap = await q.get();
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+    async getUser(userId) {
+      const snap = await fs.collection("users").doc(String(userId)).get();
+      return snap.exists ? { id: snap.id, ...snap.data() } : null;
+    },
+  };
 }
 
 async function createUsers(db, users) {
@@ -59,7 +75,10 @@ test.before(async () => {
 });
 
 test("A: concurrent last-200 collections — one succeeds one fails", async () => {
-  const db = getDb(PROJECT);
+  await wipe();
+  // Pass this process's Firestore instance. getDb(projectId) would use
+  // functions/node_modules firebase-admin, which this test never initialized.
+  const db = getDb(getFirestore());
   const owner = { userId: "owner-a", role: "owner", active: true };
   const emp1 = { userId: "emp-a1", role: "employee", active: true };
   const emp2 = { userId: "emp-a2", role: "employee", active: true };
@@ -79,14 +98,19 @@ test("A: concurrent last-200 collections — one succeeds one fails", async () =
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   assert.equal(results.filter((r) => r.status === "rejected").length, 1);
 
-  const dash = await buildDashboard(db, period, "2026-09-15");
-  const ob = dash.obligations.find((o) => o.obligationId === obligationId);
+  const dash = await buildDashboard({
+    db: readerDb(getFirestore()), viewer: owner, period, asOfDate: "2026-09-15",
+  });
+  const ob = dash.views.find((o) => o.obligationId === obligationId);
   assert.equal(ob.paidFils, 920000);
   assert.equal(ob.remainingFils, 0);
 });
 
 test("B: concurrent deposit approvals — holding reduced once", async () => {
-  const db = getDb(PROJECT);
+  await wipe();
+  // Pass this process's Firestore instance. getDb(projectId) would use
+  // functions/node_modules firebase-admin, which this test never initialized.
+  const db = getDb(getFirestore());
   const owner = { userId: "owner-b", role: "owner", active: true };
   const emp = { userId: "emp-b", role: "employee", active: true };
   await createUsers(db, [owner, emp]);
@@ -108,14 +132,19 @@ test("B: concurrent deposit approvals — holding reduced once", async () => {
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   assert.equal(results.filter((r) => r.status === "rejected").length, 1);
 
-  const dash = await buildDashboard(db, period, "2026-09-15");
-  const row = dash.custody.find((c) => c.userId === emp.userId);
+  const dash = await buildDashboard({
+    db: readerDb(getFirestore()), viewer: owner, period, asOfDate: "2026-09-15",
+  });
+  const row = dash.summary.custody.find((c) => c.userId === emp.userId);
   assert.equal(row.cashCollectedFils, 500000);
   assert.equal(dash.summary.holdingFils, 200000);
 });
 
 test("C: same operationId concurrently — one financial effect", async () => {
-  const db = getDb(PROJECT);
+  await wipe();
+  // Pass this process's Firestore instance. getDb(projectId) would use
+  // functions/node_modules firebase-admin, which this test never initialized.
+  const db = getDb(getFirestore());
   const owner = { userId: "owner-c", role: "owner", active: true };
   await createUsers(db, [owner]);
 
@@ -132,6 +161,7 @@ test("C: same operationId concurrently — one financial effect", async () => {
   assert.equal(ids[0], ids[1]);
   assert.ok(fulfilled.some((r) => r.value.replay === true));
 
-  const props = await db.listAll("properties");
+  const propSnap = await getFirestore().collection("properties").get();
+  const props = propSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
   assert.equal(props.filter((p) => p.name === "ConcurrentProp").length, 1);
 });
