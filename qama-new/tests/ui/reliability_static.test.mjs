@@ -19,8 +19,12 @@ test("assembled UI targets qama-new-prod-2026 only", () => {
 });
 
 test("partition status select includes pending (fixes fake محصّل)", () => {
-  assert.match(html, /\["collected","pending","late","vacant","staff"\]/);
-  assert.match(authSrc, /\["collected","pending","late","vacant","staff"\]/);
+  assert.match(html, /function editorFinancialOptions\(\)/);
+  assert.match(html, /\["partial","محصّل جزئياً"\]/);
+  assert.match(html, /\["pending","غير محصّل"\]/);
+  assert.doesNotMatch(html, /\["collected","pending","late","vacant","staff"\]/);
+  assert.match(authSrc, /function editorOccupancyOptions\(\)/);
+  assert.doesNotMatch(authSrc, /\["collected","pending","late","vacant","staff"\]/);
 });
 
 test("status change to late clears paid_amount (UI contract)", () => {

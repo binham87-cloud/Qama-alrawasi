@@ -2316,7 +2316,7 @@ function applyAprilImportedRevenue(data, preserveExisting=false){
 
 const SC={
   collected:{label:"محصّل",bg:"#052e16",border:"#16a34a",text:"#4ade80"},
-  partial:{label:"دفع جزئي",bg:"#3a2505",border:"#d97706",text:"#fbbf24"},
+  partial:{label:"محصّل جزئياً",bg:"#3a2505",border:"#d97706",text:"#fbbf24"},
   pending:{label:"غير مستحق",bg:"#082f49",border:"#0284c7",text:"#7dd3fc"},
   late:{label:"متأخر",bg:"#450a0a",border:"#dc2626",text:"#f87171"},
   vacant:{label:"فارغ",bg:"#1c1917",border:"#333",text:"#a8a29e"},
@@ -2436,7 +2436,7 @@ function editorOccupancyOptions(){
   return [["rented","مؤجر"],["vacant","فارغ"],["staff","موظفين"]];
 }
 function editorFinancialOptions(){
-  return [["collected","محصّل"],["pending","غير مستحق"],["late","متأخر"]];
+  return [["collected","محصّل"],["partial","محصّل جزئياً"],["late","متأخر"],["pending","غير محصّل"]];
 }
 function editorOccupancyValue(item){
   const st=item&&item.status;
@@ -3789,7 +3789,7 @@ function renderApp(){
           p[field]=val;
           if(field==="status"){
             // Tenant is required before renting/collecting — keep rent as draft, do not optimistic-collect.
-            if((val==="collected"||val==="late"||val==="pending") && !requireTenantBeforeRent(p, val==="collected"?"التحصيل":"التأجير")){
+            if((val==="collected"||val==="partial"||val==="late"||val==="pending") && !requireTenantBeforeRent(p, val==="collected"||val==="partial"?"التحصيل":"التأجير")){
               p.status=prevStatus||"vacant";
               p.collectionMethod=prevMethod||"";
               p._collectDraft=false;
@@ -3805,6 +3805,18 @@ function renderApp(){
               const _rc=(p._receipts||[]);
               const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
               p.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            }
+            else if(val==="partial"){
+              const paidNow=Number(p._enginePaid||p.paid_amount||0);
+              const rentNow=Number(p.rent||0);
+              if(!(paidNow>0) || !(rentNow>paidNow)){
+                p.status=prevStatus||"late";
+                showMsg("التحصيل الجزئي يحتاج مبلغاً محصّلاً أقل من الإيجار، دون إلغاء الإيصالات السابقة");
+                set({editPart:unit.id+"-"+p.id});
+                return;
+              }
+              p.partial=true;
+              p.status=prevStatus==="collected"||prevStatus==="partial"?"collected":prevStatus||"collected";
             }
             else if(val==="late"||val==="pending"){
               const paidNow=Number(p._enginePaid||0);
@@ -3996,19 +4008,23 @@ function renderApp(){
           h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإشغال"]),
             occupancySelectEl("partition-occupancy", p, (val)=>{
               if(val==="vacant"||val==="staff"){updateP("status",val);return;}
-              if(p.status==="vacant"||p.status==="staff") updateP("status","late");
+              if(p.status==="vacant"||p.status==="staff") updateP("status","pending");
             })]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
               (()=>{
                 // Include pending: engine not_due maps to pending. Without it the browser
                 // defaults the closed <select> to the first option (محصّل) and looks like a revert.
-                const cur=isPartialPaid(p)?"late":(p._collectDraft?"collected":(p.status==="pending"||displayStatus(p)==="pending"?"pending":displayStatus(p)));
-                const sel=h("select",{"data-testid":"partition-status"},["collected","pending","late","vacant","staff"].map(v=>{
-                const o=h("option",{value:v},[SC[v].label]);if(cur===v)o.selected=true;return o;}));
+                const occNow=editorOccupancyValue(p);
+                const shown=displayStatus(p);
+                const cur=occNow!=="rented"?"pending":(p._collectDraft?"collected":(shown==="partial"?"partial":(shown==="collected"||shown==="pending"||shown==="late"?shown:"late")));
+                const sel=h("select",{"data-testid":"partition-status"},editorFinancialOptions().map((o)=>{
+                const op=h("option",{value:o[0]},[o[1]]);if(cur===o[0])op.selected=true;return op;}));
+                if(occNow!=="rented")sel.disabled=true;
                 sel.addEventListener("change",e=>{
+                  if(editorOccupancyValue(p)!=="rented"){e.target.value=cur;return;}
                   const blk=dailyBlockInfo(unit.id,p.id);
-                  if(blk&&e.target.value!=="vacant"&&e.target.value!=="staff"){
+                  if(blk){
                     showMsg("⛔ محجوز يومياً حتى "+blk.until+" — لا يمكن التأجير الشهري قبلها");
                     e.target.value=cur;
                     return;
@@ -4315,7 +4331,7 @@ function renderApp(){
           const prevTenant=u.tenant;
           u[field]=val;
           if(field==="status"){
-            if((val==="collected"||val==="late"||val==="pending") && !requireTenantBeforeRent(u, val==="collected"?"التحصيل":"التأجير")){
+            if((val==="collected"||val==="partial"||val==="late"||val==="pending") && !requireTenantBeforeRent(u, val==="collected"||val==="partial"?"التحصيل":"التأجير")){
               u.status=prevStatus||"vacant";
               u.collectionMethod=prevMethod||"";
               u._collectDraft=false;
@@ -4329,6 +4345,18 @@ function renderApp(){
               const _rc=(u._receipts||[]);
               const _rev=_rc.filter(r=>r&&r.state==="reversed").length;
               u.draftReverseGen=_rev+(_rc.some(r=>r&&r.state==="recognized")?1:0);
+            }
+            else if(val==="partial"){
+              const paidNow=Number(u._enginePaid||u.paid_amount||0);
+              const rentNow=Number(u.rent||0);
+              if(!(paidNow>0) || !(rentNow>paidNow)){
+                u.status=prevStatus||"late";
+                showMsg("التحصيل الجزئي يحتاج مبلغاً محصّلاً أقل من الإيجار، دون إلغاء الإيصالات السابقة");
+                set({editPart:"full-"+u.id});
+                return;
+              }
+              u.partial=true;
+              u.status=prevStatus==="collected"||prevStatus==="partial"?"collected":prevStatus||"collected";
             }
             else if(val==="late"||val==="pending"){
               const paidNow=Number(u._enginePaid||0);
@@ -4488,14 +4516,15 @@ function renderApp(){
           h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الإشغال"]),
             occupancySelectEl("full-occupancy", u, (val)=>{
               if(val==="vacant"||val==="staff"){updateFull("status",val);return;}
-              if(u.status==="vacant"||u.status==="staff") updateFull("status","late");
+              if(u.status==="vacant"||u.status==="staff") updateFull("status","pending");
             })]),
           editorOccupancyValue(u)==="rented"?null:h("div",{style:{fontSize:"12px",color:"#a8a29e"}},["الإشغال فارغ أو موظفين — الحالة المالية لا تُغيّر الإخلاء"]),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},[
             h("div",{},[h("div",{style:{fontSize:"15px",color:"#555",marginBottom:"3px"}},["الحالة"]),
               (()=>{
                 const occNow=editorOccupancyValue(u);
-                const cur=occNow!=="rented"?"late":(isPartialPaid(u)?"late":(u._collectDraft?"collected":(u.status==="pending"||displayStatus(u)==="pending"?"pending":(u.status==="collected"||u.status==="late"?u.status:"late"))));
+                const shown=displayStatus(u);
+                const cur=occNow!=="rented"?"pending":(u._collectDraft?"collected":(shown==="partial"?"partial":(shown==="collected"||shown==="pending"||shown==="late"?shown:"late")));
                 const opts=editorFinancialOptions();
                 const s=h("select",{"data-testid":"full-status"},opts.map(o=>{const op=h("option",{value:o[0]},[o[1]]);if(cur===o[0])op.selected=true;return op;}));
                 if(occNow!=="rented")s.disabled=true;
