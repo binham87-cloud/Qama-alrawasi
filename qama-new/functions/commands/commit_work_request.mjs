@@ -10,7 +10,7 @@
  */
 import {
   DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant, rentalCoversPeriod,
-  assertCashReversalFitsSharedHolding,
+  assertCashReversalFitsSharedHolding, assertCashAdjustmentFitsSharedHolding,
 } from "../domain/finance.mjs";
 
 const STEP = (requestId, name) => (`cwr-${requestId}-${name}`).slice(0, 140);
@@ -380,14 +380,21 @@ async function applyReceiptCorrection(ctx) {
     const allDeposits = await queryAll(ctx.db, "deposits");
     if (receipt.method === "cash") {
       try {
-        assertCashReversalFitsSharedHolding({
-          receipts: allReceipts, deposits: allDeposits, reversingReceiptIds: [receipt.id],
-        });
+        if (corrected > 0) {
+          assertCashAdjustmentFitsSharedHolding({
+            receipts: allReceipts, deposits: allDeposits,
+            receiptId: receipt.id, nextAmountFils: corrected,
+          });
+        } else {
+          assertCashReversalFitsSharedHolding({
+            receipts: allReceipts, deposits: allDeposits, reversingReceiptIds: [receipt.id],
+          });
+        }
       } catch (e) {
         if (e.code === "RECEIPT_ALREADY_DEPOSITED") {
           throw new DomainError("DEPOSIT_RECONCILIATION_REQUIRED", {
             receiptId,
-            message: "الإيصال داخل إيداع معتمد. لا يُعكس تلقائياً. اعكس الإيداع أولاً ثم أعد اعتماد التصحيح.",
+            message: "التصحيح يجعل عهدة الشهر سالبة. الإيداع المعتمد لا يُحذف ولا يُعاد إنشاؤه.",
           });
         }
         throw e;
@@ -402,7 +409,9 @@ async function applyReceiptCorrection(ctx) {
         message: "تصحيح تحويل بنكي معتمد يحتاج تأكيداً صريحاً من المدير. سجل الإيداع لا يُحذف.",
       });
     }
-    await ctx.run(ctx.actor, "reverseReceipt", { receiptId: receipt.id, reason }, STEP(ctx.requestId, "rev"), ctx.stepGrant);
+    const reversePayload = { receiptId: receipt.id, reason };
+    if (receipt.method === "cash" && corrected > 0) reversePayload.replacementAmountFils = corrected;
+    await ctx.run(ctx.actor, "reverseReceipt", reversePayload, STEP(ctx.requestId, "rev"), ctx.stepGrant);
   }
   if (corrected > 0) {
     const date = validDate(receipt.collectionDate) || ctx.now.slice(0, 10);
@@ -421,7 +430,7 @@ async function applyReceiptCorrection(ctx) {
           if (e.code !== "RECEIPT_NOT_PENDING") throw e;
         }
       }
-    } else {
+    } else if (receipt.state !== "recognized") {
       await ctx.run(ctx.actor, "createCashReceipt", {
         obligationId: receipt.obligationId,
         amountFils: corrected,

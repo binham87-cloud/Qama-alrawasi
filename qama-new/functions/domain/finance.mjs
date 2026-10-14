@@ -871,6 +871,38 @@ export function assertCashReversalFitsSharedHolding({ receipts, deposits, revers
   return minAfter;
 }
 
+/**
+ * Holding after a cash receipt is replaced by a smaller recognized amount.
+ * The check uses that end state. A full removal is nextAmountFils 0.
+ * Approved deposits are not modified here. A negative end state is refused.
+ */
+export function assertCashAdjustmentFitsSharedHolding({ receipts, deposits, receiptId, nextAmountFils }) {
+  const receipt = (receipts || []).find((r) => r && r.id === receiptId);
+  if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
+  const next = Number(nextAmountFils);
+  const original = Number(receipt.amountFils || 0);
+  if (!Number.isInteger(next) || next < 0 || next > original) {
+    throw new DomainError("INVALID_CORRECTION", { originalAmountFils: original, nextAmountFils: next });
+  }
+  const adjusted = (receipts || []).map((r) => {
+    if (!r || r.id !== receiptId) return r;
+    if (next === 0) return { ...r, state: "reversed" };
+    return { ...r, amountFils: next };
+  });
+  const period = receiptHoldingPeriod(receipt);
+  const after = sharedHoldingFils({ receipts: adjusted, deposits, period });
+  if (after < 0) {
+    throw new DomainError("RECEIPT_ALREADY_DEPOSITED", {
+      reversingReceiptIds: [receiptId],
+      sharedHoldingAfterFils: after,
+      sourcePeriod: period,
+      nextAmountFils: next,
+      message: "تصحيح هذا الإيصال يجعل عهدة الشهر سالبة. الإيداع المعتمد لا يُمس.",
+    });
+  }
+  return after;
+}
+
 /* ───────────────────── period summary ───────────────────── */
 
 /**

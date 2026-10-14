@@ -12,6 +12,7 @@
 import {
   DomainError, RECEIPT_STATE, APPROVAL_STATE, OCCUPANCY, METHOD,
   assertReceiptFits, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
+  assertCashAdjustmentFitsSharedHolding,
   periodOf, dueDateFor, obligationIdFor, depositSourcePeriod,
   assertPositiveFils, isFils, isPlaceholderTenant, parseAedToFils,
   rentalCoversPeriod, isObligationAfterTenancyEnd, findPeriodCoverageConflict,
@@ -763,7 +764,10 @@ export const SCHEMAS = Object.freeze({
   },
   approveBankReceipt: { receiptId: S.id() },
   rejectBankReceipt: { receiptId: S.id(), reason: S.str(300) },
-  reverseReceipt: { receiptId: S.id(), reason: S.str(300) },
+  reverseReceipt: {
+    receiptId: S.id(), reason: S.str(300),
+    replacementAmountFils: S.opt(S.fils()),
+  },
   restoreReversedReceipt: { receiptId: S.id(), reason: S.str(300) },
 
   submitDeposit: {
@@ -942,7 +946,12 @@ async function correctionGrantAllows({ db, actor, command, payload, operationId,
   if (req.approvingBy !== actor.userId) return false;
   let body = {};
   try { body = JSON.parse(req.payloadJson || "{}"); } catch { return false; }
-  if (command === "reverseReceipt") return payload.receiptId === body.receiptId;
+  if (command === "reverseReceipt") {
+    if (payload.receiptId !== body.receiptId) return false;
+    const corrected = Number(body.correctedAmountFils);
+    if (corrected > 0) return payload.replacementAmountFils === corrected;
+    return payload.replacementAmountFils == null;
+  }
   const receipt = await db.runTransaction((tx) => tx.get("receipts", body.receiptId));
   if (!receipt || receipt.method !== "cash") return false;
   if (payload.collectorUserId && payload.collectorUserId !== receipt.collectorUserId) return false;
@@ -1329,7 +1338,16 @@ const HANDLERS = {
         (r) => r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING,
       );
       if (live.length) {
-        receiptFrozen.push(ob.id);
+        const paid = live.reduce((sum, r) => sum + Number(r.amountFils || 0), 0);
+        const next = ctx.payload.contractualAmountFils;
+        // A collected month can be lowered only down to what is already recognized.
+        // It cannot be raised here, and it cannot fall below the live receipts.
+        if (next < Number(ob.amountFils || 0) && next >= paid) {
+          ctx.tx.update("obligations", ob.id, { amountFils: next });
+          revised.push(ob.id);
+        } else {
+          receiptFrozen.push(ob.id);
+        }
         continue;
       }
       if (ob.amountFils === ctx.payload.contractualAmountFils) continue;
@@ -1935,25 +1953,62 @@ const HANDLERS = {
     if (receipt.state !== RECEIPT_STATE.RECOGNIZED) throw new DomainError("RECEIPT_NOT_RECOGNIZED", { state: receipt.state });
     await assertPeriodMutable(ctx, receipt.period);
 
-    // Shared-pool safety: reversing cash is allowed only if عهدة الموظفين stays >= 0.
+    const replacement = ctx.payload.replacementAmountFils;
+    if (replacement != null && receipt.method !== "cash") {
+      throw new DomainError("INVALID_CORRECTION", { method: receipt.method });
+    }
+    if (replacement != null && (replacement <= 0 || replacement >= receipt.amountFils)) {
+      throw new DomainError("INVALID_CORRECTION", {
+        originalAmountFils: receipt.amountFils, replacementAmountFils: replacement,
+      });
+    }
+    // Shared-pool safety. A replacement is judged on the end state, so a 200 AED
+    // reduction is not refused just because removing the whole receipt would be.
+    // Either way, approved deposits are left untouched and a negative pool is refused.
     if (receipt.method === "cash") {
       const allReceipts = await ctx.tx.query("receipts", []);
       const allDeposits = await ctx.tx.query("deposits", []);
-      assertCashReversalFitsSharedHolding({
-        receipts: allReceipts,
-        deposits: allDeposits,
-        reversingReceiptIds: [receipt.id],
-      });
+      if (replacement != null) {
+        assertCashAdjustmentFitsSharedHolding({
+          receipts: allReceipts, deposits: allDeposits,
+          receiptId: receipt.id, nextAmountFils: replacement,
+        });
+      } else {
+        assertCashReversalFitsSharedHolding({
+          receipts: allReceipts,
+          deposits: allDeposits,
+          reversingReceiptIds: [receipt.id],
+        });
+      }
     }
 
     const reversalId = newId("rev", ctx);
     ctx.tx.create("reversals", reversalId, {
       id: reversalId, targetType: "receipt", targetId: receipt.id,
-      amountFils: receipt.amountFils, reason: ctx.payload.reason, ...base(ctx),
+      amountFils: receipt.amountFils, reason: ctx.payload.reason,
+      replacementAmountFils: replacement ?? null, ...base(ctx),
     });
     ctx.tx.update("receipts", receipt.id, {
       state: RECEIPT_STATE.REVERSED, reversedByReversalId: reversalId, reversedAt: ctx.now,
     });
+    let replacementReceiptId = null;
+    if (replacement != null) {
+      replacementReceiptId = newId("rcpt", ctx);
+      ctx.tx.create("receipts", replacementReceiptId, {
+        id: replacementReceiptId,
+        obligationId: receipt.obligationId, rentalId: receipt.rentalId,
+        propertyId: receipt.propertyId, unitId: receipt.unitId, spaceId: receipt.spaceId,
+        period: receipt.period, tenantNameSnapshot: receipt.tenantNameSnapshot,
+        amountFils: replacement, collectionDate: receipt.collectionDate,
+        method: receipt.method, state: RECEIPT_STATE.RECOGNIZED,
+        collectorUserId: receipt.collectorUserId,
+        replacesReceiptId: receipt.id, note: ctx.payload.reason, ...base(ctx),
+      });
+      audit(ctx, "cash_receipt_created", "receipt", replacementReceiptId, {
+        amountFils: replacement, obligationId: receipt.obligationId, method: receipt.method,
+        collectorUserId: receipt.collectorUserId, replacesReceiptId: receipt.id,
+      });
+    }
     if (receipt.method === "bank") {
       await debitRevenueAccount(ctx, {
         amountFils: receipt.amountFils,
@@ -1962,8 +2017,10 @@ const HANDLERS = {
         note: ctx.payload.reason,
       });
     }
-    audit(ctx, "receipt_reversed", "receipt", receipt.id, { amountFils: receipt.amountFils, reason: ctx.payload.reason, reversalId });
-    return { receiptId: receipt.id, reversalId };
+    audit(ctx, "receipt_reversed", "receipt", receipt.id, {
+      amountFils: receipt.amountFils, reason: ctx.payload.reason, reversalId, replacementReceiptId,
+    });
+    return { receiptId: receipt.id, reversalId, replacementReceiptId };
   },
 
   /**
