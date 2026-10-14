@@ -21,7 +21,7 @@ test("UI A/B: new expense/maintenance/deposit defaults use todayISO, not month d
   assert.match(expBlock, /todayISO|engineToday/);
   assert.ok(!/date=S\.year\+\"-\"\+\(S\.month\+1/.test(expBlock), "expense must not default to month-01");
   assert.match(expBlock, /period:_acctPeriod/);
-  assert.match(expBlock, /dateInp\.addEventListener\("change",e=>date=e\.target\.value\)/);
+  assert.match(expBlock, /dateInp\.addEventListener\("change",e=>\{date=draft\.date=e\.target\.value;\}/);
   // Maintenance forms initialize date from todayISO
   assert.match(html, /const fm=\{unitId:""[\s\S]{0,80}todayISO/);
   assert.match(html, /const fm=\{facility:"المصاعد"[\s\S]{0,80}todayISO/);
@@ -205,7 +205,7 @@ test("N: owner profit transfer still excluded from operating expenses", async ()
 });
 
 test("BUILD stamp present", () => {
-  assert.match(html, /HOLDING-EXTRAS-20261009T2304Z/);
+  assert.match(html, /QAMA-STAFF-STAY-20261013T2355Z/);
 });
 
 test("legacy expense without period still derives from expenseDate (compat)", async () => {

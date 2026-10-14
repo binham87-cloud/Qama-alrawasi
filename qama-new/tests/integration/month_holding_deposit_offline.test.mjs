@@ -348,7 +348,7 @@ test("D1 D4 offline financial copy does not claim a local save or auto-reverse d
   assert.match(html, /بانتظار الاتصال/);
   assert.match(html, /لم تتم المزامنة/);
   assert.doesNotMatch(html, /حفظ محلي/);
-  assert.match(html, /HOLDING-EXTRAS-20261009T2304Z/);
+  assert.match(html, /QAMA-STAFF-STAY-20261013T2355Z/);
   const fn = bridge.slice(
     bridge.indexOf("async function syncDeletedMoney"),
     bridge.indexOf("async function applyEngineDiff"),

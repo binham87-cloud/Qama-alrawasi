@@ -81,7 +81,7 @@ function uncollectOpKey(obligationId, alreadyFils, receipts) {
 const MONEY_MUTATION_COMMANDS = new Set([
   "createCashReceipt", "createDailyCashReceipt", "createDailyBookingPrepaid",
   "submitBankReceipt", "approveBankReceipt",
-  "uncollectObligation", "reverseReceipt",
+  "uncollectObligation", "reverseReceipt", "restoreReversedReceipt",
   "submitDeposit", "approveDeposit", "reverseDeposit", "rejectDeposit",
   "submitExpense", "reverseExpense", "rejectExpense",
   "payInstallment", "reverseInstallment",
@@ -106,7 +106,9 @@ function financialOfflineBlocked() {
 }
 function isFinancialTransportError(err) {
   const raw = String((err && (err.message || err.code)) || err || "");
-  return /OFFLINE_FINANCIAL|network|unavailable|Failed to fetch|تعذر الاتصال|بانتظار/i.test(raw);
+  // Callable abort surfaces as "internal" and the UI already calls that a dropped
+  // connection. Hydrating here wiped the draft the operator was about to retry.
+  return /OFFLINE_FINANCIAL|network|unavailable|Failed to fetch|تعذر الاتصال|بانتظار|\binternal\b/i.test(raw);
 }
 function markUnconfirmedFinancial(data) {
   if (!data) return data;
@@ -174,6 +176,9 @@ function formatEngineError(err) {
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/TENANT_REQUIRED/i.test(raw)) return "اسم المستأجر مطلوب قبل التأجير";
   if (/PARTIAL_AMOUNT_REQUIRED/i.test(raw)) return "مبلغ الدفع الجزئي مطلوب وأكبر من صفر";
+  if (/RENT_NOT_POSITIVE/i.test(raw)) return "قيمة الإيجار يجب أن تكون أكبر من صفر";
+  if (/PERIOD_ALREADY_COVERED/i.test(raw)) return "يوجد عقد يغطي نفس القسم ونفس الشهر — لا يُنشأ عقد ثانٍ";
+  if (/PERIOD_OBLIGATION_EXISTS/i.test(raw)) return "يوجد التزام إيجار لهذا القسم في نفس الشهر";
   if (/RENT_REQUIRED/i.test(raw)) return "قيمة الإيجار مطلوبة قبل التأجير";
   if (/START_DATE_REQUIRED/i.test(raw)) return "تاريخ بداية العقد مطلوب";
   if (/ARREARS_CONFIRMATION_REQUIRED/i.test(raw)) return "توجد متأخرات — أعد الإخلاء (يُحتفظ بالمتأخرات دون عكس التحصيل)";
@@ -181,6 +186,7 @@ function formatEngineError(err) {
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/FORBIDDEN/i.test(raw)) return "غير مسموح لهذه الصلاحية";
   if (/ALREADY_REVERSED/i.test(raw)) return "تم العكس مسبقاً";
+  if (/ALREADY_RESTORED/i.test(raw)) return "تم استعادة الإيصال مسبقاً";
   if (/DEPOSIT_NOT_APPROVED/i.test(raw)) return "الإيداع غير معتمد — لا يمكن عكسه بهذا المسار";
   if (/NEGATIVE_HOLDING/i.test(raw)) return "العهدة المشتركة سالبة — أوقف الإيداع حتى التسوية";
   if (/IDEMPOTENCY_PAYLOAD_MISMATCH/i.test(raw)) return "تعارض في مفتاح العملية — أعد المحاولة";
@@ -298,7 +304,11 @@ function engineStatusToOld(sp) {
     return { status: "late", partial: false, paid_amount: paid };
   }
   const st = sp.status;
-  if (st === "staff" || occ === "staff") return { status: "staff", partial: false, paid_amount: 0 };
+  if (st === "staff" || occ === "staff") {
+    const paid = filsToAed(sp.paidFils);
+    const rem = Number(sp.remainingFils || 0);
+    return { status: "staff", partial: paid > 0 && rem > 0, paid_amount: paid };
+  }
   if (st === "vacant" || occ === "vacant") return { status: "vacant", partial: false, paid_amount: 0 };
   const paid = filsToAed(sp.paidFils);
   const rent = filsToAed(sp.dueFils);
@@ -448,16 +458,25 @@ function mapDashboardToMonth(dash) {
         id: wholeDisplayId(u),
         // Vacant cards have dueFils=0; keep UI draft rent from extras so mid-edit saves
         // (tenant/start date) do not zero the rent the user already typed.
-        rent: (mapped.status === "vacant" || mapped.status === "staff")
-          ? (draftRent || engineRent)
-          : (engineRent || draftRent),
+        rent: mapped.status === "staff"
+          ? (Number(sp.dueFils || 0) / 100)
+          : (mapped.status === "vacant" ? (draftRent || engineRent) : (engineRent || draftRent)),
         tenant: (() => {
           const abandoned = isVacateResidueExtra(extra, sp, mapped);
           return abandoned ? "" : (sp.tenantName || extra.tenant || "");
         })(),
-        phone: extra.phone || sp.tenantPhone || "",
+        phone: displayTenantPhone({
+          rented: sp.occupancy === "rented" && !!sp.rentalId,
+          tenantPhone: sp.tenantPhone || "",
+          extraPhone: extra.phone || "",
+        }),
         note: extra.note || "",
-        start_date: extra.start_date || sp.cycleStart || sp.startDate || "",
+        start_date: displayContractStart({
+          rented: sp.occupancy === "rented" && !!sp.rentalId,
+          contractStartDate: sp.contractStartDate || "",
+          cycleStart: sp.cycleStart || sp.startDate || "",
+          extraStart: extra.start_date || "",
+        }),
         due_date: sp.dueDate || extra.due_date || "",
         elec_paid: !!extra.elec_paid,
         elec_amount: Number(extra.elec_amount || 0),
@@ -481,6 +500,7 @@ function mapDashboardToMonth(dash) {
         _unitId: u.unitId,
         _spaceId: sp.spaceId,
         _rentalId: sp.rentalId,
+        _contractStart: sp.contractStartDate || "",
         _obligationId: sp.obligationId,
         _enginePaid: filsToAed(sp.paidFils),
         _receipts: sp.spaceReceipts || [],
@@ -505,21 +525,30 @@ function mapDashboardToMonth(dash) {
           : extra;
         return {
           id: spacePartId(sp),
-          rent: (mapped.status === "vacant" || mapped.status === "staff")
-            ? (draftRent || engineRent)
-            : (engineRent || draftRent),
+          rent: mapped.status === "staff"
+            ? (Number(sp.dueFils || 0) / 100)
+            : (mapped.status === "vacant" ? (draftRent || engineRent) : (engineRent || draftRent)),
           tenant: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
             : (sp.tenantName || extraUse.tenant || ""),
           phone: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
-            : (extraUse.phone || sp.tenantPhone || ""),
+            : displayTenantPhone({
+              rented: sp.occupancy === "rented" && !!sp.rentalId,
+              tenantPhone: sp.tenantPhone || "",
+              extraPhone: extraUse.phone || "",
+            }),
           note: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? (mapped.status === "staff" ? "موظفين" : "فارغ")
             : (extraUse.note || (mapped.status === "vacant" ? "فارغ" : mapped.status === "staff" ? "موظفين" : "")),
           start_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
-            : (extraUse.start_date || sp.cycleStart || sp.startDate || ""),
+            : displayContractStart({
+              rented: sp.occupancy === "rented" && !!sp.rentalId,
+              contractStartDate: sp.contractStartDate || "",
+              cycleStart: sp.cycleStart || sp.startDate || "",
+              extraStart: extraUse.start_date || "",
+            }),
           end_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
             : (extraUse.end_date || ""),
@@ -546,7 +575,8 @@ function mapDashboardToMonth(dash) {
           ...mergeDraftStatus(mapped, extraUse, sp),
           _unitId: u.unitId,
           _spaceId: sp.spaceId,
-          _rentalId: sp.rentalId,
+          _rentalId: sp.occupancy === "rented" ? (sp.rentalId || null) : sp.rentalId,
+          _contractStart: sp.contractStartDate || "",
           _obligationId: sp.obligationId,
           _enginePaid: filsToAed(sp.paidFils),
           _receipts: sp.spaceReceipts || [],
@@ -559,8 +589,19 @@ function mapDashboardToMonth(dash) {
           _cycleEnd: sp.cycleEnd || "",
           _nextCycleStart: sp.nextCycleStart || "",
           _rentalCycleId: sp.rentalCycleId || "",
+          _engineStatus: mapped.status,
+          _periodOccupancy: sp.occupancy || "",
         };
       });
+      for (const p of partitions) {
+        // Canonical period occupancy wins over a stale فارغ extra or local snapshot.
+        if (p._periodOccupancy === "rented" && (p.status === "vacant" || p.status === "staff")) {
+          p.status = (p._engineStatus && p._engineStatus !== "vacant" && p._engineStatus !== "staff")
+            ? p._engineStatus
+            : "late";
+        }
+        if (p._periodOccupancy === "rented" && p.note === "فارغ") p.note = "";
+      }
       units.push({
         id: u.unitId,
         name: u.name,
@@ -785,20 +826,25 @@ async function applyCollection(item, dashSp) {
   const already = dashSp ? Number(dashSp.paidFils || 0) : aedToFils(item._enginePaid || 0);
   let want = 0;
   if (item.partial) {
-    want = aedToFils(item.paid_amount);
-    if (want <= 0) {
+    // The editor field is this payment, checked against the remaining balance.
+    const add = aedToFils(item.paid_amount);
+    if (add <= 0) {
       const err = new Error("PARTIAL_AMOUNT_REQUIRED");
       err.code = "PARTIAL_AMOUNT_REQUIRED";
       err.field = "paid_amount";
       throw err;
     }
     const due = dashSp ? Number(dashSp.dueFils || 0) : aedToFils(item.rent);
-    if (due > 0 && want > due) {
+    const remaining = (dashSp && dashSp.remainingFils != null)
+      ? Number(dashSp.remainingFils)
+      : Math.max(0, due - already);
+    if (remaining > 0 && add > remaining) {
       const err = new Error("AMOUNT_EXCEEDS_REMAINING");
       err.code = "AMOUNT_EXCEEDS_REMAINING";
       err.field = "paid_amount";
       throw err;
     }
+    want = already + add;
   } else if (item.status === "collected" || item._collectDraft) {
     // كامل: amount field may be 0/blank — use exact remaining obligation, never UI paid_amount.
     const remaining = (dashSp && dashSp.remainingFils != null)
@@ -844,6 +890,8 @@ async function applyCollection(item, dashSp) {
     }, payKey);
     if (USERS[S.user]?.role === "owner" && sub && sub.receiptId) {
       await engineCommand("approveBankReceipt", { receiptId: sub.receiptId }, "apprbank-" + sub.receiptId);
+    } else if (sub && sub.receiptId) {
+      S._pendingMoneyNotice = "تم إرسال التحويل — قيد الاعتماد";
     }
   } else {
     await engineCommand("createCashReceipt", {
@@ -922,6 +970,12 @@ async function syncOccupancyAndTenant(item, dashSp) {
   if (!item._spaceId) return;
   const occ = item.status === "staff" ? "staff" : item.status === "vacant" ? "vacant" : "rented";
   const engineOcc = dashSp ? (dashSp.occupancy || "vacant") : null;
+  // A past month can still display the old contract after live occupancy is staff.
+  // Saving that card must not write the live occupancy back to rented.
+  const liveStaffZero = dashSp
+    && dashSp.liveOccupancy === "staff"
+    && !(Number(dashSp.staffRentFils) > 0);
+  if (occ === "rented" && liveStaffZero && engineOcc !== "staff") return;
   let rentalId = item._rentalId || dashSp?.rentalId || null;
 
   // Collecting retained arrears on an already-vacant space must NOT mint a new rental.
@@ -943,27 +997,34 @@ async function syncOccupancyAndTenant(item, dashSp) {
   // (start-date / quiet saves used to clear item.tenant="" → TENANT_REQUIRED).
   if (occ === "vacant" || occ === "staff") {
     const mustClose = (engineOcc && engineOcc !== occ) || !!rentalId;
-    if (rentalId) {
+    if (occ === "staff") {
+      // 0 is valid staff accommodation. A typed positive amount is a charge.
+      // Do not replace either value with an implicit zero after the save.
+      const staffRentFils = aedToFils(item.rent);
+      try {
+        await engineCommand("setSpaceOccupancy", {
+          spaceId: item._spaceId,
+          occupancy: "staff",
+          staffRentFils,
+          staffEffectivePeriod: periodOfMonth(S.year, S.month),
+        }, intentKey("occ-staff", item._spaceId, rentalId || "none", staffRentFils, periodOfMonth(S.year, S.month)));
+      } catch (e2) {
+        const c2 = String((e2 && (e2.message || e2.code)) || e2);
+        if (!/NOTHING_TO_UPDATE|SPACE_/.test(c2)) throw e2;
+      }
+      item.rent = staffRentFils / 100;
+    } else if (rentalId) {
       try {
         // CASE B — real vacate/evict: always retain arrears when unpaid debt exists.
         await engineCommand("endTenancy", {
           rentalId,
           endDate: engineToday(),
-          reason: occ === "staff" ? "تحويل لموظفين من الشاشة" : "إخلاء وتحويل لفارغ من الشاشة",
+          reason: "إخلاء وتحويل لفارغ من الشاشة",
           arrearsDecision: "retain",
         }, intentKey("end-tenancy", rentalId, "retain"));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/RENTAL_ALREADY_CLOSED|RENTAL_NOT_ACTIVE|RENTAL_NOT_FOUND/.test(code)) throw e;
-      }
-      if (occ === "staff") {
-        try {
-          await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: "staff" },
-            intentKey("occ-staff", item._spaceId, rentalId));
-        } catch (e2) {
-          const c2 = String((e2 && (e2.message || e2.code)) || e2);
-          if (!/NOTHING_TO_UPDATE|SPACE_/.test(c2)) throw e2;
-        }
       }
     } else if (engineOcc !== occ) {
       await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: occ },
@@ -979,13 +1040,13 @@ async function syncOccupancyAndTenant(item, dashSp) {
       item.collectionMethod = "";
       item.collectedBy = "";
       item._collectDraft = false;
-      item.rent = 0;
       item.start_date = "";
       item.end_date = "";
       item.due_date = "";
       item.draftClearedByVacate = true;
       item.draftSessionId = "";
       item.draftForRentalId = "";
+      if (occ !== "staff") item.rent = 0;
       item.note = occ === "staff" ? "موظفين" : "فارغ";
     } else {
       // Already vacant/staff with no live rental: keep draft fields for the next rent save.
@@ -996,8 +1057,13 @@ async function syncOccupancyAndTenant(item, dashSp) {
   }
 
   rentalId = item._rentalId || dashSp?.rentalId || null;
+  // Period rental is canonical. Edit it. Do not fall through to createRental.
+  if (!item._rentalId && dashSp && dashSp.rentalId) {
+    item._rentalId = dashSp.rentalId;
+    rentalId = dashSp.rentalId;
+  }
 
-  // Vacant → rented: createRental must receive the FULL validated payload in one shot.
+  // Vacant → rented: createRental only when this period has no rental.
   // Do NOT setSpaceOccupancy(rented) first — that left partial occupancy when tenant
   // was missing, and createRental itself sets occupancy=rented on success.
   if (!rentalId && occ === "rented") {
@@ -1108,6 +1174,13 @@ async function syncOccupancyAndTenant(item, dashSp) {
   // Existing rental (or create just succeeded): tenant / rent / schedule patches only.
   rentalId = item._rentalId || dashSp?.rentalId || rentalId || null;
   if (rentalId && occ === "rented") {
+    const rentFilsNow = aedToFils(item.rent);
+    if (!(rentFilsNow > 0)) {
+      const err = new Error("RENT_NOT_POSITIVE");
+      err.code = "RENT_NOT_POSITIVE";
+      err.field = "rent";
+      throw err;
+    }
     const tenantChanged = item.tenant && item.tenant !== (dashSp?.tenantName || "");
     const phoneChanged = item.phone && item.phone !== (dashSp?.tenantPhone || "");
     if (tenantChanged || phoneChanged) {
@@ -1129,26 +1202,56 @@ async function syncOccupancyAndTenant(item, dashSp) {
     const rentFils = aedToFils(item.rent);
     if (engineDue !== rentFils) {
       const effectivePeriod = periodOfMonth(S.year, S.month);
-      await engineCommand("updateRentalRent", {
+      const rentResult = await engineCommand("updateRentalRent", {
         rentalId,
         contractualAmountFils: rentFils,
         effectivePeriod,
       }, intentKey("rent", rentalId, rentFils, effectivePeriod));
+      const frozenIds = (rentResult && rentResult.receiptFrozenObligationIds) || [];
+      const curOb = item._obligationId || (dashSp && dashSp.obligationId) || null;
+      if (curOb && frozenIds.indexOf(curOb) >= 0) {
+        const keptAed = filsToAed(engineDue);
+        const requestedAed = filsToAed(rentFils);
+        const laterRevised = ((rentResult && rentResult.revisedObligationIds) || []).length;
+        item._rentPeriodFrozen = true;
+        item._rentFrozenDueAed = keptAed;
+        item._rentRequestedAed = requestedAed;
+        item._rentLaterRevised = laterRevised;
+        S._rentFreezeNotice = {
+          spaceId: item._spaceId,
+          keptAed,
+          requestedAed,
+          laterRevised,
+        };
+      }
     }
+  }
+  if (rentalId && occ === "rented" && engineOcc === "staff" && aedToFils(item.rent) > 0) {
+    await engineCommand("setSpaceOccupancy", { spaceId: item._spaceId, occupancy: "rented" },
+      intentKey("occ-from-staff", item._spaceId, rentalId));
   }
   // Definitive due rule: contract start day-of-month is the recurring due day.
   if (rentalId && occ === "rented" && item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date)) {
-    const wantDay = Number(item.start_date.slice(8, 10)) || 1;
+    const contractStart = String(item._contractStart || dashSp?.contractStartDate || "").slice(0, 10);
+    let startForSchedule = item.start_date;
+    // October's cycle date must not be stored as the contract start (that uncovered September).
+    if (/^\d{4}-\d{2}-\d{2}$/.test(contractStart) && startForSchedule.slice(0, 7) > contractStart.slice(0, 7)) {
+      if (startForSchedule !== contractStart) {
+        S._scheduleNotice = "تم حفظ بقية البيانات. تاريخ بداية العقد لم يتغيّر: شهر لاحق لا يُغطّي شهراً سابقاً.";
+      }
+      startForSchedule = contractStart;
+    }
+    const wantDay = Number(startForSchedule.slice(8, 10)) || 1;
     const haveDay = Number(dashSp?.dueDayOfMonth || 0);
-    const haveStart = dashSp?.startDate || "";
-    if (haveDay !== wantDay || haveStart !== item.start_date) {
+    const haveStart = /^\d{4}-\d{2}-\d{2}$/.test(contractStart) ? contractStart : String(dashSp?.contractStartDate || "");
+    if ((haveStart && haveStart !== startForSchedule) || (haveDay !== wantDay)) {
       try {
         await engineCommand("updateRentalSchedule", {
           rentalId,
-          startDate: item.start_date,
+          startDate: startForSchedule,
           dueDayOfMonth: Math.min(31, Math.max(1, wantDay)),
           effectivePeriod: periodOfMonth(S.year, S.month),
-        }, intentKey("sched", rentalId, item.start_date, wantDay, S.year, S.month));
+        }, intentKey("sched", rentalId, startForSchedule, wantDay, S.year, S.month));
       } catch (e) {
         const code = String((e && (e.message || e.code)) || e);
         if (!/NOTHING_TO_UPDATE/.test(code)) throw e;
@@ -1327,6 +1430,9 @@ async function syncDeletedMoney(data) {
 }
 
 async function applyEngineDiff(data) {
+  S._rentFreezeNotice = null;
+  S._pendingMoneyNotice = null;
+  S._scheduleNotice = null;
   const dashSpaces = [];
   for (const u of ((S._dash && S._dash.unitsTree) || [])) {
     for (const sp of (u.spaces || [])) dashSpaces.push(sp);
@@ -1390,7 +1496,7 @@ async function applyEngineDiff(data) {
       item._commitIntent = false;
       console.error("applyEngineDiff item failed", item._spaceId, e);
       const code = String((e && (e.message || e.code)) || e);
-      if (/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|TENANT_REQUIRED|RENT_REQUIRED/i.test(code)) {
+      if (/PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|TENANT_REQUIRED|RENT_REQUIRED|RENT_NOT_POSITIVE/i.test(code)) {
         stripFailedCollectPaint(item, dashSpaceById(item._spaceId));
       }
       errors.push(e);
@@ -1492,6 +1598,21 @@ function unsyncedRowsFrom(data) {
 }
 function mergeUnsyncedFinancial(serverData, previous) {
   if (!serverData) return serverData;
+  if (previous && typeof partitionOccupancyFromServer === "function") {
+    const locals = new Map();
+    for (const u of (previous.units || [])) {
+      for (const p of (u.partitions || [])) if (p && p._spaceId) locals.set(p._spaceId, p);
+    }
+    for (const u of (previous.full || [])) if (u && u._spaceId) locals.set(u._spaceId, u);
+    const apply = (p) => {
+      if (!p || !p._spaceId) return p;
+      return partitionOccupancyFromServer(p, locals.get(p._spaceId));
+    };
+    for (const u of (serverData.units || [])) {
+      if (u && Array.isArray(u.partitions)) u.partitions = u.partitions.map(apply);
+    }
+    if (Array.isArray(serverData.full)) serverData.full = serverData.full.map(apply);
+  }
   const prev = unsyncedRowsFrom(previous);
   const seenTx = new Set((serverData.transactions || []).map((t) => String(t._engineId || "") + "|" + String(t.date || "") + "|" + String(t.amount || "") + "|" + String(t.desc || "")));
   for (const t of prev.tx) {
@@ -1571,9 +1692,13 @@ function extrasPatchFromData(data) {
   const touchedSpaceIds = [];
   const baseSpaces = base.spaces && typeof base.spaces === "object" ? base.spaces : {};
   for (const [id, fields] of Object.entries(full.spaces || {})) {
-    if (JSON.stringify(baseSpaces[id] || null) !== JSON.stringify(fields)) {
+    const delta = typeof changedSpaceFields === "function"
+      ? changedSpaceFields(baseSpaces[id], fields)
+      : null;
+    const patch = delta || fields;
+    if (patch && Object.keys(patch).length) {
       touchedSpaceIds.push(id);
-      spacePatches[id] = fields;
+      spacePatches[id] = patch;
     }
   }
   if (touchedSpaceIds.length) scopes.push("spaces");
@@ -1735,7 +1860,7 @@ async function setDoc(ref, data) {
       } catch (e) {
         console.error(e);
         const code = String((e && (e.message || e.code)) || e);
-        const keepDraft = /TENANT_REQUIRED|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED/i.test(code);
+        const keepDraft = /TENANT_REQUIRED|RENT_NOT_POSITIVE|RENT_REQUIRED|START_DATE_REQUIRED|PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|IDEMPOTENCY_PAYLOAD_MISMATCH|AMOUNT_EXCEEDS_HOLDING|INVALID_AMOUNT|COLLECTION_NOT_READY|COLLECTION_REFRESH_FAILED|OBLIGATION_GENERATE_FAILED|ARREARS_CONFIRMATION_REQUIRED/i.test(code);
         const moneyFail = /PARTIAL_AMOUNT_REQUIRED|AMOUNT_EXCEEDS_REMAINING|COLLECTION_|createCash|submitBank|uncollect|AMOUNT_EXCEEDS_HOLDING/i.test(code);
         const transport = isFinancialTransportError(e) || /OFFLINE_FINANCIAL/i.test(code);
         if (transport) {

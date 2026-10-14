@@ -23,7 +23,7 @@ test("vacate occupancy opIds are cycle-safe", () => {
   // cannot replay the previous close. Staff occupancy after close also includes rentalId.
   // setSpaceOccupancy("occ") runs only when there is no rental, and the key is norent.
   assert.match(bridge, /intentKey\("end-tenancy", rentalId, "retain"\)/);
-  assert.match(bridge, /intentKey\("occ-staff", item\._spaceId, rentalId\)/);
+  assert.match(bridge, /intentKey\("occ-staff", item\._spaceId, rentalId \|\| "none", staffRentFils, periodOfMonth\(S\.year, S\.month\)\)/);
   assert.match(bridge, /intentKey\("occ", item\._spaceId, occ, "norent"\)/);
   assert.doesNotMatch(bridge, /intentKey\("occ-force"/);
 });
@@ -54,7 +54,7 @@ test("revenue labeled as cumulative balance", () => {
 test("assembled index includes bridge fixes after assemble", () => {
   assert.match(assembled, /formatEngineError/);
   assert.match(assembled, /intentKey\("end-tenancy", rentalId, "retain"\)/);
-  assert.match(assembled, /intentKey\("occ-staff", item\._spaceId, rentalId\)/);
+  assert.match(assembled, /intentKey\("occ-staff", item\._spaceId, rentalId \|\| "none", staffRentFils, periodOfMonth\(S\.year, S\.month\)\)/);
   assert.match(assembled, /intentKey\("occ", item\._spaceId, occ, "norent"\)/);
   assert.match(assembled, /إلغاء الإيداع/);
   assert.match(assembled, /رصيد تراكمي/);

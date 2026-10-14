@@ -259,7 +259,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
    * rental history — NEVER from live space.occupancy alone (Oct vacate must not paint Sep vacant).
    */
   const liveActiveRental = (spaceId) => rentals.find((r) => r.spaceId === spaceId && r.state === "active") || null;
-  const periodRental = (spaceId) => rentalForPeriod(spaceId, rentals, period);
+  const periodRental = (spaceId) => rentalForPeriod(spaceId, rentals, period, allObligations);
   // Latest cycle across periods — renew button metadata ONLY (never money/status for this period).
   const latestCycleForRental = (rentalId) => {
     if (!rentalId) return null;
@@ -342,12 +342,21 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
         .slice()
         .sort((a, b) => spacePartNum(a) - spacePartNum(b) || String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }))
         .map((sp) => {
-          const rental = periodRental(sp.id);
-          const liveRental = liveActiveRental(sp.id);
           const periodOcc = occupancyForPeriod({
-            space: sp, rentals, period, asOfDate,
+            space: sp, rentals, period, asOfDate, obligations: allObligations,
           });
-          const v = viewFor(sp.id, rental?.id || null);
+          const covering = periodRental(sp.id);
+          const staffAgreement = periodOcc === "staff"
+            ? rentals.find((r) =>
+              r && r.spaceId === sp.id && r.state === "active" && r.purpose === "staff"
+              && rentalCoversPeriod(r, period)
+            ) || null
+            : null;
+          const rental = periodOcc === "staff" ? staffAgreement : covering;
+          const liveRental = periodOcc === "staff" ? staffAgreement : liveActiveRental(sp.id);
+          const v = periodOcc === "staff"
+            ? (rental ? (views.find((row) => row.spaceId === sp.id && row.rentalId === rental.id) || null) : null)
+            : viewFor(sp.id, rental?.id || null);
           const display = spaceDisplay({
             space: sp,
             view: v,
@@ -409,6 +418,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             // Period-aware occupancy (not live space.occupancy).
             occupancy: periodOcc,
             liveOccupancy: sp.occupancy || "vacant",
+            staffRentFils: Number.isSafeInteger(sp.staffRentFils) ? sp.staffRentFils : null,
             rentalId: rental?.id || null,
             rentalState: rental?.state || null,
             // Historical tenant for the selected month — not the live successor tenant.
@@ -566,13 +576,15 @@ export function bankReceiptHistoryRows({ receipts, viewerUserId, isOwner, nameOf
 function spaceDisplay({ space, view, rental, period, asOfDate, occupancyOverride = null }) {
   const occupancy = occupancyOverride || space.occupancy || "vacant";
   if (occupancy === "staff") {
-    if (view && Number(view.remainingFils || 0) > 0) {
+    // A positive staff charge is the obligation view. Zero staff rent is not a charge,
+    // even when an earlier rented month still has a recognized receipt.
+    if (view) {
       return {
         status: "staff",
-        dueFils: view.dueFils,
-        paidFils: view.paidFils,
-        remainingFils: view.remainingFils,
-        dueDate: view.dueDate,
+        dueFils: Number(view.dueFils || 0),
+        paidFils: Number(view.paidFils || 0),
+        remainingFils: Number(view.remainingFils || 0),
+        dueDate: view.dueDate || null,
       };
     }
     return { status: "staff", dueFils: 0, paidFils: 0, remainingFils: 0, dueDate: null };
@@ -754,24 +766,42 @@ export function buildDashboardFromDump(db, period, asOfDate) {
 
   // Period-aware space projection (tests + callers must not read live occupancy as history).
   const spaces = spacesRaw.map((sp) => {
-    const rental = rentalForPeriod(sp.id, rentals, period);
+    const occ = occupancyForPeriod({ space: sp, rentals, period, asOfDate, obligations: allObligations });
+    const covering = rentalForPeriod(sp.id, rentals, period, allObligations);
+    const staffAgreement = occ === "staff"
+      ? rentals.find((r) =>
+        r && r.spaceId === sp.id && r.state === "active" && r.purpose === "staff"
+        && rentalCoversPeriod(r, period)
+      ) || null
+      : null;
+    const rental = occ === "staff" ? staffAgreement : covering;
     const periodOb = rental
       ? allObligations.find((o) => o.rentalId === rental.id && o.period === period && o.state === "active")
       : null;
-    const occ = occupancyForPeriod({ space: sp, rentals, period, asOfDate });
-    const v = views.find((x) => x.spaceId === sp.id) || null;
+    const v = occ === "staff"
+      ? (rental ? (views.find((x) => x.spaceId === sp.id && x.rentalId === rental.id) || null) : null)
+      : (views.find((x) => x.spaceId === sp.id) || null);
+    const agreed = Number.isSafeInteger(sp.staffRentFils) ? sp.staffRentFils : 0;
     return {
       ...sp,
       liveOccupancy: sp.occupancy || "vacant",
       occupancy: occ,
+      staffRentFils: Number.isSafeInteger(sp.staffRentFils) ? sp.staffRentFils : null,
       rentalId: rental?.id || null,
       tenantName: tenantNameForPeriod(rental, period, periodOb?.tenantNameSnapshot),
       tenantPhone: tenantPhoneForPeriod(rental, period),
-      obligationId: v?.obligationId || periodOb?.id || null,
-      dueFils: v?.dueFils ?? periodOb?.amountFils ?? rentAmountForPeriod(rental, period, null),
+      obligationId: occ === "staff"
+        ? (v?.obligationId || null)
+        : (v?.obligationId || periodOb?.id || null),
+      dueFils: occ === "staff"
+        ? (v ? Number(v.dueFils || 0) : 0)
+        : (v?.dueFils ?? periodOb?.amountFils ?? rentAmountForPeriod(rental, period, null)),
+      paidFils: v?.paidFils || 0,
+      remainingFils: occ === "staff" ? (v ? Number(v.remainingFils || 0) : 0) : (v?.remainingFils || 0),
       status: occ === "vacant" || occ === "staff"
         ? occ
         : (v?.status || "not_due"),
+      staffAgreementFils: occ === "staff" ? agreed : null,
     };
   });
 
@@ -785,8 +815,12 @@ export function buildDashboardFromDump(db, period, asOfDate) {
         kind: u.kind,
         isWhole: u.kind === "whole",
         spaces: mySpaces.map((sp) => {
-          const rental = rentalForPeriod(sp.id, rentals, period);
-          const v = views.find((x) => x.spaceId === sp.id) || null;
+          const rental = sp.occupancy === "staff"
+            ? (rentals.find((r) => r && r.id === sp.rentalId && r.purpose === "staff") || null)
+            : rentalForPeriod(sp.id, rentals, period, allObligations);
+          const v = sp.occupancy === "staff"
+            ? (rental ? (views.find((x) => x.spaceId === sp.id && x.rentalId === rental.id) || null) : null)
+            : (views.find((x) => x.spaceId === sp.id) || null);
           const display = spaceDisplay({
             space: sp,
             view: v,

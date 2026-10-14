@@ -110,33 +110,135 @@ export function lastDayOfPeriod(period) {
   return `${p}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
 }
 
+function isoDay(value) {
+  const s = String(value || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function earlierIso(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return a <= b ? a : b;
+}
+
+/**
+ * Start date used for period coverage.
+ * A later month's schedule save can move `startDate` forward (Sep 1 → Oct 1)
+ * while the September rent revision and September obligation remain. Coverage
+ * keeps the earlier month. It does not rewrite the stored startDate.
+ * Pass `obligations` so a moved start with no revision row still covers the
+ * month that already has an active obligation.
+ */
+export function rentalCoverageStart(rental, obligations = null) {
+  if (!rental) return null;
+  let start = isoDay(rental.startDate);
+  const pull = (iso) => { start = earlierIso(start, isoDay(iso)); };
+  for (const rev of [...(rental.rentRevisions || []), ...(rental.tenantRevisions || [])]) {
+    const p = rev && String(rev.effectivePeriod || "");
+    if (/^\d{4}-\d{2}$/.test(p)) pull(`${p}-01`);
+  }
+  if (Array.isArray(obligations)) {
+    for (const o of obligations) {
+      if (!o || o.rentalId !== rental.id) continue;
+      if (o.state === "cancelled" || o.baselineExcluded === true) continue;
+      if (o.cancelledAsFutureUnpaidOnVacate === true) continue;
+      const p = o.period || String(o.dueDate || o.cycleStart || "").slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(p)) pull(`${p}-01`);
+    }
+  }
+  return start;
+}
+
 /**
  * Whether a rental's occupancy lifecycle covers month `period`.
  * endDate is the vacancy effective date (exclusive end of occupancy):
  *   start Sep 1, vacate Oct 1 → September covered, October not.
  * Past months stay historically rented after a later vacancy.
+ * A later forward move of startDate does not uncover an earlier month that
+ * still has a revision or an active obligation.
  */
-export function rentalCoversPeriod(rental, period) {
+export function rentalCoversPeriod(rental, period, obligations = null) {
   if (!rental || !period) return false;
   if (rental.baselineExcluded === true) return false;
-  const start = String(rental.startDate || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return false;
+  const start = rentalCoverageStart(rental, obligations);
+  if (!start) return false;
   if (periodOf(start) > period) return false;
   const end = rental.endDate ? String(rental.endDate).slice(0, 10) : null;
   if (!end) return true; // still open (or closed without end — treat as covering)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return true;
   // Covered iff vacancy effective date is after the last day of the period.
+  // An explicit end inside the month wins over a leftover obligation.
   return end > lastDayOfPeriod(period);
 }
 
+/**
+ * A new open contract conflicts when another rental already covers its start
+ * period, or when the new contract would stay open into a later contract.
+ * Historical rentals that ended before the start period are not a conflict.
+ * Returns null when this space/period is free for a new coverage.
+ */
+export function findPeriodCoverageConflict({
+  spaceId, startDate, endDate = null, rentals, obligations = null, excludeRentalId = null,
+}) {
+  const start = String(startDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return null;
+  const startPeriod = periodOf(start);
+  const candidate = {
+    id: "__candidate__",
+    spaceId,
+    startDate: start,
+    endDate: endDate || null,
+    state: "active",
+    baselineExcluded: false,
+  };
+  for (const other of rentals || []) {
+    if (!other || other.spaceId !== spaceId || other.baselineExcluded === true) continue;
+    if (excludeRentalId && other.id === excludeRentalId) continue;
+    if (rentalCoversPeriod(other, startPeriod, obligations)) {
+      return {
+        period: startPeriod,
+        rentalId: other.id,
+        reason: "start_period_covered",
+      };
+    }
+    const otherStart = rentalCoverageStart(other, obligations);
+    if (!otherStart) continue;
+    let otherPeriod;
+    try { otherPeriod = periodOf(otherStart); } catch { continue; }
+    if (otherPeriod > startPeriod && rentalCoversPeriod(candidate, otherPeriod, obligations)) {
+      return {
+        period: otherPeriod,
+        rentalId: other.id,
+        reason: "candidate_covers_later_contract",
+      };
+    }
+  }
+  return null;
+}
+
 /** Rental that was valid for this space during `period` (active or closed history). */
-export function rentalForPeriod(spaceId, rentals, period) {
+export function rentalForPeriod(spaceId, rentals, period, obligations = null) {
   const hits = (rentals || []).filter(
-    (r) => r && r.spaceId === spaceId && rentalCoversPeriod(r, period),
+    (r) => r && r.spaceId === spaceId && rentalCoversPeriod(r, period, obligations),
   );
   if (!hits.length) return null;
-  hits.sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")));
+  hits.sort((a, b) => String(rentalCoverageStart(a, obligations) || a.startDate || "").localeCompare(
+    String(rentalCoverageStart(b, obligations) || b.startDate || ""),
+  ));
   return hits[hits.length - 1];
+}
+
+/**
+ * Save routing for one space in the selected period.
+ * An existing period rental is edited or closed. Create runs only when that
+ * period has no rental — never as a fallback that would hit SPACE_ALREADY_RENTED.
+ */
+export function rentalSaveAction({ periodRentalId, itemStatus }) {
+  const occ = itemStatus === "staff" ? "staff" : itemStatus === "vacant" ? "vacant" : "rented";
+  if (periodRentalId && occ === "rented") return { action: "edit", rentalId: periodRentalId, create: false };
+  if (periodRentalId) return { action: "close", rentalId: periodRentalId, create: false };
+  if (occ === "rented") return { action: "create", rentalId: null, create: true };
+  return { action: "occupancy", rentalId: null, create: false };
 }
 
 /** Latest revision whose effectivePeriod is on or before `period`. */
@@ -195,17 +297,22 @@ export function isObligationAfterTenancyEnd(obligation, rental) {
 /**
  * Period-aware occupancy for dashboards. Never use live space.occupancy alone
  * to reconstruct a past month.
- * - Covering rental → rented
- * - Else staff only when live space is staff AND selected period is current/future
- * - Else vacant
+ * - Live staff on the current or a later month stays staff, even when a staff
+ *   agreement rental covers that month. The rent field is the staff amount.
+ * - An earlier month stays rented when a contract covered it.
+ * - Otherwise vacant.
  */
-export function occupancyForPeriod({ space, rentals, period, asOfDate = null }) {
-  if (rentalForPeriod(space?.id || space?.spaceId, rentals, period)) return "rented";
+export function occupancyForPeriod({ space, rentals, period, asOfDate = null, obligations = null }) {
   const live = space?.occupancy || "vacant";
+  const asOfPeriod = asOfDate ? periodOf(String(asOfDate).slice(0, 10)) : period;
   if (live === "staff") {
-    const asOfPeriod = asOfDate ? periodOf(String(asOfDate).slice(0, 10)) : period;
+    const from = /^\d{4}-\d{2}$/.test(String(space?.staffEffectivePeriod || ""))
+      ? String(space.staffEffectivePeriod)
+      : null;
+    if (from && String(period) >= from) return "staff";
     if (String(period) >= String(asOfPeriod)) return "staff";
   }
+  if (rentalForPeriod(space?.id || space?.spaceId, rentals, period, obligations)) return "rented";
   return "vacant";
 }
 

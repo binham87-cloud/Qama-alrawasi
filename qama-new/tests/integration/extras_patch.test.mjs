@@ -133,6 +133,6 @@ test("the month screen sends a scoped patch and names deletions", () => {
   const shell = readFileSync(new URL("../../src/frontend/old-qama-shell.html", import.meta.url), "utf8");
   assert.match(bridge, /writeMode: "patch"/);
   assert.match(bridge, /scopes: patch\.scopes\.join\(/);
-  assert.match(shell, /_extrasRemoved\.dailyBookings/);
+  assert.match(shell, /_extrasRemoved\[listName\]/);
   assert.match(shell, /data-testid":"holding-unallocated"/);
 });

@@ -52,10 +52,14 @@ service cloud.firestore {
     // ---- audit and idempotency: owner may read, nobody may write ----
     match /auditEvents/{id} { allow read: if isOwner(); allow write: if false; }
     match /operations/{id}  { allow read: if false;     allow write: if false; }
-    match /loginAttempts/{id} { allow read, write: if false; }
 
     // ---- read model ----
     match /periodSummaries/{id} { allow read: if isStaff(); allow write: if false; }
+
+    // ---- old-UI persistence (written only by commands) ----
+    match /uiConfig/{id}   { allow read: if isStaff(); allow write: if false; }
+    match /uiRequests/{id} { allow read: if isStaff(); allow write: if false; }
+    match /uiPeriods/{id}  { allow read: if isStaff(); allow write: if false; }
 
     // Anything not named above is denied.
     match /{document=**} { allow read, write: if false; }

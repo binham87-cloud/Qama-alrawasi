@@ -14,7 +14,7 @@ import {
   assertReceiptFits, assertDepositFitsCustody, assertCashReversalFitsSharedHolding,
   periodOf, dueDateFor, obligationIdFor, depositSourcePeriod,
   assertPositiveFils, isFils, isPlaceholderTenant, parseAedToFils,
-  rentalCoversPeriod, isObligationAfterTenancyEnd,
+  rentalCoversPeriod, isObligationAfterTenancyEnd, findPeriodCoverageConflict,
 } from "../domain/finance.mjs";
 import {
   buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
@@ -141,7 +141,197 @@ async function reverseLiveReceiptsForRental(ctx, rentalId, reason) {
 
 /** Close an active rental. By default does NOT reverse live receipts (إخلاء ≠ إلغاء تحصيل).
  *  Pass reverseLiveMoney:true only for legacy emergency paths — prefer uncollectObligation. */
-async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, reverseLiveMoney = false, retainArrears = false }) {
+/**
+ * Staff occupancy: from the staff month forward, unpaid rent is not an arrears
+ * balance. Recognized receipts are never reversed or deleted. Months before the
+ * staff effective period stay as historical rented money.
+ * Each obligation is written at most once.
+ */
+async function applyStaffZeroRent(ctx, rentalId, staffPeriod, reason) {
+  const period = /^\d{4}-\d{2}$/.test(String(staffPeriod || ""))
+    ? String(staffPeriod)
+    : periodOf(String(staffPeriod || ctx.now).slice(0, 10));
+  const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rentalId]]);
+  const cancelledObligationIds = [];
+  const cappedObligationIds = [];
+  for (const ob of obligations) {
+    if (!ob || ob.state !== "active" || ob.baselineExcluded === true) continue;
+    const due = String(ob.dueDate || `${ob.period || "9999-99"}-01`).slice(0, 10);
+    const obPeriod = ob.period || periodOf(due);
+    if (String(obPeriod) < String(period)) continue;
+    const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
+    const pending = receipts.filter((r) => r.state === RECEIPT_STATE.PENDING);
+    if (pending.length) continue;
+    const paid = receipts
+      .filter((r) => r.state === RECEIPT_STATE.RECOGNIZED)
+      .reduce((s, r) => s + Number(r.amountFils || 0), 0);
+    const future = String(obPeriod) > String(period);
+    if (paid <= 0) {
+      ctx.tx.update("obligations", ob.id, {
+        state: "cancelled",
+        cancelledBy: ctx.actor.userId,
+        cancelledAt: ctx.now,
+        cancelReason: reason,
+        staffZeroRent: true,
+        cancelledAsFutureUnpaidOnVacate: future,
+      });
+      cancelledObligationIds.push(ob.id);
+      continue;
+    }
+    // A recognized receipt stays in its original month. Staff does not suppress
+    // it and does not reverse it. Only an unpaid remainder is released.
+    if (Number(ob.amountFils || 0) > paid) {
+      ctx.tx.update("obligations", ob.id, {
+        amountFils: paid,
+        staffUnpaidReleased: true,
+        staffReleasedAt: ctx.now,
+      });
+      cappedObligationIds.push(ob.id);
+    }
+  }
+  return { cancelledObligationIds, cappedObligationIds };
+}
+
+/**
+ * Staff rent rule:
+ * - 0 fils: accommodation. No obligation, no target, no collected income, no receipt.
+ * - greater than 0: one chargeable obligation for the staff month and later months.
+ *   It stays unpaid until a genuine receipt. Recognized receipts are never invented
+ *   and never reversed here. Months before the staff date are not rewritten.
+ */
+async function syncStaffCharge(ctx, space, staffRentFils, { closedRentalIds = [] } = {}) {
+  const today = String(ctx.now).slice(0, 10);
+  const period = periodOf(today);
+  const closedSet = new Set(closedRentalIds);
+  const open = await ctx.tx.query("rentals", [["spaceId", "==", space.id], ["state", "==", "active"]]);
+  const staffRentals = open.filter((r) => r && r.purpose === "staff" && !closedSet.has(r.id));
+  if (!(staffRentFils > 0)) {
+    const closed = [];
+    for (const rental of staffRentals) {
+      const r = await closeRentalInTx(ctx, rental, {
+        endDate: today,
+        reason: "سكن موظفين بدون إيجار",
+        setVacant: false,
+        staffZeroRent: true,
+        reverseLiveMoney: false,
+      });
+      closed.push(r.rentalId);
+    }
+    return { rentalId: null, obligationId: null, amountFils: 0, closedStaffRentalIds: closed };
+  }
+
+  let rental = staffRentals[0] || null;
+  if (!rental) {
+    const spaceRentals = (await ctx.tx.query("rentals", [["spaceId", "==", space.id]])).map((r) => (
+      r && closedSet.has(r.id) ? { ...r, state: "closed", endDate: today } : r
+    ));
+    const spaceObligations = await ctx.tx.query("obligations", [["spaceId", "==", space.id]]);
+    const coverageConflict = findPeriodCoverageConflict({
+      spaceId: space.id,
+      startDate: today,
+      rentals: spaceRentals,
+      obligations: spaceObligations,
+    });
+    if (coverageConflict) throw new DomainError("PERIOD_ALREADY_COVERED", coverageConflict);
+    const id = newId("rental", ctx);
+    const dueDay = Math.min(31, Math.max(1, Number(today.slice(8, 10)) || 1));
+    ctx.tx.create("rentals", id, {
+      id,
+      propertyId: space.propertyId,
+      unitId: space.unitId,
+      spaceId: space.id,
+      tenantName: "موظفين",
+      tenantPhone: null,
+      contractualAmountFils: staffRentFils,
+      dueDayOfMonth: dueDay,
+      startDate: today,
+      endDate: null,
+      state: "active",
+      purpose: "staff",
+      securityDepositFils: 0,
+      ...base(ctx),
+    });
+    rental = {
+      id,
+      propertyId: space.propertyId,
+      unitId: space.unitId,
+      spaceId: space.id,
+      tenantName: "موظفين",
+      contractualAmountFils: staffRentFils,
+      dueDayOfMonth: dueDay,
+      startDate: today,
+      purpose: "staff",
+      state: "active",
+    };
+    audit(ctx, "staff_charge_opened", "rental", id, { amountFils: staffRentFils, period });
+  } else if (Number(rental.contractualAmountFils) !== staffRentFils) {
+    const rentRevisions = Array.isArray(rental.rentRevisions) ? rental.rentRevisions.slice() : [];
+    const startPeriod = periodOf(String(rental.startDate || today).slice(0, 10));
+    if (!rentRevisions.some((r) => r && r.effectivePeriod === startPeriod)) {
+      rentRevisions.push({ effectivePeriod: startPeriod, amountFils: rental.contractualAmountFils });
+    }
+    const nextRentRevs = rentRevisions.filter((r) => r && r.effectivePeriod !== period);
+    nextRentRevs.push({ effectivePeriod: period, amountFils: staffRentFils });
+    ctx.tx.update("rentals", rental.id, {
+      contractualAmountFils: staffRentFils,
+      rentRevisions: nextRentRevs,
+    });
+    rental = { ...rental, contractualAmountFils: staffRentFils };
+  }
+
+  const existingForRental = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
+  const periodHit = (existingForRental || []).find((o) =>
+    o && o.state === "active" && o.baselineExcluded !== true && (
+      o.period === period
+      || String(o.cycleStart || o.dueDate || "").slice(0, 7) === period
+    )
+  );
+  if (periodHit) {
+    const receipts = await ctx.tx.query("receipts", [["obligationId", "==", periodHit.id]]);
+    const live = receipts.filter((r) =>
+      r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING
+    );
+    if (!live.length && Number(periodHit.amountFils) !== staffRentFils) {
+      ctx.tx.update("obligations", periodHit.id, { amountFils: staffRentFils });
+    }
+    return { rentalId: rental.id, obligationId: periodHit.id, amountFils: staffRentFils, closedStaffRentalIds: [] };
+  }
+
+  const fields = buildCycleFields({
+    rentalId: rental.id,
+    cycleStart: today,
+    previousCycleId: null,
+    amountFils: staffRentFils,
+    tenantName: "موظفين",
+    anniversaryDay: rental.dueDayOfMonth,
+  });
+  const already = await ctx.tx.get("obligations", fields.id);
+  if (already) {
+    return { rentalId: rental.id, obligationId: already.id, amountFils: staffRentFils, closedStaffRentalIds: [] };
+  }
+  ctx.tx.create("obligations", fields.id, {
+    id: fields.id,
+    rentalCycleId: fields.rentalCycleId,
+    rentalId: rental.id,
+    propertyId: rental.propertyId || space.propertyId,
+    unitId: rental.unitId || space.unitId,
+    spaceId: space.id,
+    period: fields.period,
+    amountFils: fields.amountFils,
+    dueDate: fields.dueDate,
+    cycleStart: fields.cycleStart,
+    cycleEnd: fields.cycleEnd,
+    previousCycleId: fields.previousCycleId,
+    anniversaryDay: fields.anniversaryDay,
+    tenantNameSnapshot: fields.tenantNameSnapshot,
+    state: "active",
+    purpose: "staff",
+    ...base(ctx),
+  });
+  return { rentalId: rental.id, obligationId: fields.id, amountFils: staffRentFils, closedStaffRentalIds: [] };
+}
+
+async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, reverseLiveMoney = false, retainArrears = false, staffZeroRent = false, staffFromPeriod = null }) {
   const closeReason = reason || "rental closed";
   let reversed = { reversedReceiptIds: [], reversalIds: [] };
   if (reverseLiveMoney) {
@@ -161,7 +351,12 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
   const closedRental = { ...rental, state: "closed", endDate: vacateDay };
 
   let cancelledObligationIds = [];
-  if (retainArrears) {
+  let cappedObligationIds = [];
+  if (staffZeroRent) {
+    const staff = await applyStaffZeroRent(ctx, rental.id, staffFromPeriod || periodOf(vacateDay), closeReason);
+    cancelledObligationIds = staff.cancelledObligationIds;
+    cappedObligationIds = staff.cappedObligationIds;
+  } else if (retainArrears) {
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
     for (const ob of obligations) {
       if (ob.state !== "active") continue;
@@ -215,19 +410,24 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
       },
     );
   }
-  const suppressedFutureIds = await suppressFutureRentMonthObligations(ctx, closedRental, vacateDay);
+  const suppressedFutureIds = staffZeroRent
+    ? []
+    : await suppressFutureRentMonthObligations(ctx, closedRental, vacateDay);
   audit(ctx, "rental_closed", "rental", rental.id, {
     reason: closeReason,
     cancelledObligationIds,
+    cappedObligationIds,
     suppressedFutureObligationIds: suppressedFutureIds,
     reversedReceiptIds: reversed.reversedReceiptIds,
     reversalIds: reversed.reversalIds,
     reverseLiveMoney: !!reverseLiveMoney,
     retainArrears: !!retainArrears,
+    staffZeroRent: !!staffZeroRent,
   });
   return {
     rentalId: rental.id,
     cancelledObligationIds,
+    cappedObligationIds,
     suppressedFutureObligationIds: suppressedFutureIds,
     reversedReceiptIds: reversed.reversedReceiptIds,
     reversalIds: reversed.reversalIds,
@@ -439,6 +639,7 @@ export const PERMISSIONS = Object.freeze({
   createDailyBookingPrepaid: BOTH,
   submitBankReceipt: BOTH, approveBankReceipt: OWNER, rejectBankReceipt: OWNER,
   reverseReceipt: OWNER,
+  restoreReversedReceipt: OWNER,
   submitDeposit: BOTH, approveDeposit: OWNER, rejectDeposit: OWNER, reverseDeposit: OWNER,
   submitExpense: BOTH, approveExpense: OWNER, rejectExpense: OWNER, reverseExpense: OWNER,
   createAccount: OWNER, updateAccount: OWNER,
@@ -465,6 +666,7 @@ const S = {
   str: (max = 200) => ({ kind: "str", max }),
   id: () => ({ kind: "id" }),
   fils: () => ({ kind: "fils" }),
+  filsNonNegative: () => ({ kind: "filsNonNegative" }),
   date: () => ({ kind: "date" }),
   period: () => ({ kind: "period" }),
   int: (min, max) => ({ kind: "int", min, max }),
@@ -480,7 +682,14 @@ export const SCHEMAS = Object.freeze({
   updateUnit: { unitId: S.id(), name: S.opt(S.str(120)), active: S.opt(S.bool()) },
   createSpace: { unitId: S.id(), name: S.str(120) },
   updateSpace: { spaceId: S.id(), name: S.opt(S.str(120)), active: S.opt(S.bool()) },
-  setSpaceOccupancy: { spaceId: S.id(), occupancy: S.enum(OCCUPANCY) },
+  setSpaceOccupancy: {
+    spaceId: S.id(),
+    occupancy: S.enum(OCCUPANCY),
+    /** Staff only. 0 is accommodation. A positive integer is a chargeable amount. Omitted keeps the stored staff amount. */
+    staffRentFils: S.opt(S.filsNonNegative()),
+    /** Staff only. An explicit earlier month is kept. A later month does not erase it. */
+    staffEffectivePeriod: S.opt(S.period()),
+  },
 
   createRental: {
     spaceId: S.id(), tenantName: S.str(160), tenantPhone: S.opt(S.str(40)),
@@ -546,6 +755,7 @@ export const SCHEMAS = Object.freeze({
   approveBankReceipt: { receiptId: S.id() },
   rejectBankReceipt: { receiptId: S.id(), reason: S.str(300) },
   reverseReceipt: { receiptId: S.id(), reason: S.str(300) },
+  restoreReversedReceipt: { receiptId: S.id(), reason: S.str(300) },
 
   submitDeposit: {
     amountFils: S.fils(), depositDate: S.date(), destinationAccountId: S.id(),
@@ -643,6 +853,10 @@ function coerce(command, field, rule, value) {
     case "fils":
       if (!isFils(value)) bad("money must be an integer number of fils");
       if (value <= 0) bad("must be positive");
+      return value;
+    case "filsNonNegative":
+      if (!isFils(value)) bad("money must be an integer number of fils");
+      if (value < 0) bad("must not be negative");
       return value;
     case "date":
       if (typeof value !== "string" || !DATE_RE.test(value)) bad("expected YYYY-MM-DD");
@@ -883,31 +1097,98 @@ const HANDLERS = {
   },
 
   /**
-   * Occupancy is operational. Setting vacant/staff MUST end any active rental and
-   * cancel unpaid obligations — a vacant space cannot remain late with an active due.
+   * Occupancy is operational and separate from the financial status.
+   * Vacant ends a live rental and does not create rent.
+   * Staff stores an explicit rent: 0 is accommodation with no obligation;
+   * a positive amount is an unpaid charge until a real receipt is recorded.
+   * A later staff save that omits staffRentFils does not reset a stored amount.
    */
   async setSpaceOccupancy(ctx) {
     await assertEmployeePeriodOpen(ctx, periodOf(ctx.now.slice(0, 10)));
     const space = await ctx.tx.get("spaces", ctx.payload.spaceId);
     if (!space) throw new DomainError("SPACE_NOT_FOUND");
     const next = ctx.payload.occupancy;
+    const staffRentSpecified = Object.prototype.hasOwnProperty.call(ctx.payload, "staffRentFils");
+    let staffRentFils = null;
+    if (next === "staff") {
+      if (staffRentSpecified) staffRentFils = ctx.payload.staffRentFils;
+      else if (space.occupancy === "staff" && Number.isSafeInteger(space.staffRentFils)) {
+        staffRentFils = space.staffRentFils;
+      } else staffRentFils = 0;
+    }
     const closed = [];
+    const requestedStaffPeriod = /^\d{4}-\d{2}$/.test(String(ctx.payload.staffEffectivePeriod || ""))
+      ? String(ctx.payload.staffEffectivePeriod)
+      : null;
+    const existingStaffPeriod = /^\d{4}-\d{2}$/.test(String(space.staffEffectivePeriod || ""))
+      ? String(space.staffEffectivePeriod)
+      : null;
+    let staffPeriod = null;
+    if (next === "staff") {
+      if (requestedStaffPeriod && (!existingStaffPeriod || requestedStaffPeriod < existingStaffPeriod)) {
+        staffPeriod = requestedStaffPeriod;
+      } else {
+        staffPeriod = existingStaffPeriod || periodOf(ctx.now.slice(0, 10));
+      }
+    }
     if (next === "vacant" || next === "staff") {
       const open = await ctx.tx.query("rentals", [["spaceId", "==", space.id], ["state", "==", "active"]]);
       for (const rental of open) {
+        if (next === "staff" && rental.purpose === "staff") continue;
         const r = await closeRentalInTx(ctx, rental, {
           endDate: ctx.now.slice(0, 10),
           reason: next === "vacant" ? "إفراغ الوحدة" : "تحويل إلى موظفين",
           setVacant: next === "vacant",
+          staffZeroRent: next === "staff",
+          staffFromPeriod: staffPeriod,
+          reverseLiveMoney: false,
         });
         closed.push(r);
       }
     }
-    ctx.tx.update("spaces", space.id, { occupancy: next });
+    if (next === "rented") {
+      const open = await ctx.tx.query("rentals", [["spaceId", "==", space.id], ["state", "==", "active"]]);
+      for (const rental of open) {
+        if (rental.purpose !== "staff") continue;
+        if (!(Number(rental.contractualAmountFils) > 0)) {
+          throw new DomainError("RENT_NOT_POSITIVE", { rentalId: rental.id });
+        }
+        ctx.tx.update("rentals", rental.id, { purpose: null });
+      }
+    }
+    const spacePatch = { occupancy: next };
+    if (next === "staff") {
+      spacePatch.staffRentFils = staffRentFils;
+      spacePatch.staffEffectivePeriod = staffPeriod;
+    }
+    ctx.tx.update("spaces", space.id, spacePatch);
+    let staffCharge = null;
+    if (next === "staff") {
+      const handled = new Set(closed.map((c) => c.rentalId));
+      if (!(staffRentFils > 0)) {
+        const prior = await ctx.tx.query("rentals", [["spaceId", "==", space.id]]);
+        for (const rental of prior) {
+          if (!rental || handled.has(rental.id) || rental.purpose === "staff" || rental.state === "active") continue;
+          await applyStaffZeroRent(ctx, rental.id, staffPeriod, "تحويل إلى موظفين");
+        }
+      }
+      staffCharge = await syncStaffCharge(ctx, { ...space, ...spacePatch }, staffRentFils, {
+        closedRentalIds: closed.map((c) => c.rentalId),
+      });
+    }
     audit(ctx, "occupancy_changed", "space", space.id, {
-      before: space.occupancy, after: next, closedRentals: closed.map((c) => c.rentalId),
+      before: space.occupancy,
+      after: next,
+      staffRentFils,
+      closedRentals: closed.map((c) => c.rentalId),
     });
-    return { spaceId: space.id, occupancy: next, closedRentals: closed };
+    return {
+      spaceId: space.id,
+      occupancy: next,
+      staffRentFils,
+      closedRentals: closed,
+      staffCharge,
+    };
   },
 
   /* ---------- rentals ---------- */
@@ -919,6 +1200,15 @@ const HANDLERS = {
     }
     const open = await ctx.tx.query("rentals", [["spaceId", "==", space.id], ["state", "==", "active"]]);
     if (open.length) throw new DomainError("SPACE_ALREADY_RENTED", { rentalId: open[0].id });
+    const spaceRentals = await ctx.tx.query("rentals", [["spaceId", "==", space.id]]);
+    const spaceObligations = await ctx.tx.query("obligations", [["spaceId", "==", space.id]]);
+    const coverageConflict = findPeriodCoverageConflict({
+      spaceId: space.id,
+      startDate: ctx.payload.startDate,
+      rentals: spaceRentals,
+      obligations: spaceObligations,
+    });
+    if (coverageConflict) throw new DomainError("PERIOD_ALREADY_COVERED", coverageConflict);
 
     const id = newId("rental", ctx);
     ctx.tx.create("rentals", id, {
@@ -958,6 +1248,7 @@ const HANDLERS = {
     const obligations = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
     const revised = [];
     const skippedHistorical = [];
+    const receiptFrozen = [];
     for (const ob of obligations) {
       if (ob.state !== "active") continue;
       const obPeriod = ob.period || (ob.dueDate ? periodOf(ob.dueDate) : null);
@@ -969,7 +1260,10 @@ const HANDLERS = {
       const live = receipts.filter(
         (r) => r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING,
       );
-      if (live.length) continue;
+      if (live.length) {
+        receiptFrozen.push(ob.id);
+        continue;
+      }
       if (ob.amountFils === ctx.payload.contractualAmountFils) continue;
       ctx.tx.update("obligations", ob.id, { amountFils: ctx.payload.contractualAmountFils });
       revised.push(ob.id);
@@ -980,12 +1274,14 @@ const HANDLERS = {
       effectivePeriod,
       revised,
       skippedHistorical,
+      receiptFrozen,
     });
     return {
       rentalId: rental.id,
       effectivePeriod,
       revisedObligationIds: revised,
       skippedHistoricalObligationIds: skippedHistorical,
+      receiptFrozenObligationIds: receiptFrozen,
     };
   },
   /**
@@ -1112,6 +1408,27 @@ const HANDLERS = {
         previousCycleId: fields.previousCycleId,
       };
     }
+    const samePeriod = obligations.find((o) => {
+      if (!o || o.state !== "active" || o.baselineExcluded === true) return false;
+      if (o.period === fields.period) return true;
+      const start = String(o.cycleStart || o.dueDate || "").slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(start) && cyclePeriod(start) === fields.period;
+    });
+    if (samePeriod) {
+      throw new DomainError("PERIOD_OBLIGATION_EXISTS", {
+        obligationId: samePeriod.id, period: fields.period, rentalId: rental.id,
+      });
+    }
+    const spaceRentals = await ctx.tx.query("rentals", [["spaceId", "==", rental.spaceId]]);
+    const spaceObligations = await ctx.tx.query("obligations", [["spaceId", "==", rental.spaceId]]);
+    const renewConflict = findPeriodCoverageConflict({
+      spaceId: rental.spaceId,
+      startDate: nextStart,
+      rentals: spaceRentals,
+      obligations: spaceObligations,
+      excludeRentalId: rental.id,
+    });
+    if (renewConflict) throw new DomainError("PERIOD_ALREADY_COVERED", renewConflict);
 
     const asOf = assertIsoDate(ctx.payload.asOfDate || ctx.now.slice(0, 10));
     const earlyWindowDays = ctx.payload.earlyWindowDays != null ? ctx.payload.earlyWindowDays : 7;
@@ -1215,7 +1532,10 @@ const HANDLERS = {
     for (const rental of rentals) {
       const space = await ctx.tx.get("spaces", rental.spaceId);
       if (!space || space.active === false) continue;
-      if (space.occupancy === "vacant" || space.occupancy === "staff") continue;
+      if (space.occupancy === "vacant") continue;
+      if (space.occupancy === "staff") {
+        if (!(Number(space.staffRentFils) > 0) || rental.purpose !== "staff") continue;
+      }
       if (isPlaceholderTenant(rental.tenantName)) continue;
 
       const start = assertIsoDate(rental.startDate);
@@ -1239,6 +1559,16 @@ const HANDLERS = {
       );
       if (periodHit) continue;
 
+      const spaceRentals = await ctx.tx.query("rentals", [["spaceId", "==", rental.spaceId]]);
+      const spaceObligations = await ctx.tx.query("obligations", [["spaceId", "==", rental.spaceId]]);
+      const otherCoverage = spaceRentals.some((other) =>
+        other && other.id !== rental.id && other.baselineExcluded !== true
+        && rentalCoversPeriod(other, period, spaceObligations)
+      );
+      // A successor that starts after the previous contract ended inside the month
+      // is allowed. Block only when another rental still covers this period.
+      if (otherCoverage) continue;
+
       const prior = (existingForRental || [])
         .filter((o) => o && o.state !== "cancelled")
         .map((o) => ({
@@ -1255,7 +1585,7 @@ const HANDLERS = {
         rentalId: rental.id,
         cycleStart,
         previousCycleId,
-        amountFils: rental.contractualAmountFils,
+        amountFils: space.occupancy === "staff" ? Number(space.staffRentFils) : rental.contractualAmountFils,
         tenantName: rental.tenantName,
         anniversaryDay,
       });
@@ -1319,6 +1649,24 @@ const HANDLERS = {
     await assertEmployeePeriodOpen(ctx, ctx.payload.period);
     const collectorUserId = await collectorFor(ctx);
     const bookingId = ctx.payload.bookingId;
+    const periodDoc = await ctx.tx.get("uiPeriods", `period:${ctx.payload.period}`);
+    let extras = {};
+    if (periodDoc) {
+      try {
+        extras = typeof periodDoc.extrasJson === "string"
+          ? JSON.parse(periodDoc.extrasJson || "{}")
+          : (periodDoc.extras || {});
+      } catch { extras = periodDoc.extras || {}; }
+    }
+    const booking = (extras.dailyBookings || []).find((b) => b && String(b.id) === String(bookingId));
+    if (booking && String(booking.status || "") !== "cancelled") {
+      const expectedFils = Math.round(Number(booking.total) * 100);
+      if (!Number.isFinite(expectedFils) || expectedFils <= 0 || ctx.payload.amountFils !== expectedFils) {
+        throw new DomainError("BOOKING_AMOUNT_MISMATCH", {
+          bookingTotalFils: expectedFils, amountFils: ctx.payload.amountFils,
+        });
+      }
+    }
     // Idempotent: one recognized cash receipt per daily booking.
     const existing = await ctx.tx.query("receipts", [["obligationId", "==", `daily:${bookingId}`]]);
     const live = (existing || []).find(
@@ -1546,6 +1894,73 @@ const HANDLERS = {
     }
     audit(ctx, "receipt_reversed", "receipt", receipt.id, { amountFils: receipt.amountFils, reason: ctx.payload.reason, reversalId });
     return { receiptId: receipt.id, reversalId };
+  },
+
+  /**
+   * Put a reversed receipt back to recognized. The same document is restored:
+   * amount, collection date, collector, and period stay as they were.
+   * The reversal document stays for audit. Deposits are not rewritten.
+   * A second recognized receipt is never created.
+   */
+  async restoreReversedReceipt(ctx) {
+    const receipt = await ctx.tx.get("receipts", ctx.payload.receiptId);
+    if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
+    if (receipt.state === RECEIPT_STATE.RECOGNIZED && receipt.restoredAt) {
+      throw new DomainError("ALREADY_RESTORED");
+    }
+    if (receipt.state !== RECEIPT_STATE.REVERSED) {
+      throw new DomainError("RECEIPT_NOT_REVERSED", { state: receipt.state });
+    }
+    const reversals = await ctx.tx.query("reversals", [["targetId", "==", receipt.id]]);
+    const reversal = (reversals || []).find((row) => row && row.targetType === "receipt");
+    if (!reversal) throw new DomainError("REVERSAL_NOT_FOUND");
+    if (Number(reversal.amountFils) !== Number(receipt.amountFils)) {
+      throw new DomainError("RESTORATION_AMOUNT_MISMATCH", {
+        receiptAmountFils: receipt.amountFils,
+        reversalAmountFils: reversal.amountFils,
+      });
+    }
+    if (receipt.obligationId) {
+      const ob = await ctx.tx.get("obligations", receipt.obligationId);
+      if (!ob || ob.state !== "active") throw new DomainError("OBLIGATION_NOT_ACTIVE");
+      const siblings = await ctx.tx.query("receipts", [["obligationId", "==", receipt.obligationId]]);
+      const otherPaid = (siblings || [])
+        .filter((row) => row && row.id !== receipt.id && row.state === RECEIPT_STATE.RECOGNIZED)
+        .reduce((sum, row) => sum + Number(row.amountFils || 0), 0);
+      if (otherPaid + Number(receipt.amountFils) > Number(ob.amountFils || 0)) {
+        throw new DomainError("AMOUNT_EXCEEDS_REMAINING");
+      }
+    }
+    ctx.tx.update("receipts", receipt.id, {
+      state: RECEIPT_STATE.RECOGNIZED,
+      restoredAt: ctx.now,
+      restoredBy: ctx.actor.userId,
+      restoreReason: ctx.payload.reason,
+      restoredFromReversalId: reversal.id,
+    });
+    if (receipt.method === "bank") {
+      await creditRevenueAccount(ctx, {
+        amountFils: receipt.amountFils,
+        sourceType: "bank_receipt_restore",
+        sourceId: receipt.id,
+        note: ctx.payload.reason,
+      });
+    }
+    audit(ctx, "receipt_restored", "receipt", receipt.id, {
+      amountFils: receipt.amountFils,
+      collectionDate: receipt.collectionDate,
+      period: receipt.period,
+      collectorUserId: receipt.collectorUserId || null,
+      reversalId: reversal.id,
+      reason: ctx.payload.reason,
+    });
+    return {
+      receiptId: receipt.id,
+      amountFils: receipt.amountFils,
+      collectionDate: receipt.collectionDate,
+      period: receipt.period,
+      restored: true,
+    };
   },
 
   /**
@@ -2255,6 +2670,12 @@ async function createReceipt(ctx, extra) {
   assertReceiptFits({
     obligation: ob, receipts: claiming,
     amountFils: ctx.payload.amountFils, asOfDate: ctx.payload.collectionDate,
+  });
+  // Touch the obligation so a concurrent second collection conflicts and retries
+  // against the receipt just written, instead of both passing the remaining check.
+  ctx.tx.update("obligations", ob.id, {
+    lastCollectionOperationId: ctx.operationId,
+    lastCollectionAt: ctx.now,
   });
 
   const id = newId("rcpt", ctx);

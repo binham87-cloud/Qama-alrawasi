@@ -7,7 +7,9 @@
  * step succeeds. On failure it returns to pending with lastError — never left
  * permanently in "processing".
  */
-import { DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant } from "../domain/finance.mjs";
+import {
+  DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant, rentalCoversPeriod,
+} from "../domain/finance.mjs";
 
 const STEP = (requestId, name) => (`cwr-${requestId}-${name}`).slice(0, 140);
 
@@ -101,15 +103,35 @@ async function applySpaceFields(ctx, payload) {
   const fields = payload.fields || payload;
   const space = resolveSpace(ctx.snap, payload);
   if (!space) throw new DomainError("SPACE_NOT_FOUND");
-  await patchSpaceExtras(ctx, space.id, fields);
-
   const status = fields.status;
   const occ = status === "staff" ? "staff" : status === "vacant" ? "vacant" : "rented";
-  let rental = ctx.snap.rentals.find((r) => r.spaceId === space.id && r.state === "active") || null;
+  // Occupancy follows the tenancy that covers THIS request month.
+  // A later active rental must not be closed or edited by an earlier month's save.
+  // Two rentals covering the same month are not auto-picked.
+  const obligations = await queryAll(ctx.db, "obligations");
+  const covers = ctx.snap.rentals.filter((r) => r && r.spaceId === space.id && rentalCoversPeriod(r, ctx.period, obligations));
+  if (covers.length > 1) {
+    throw new DomainError("AMBIGUOUS_TENANCY", {
+      spaceId: space.id,
+      period: ctx.period,
+      rentalIds: covers.map((r) => r.id),
+    });
+  }
+  await patchSpaceExtras(ctx, space.id, fields);
+  const covering = covers[0] || null;
+  const activeOther = ctx.snap.rentals.find((r) => r.spaceId === space.id && r.state === "active") || null;
+  let rental = covering && covering.state === "active" ? covering : null;
 
   if (occ === "vacant" || occ === "staff") {
-    if (rental) {
-      // Real vacate: endTenancy+retain (never reverse money; keep historical arrears).
+    if (occ === "staff") {
+      // Zero is valid. A positive amount on the request is a chargeable staff rent.
+      // An omitted rent field does not reset a previously saved positive amount.
+      const staffPayload = { spaceId: space.id, occupancy: "staff" };
+      if (fields.rent != null && fields.rent !== "") staffPayload.staffRentFils = moneyFils(fields.rent);
+      await ctx.run(ctx.actor, "setSpaceOccupancy", staffPayload, STEP(ctx.requestId, "occ-staff"));
+    } else if (rental) {
+      // Real vacate of the tenancy that covers this period.
+      // endDate stays the approval day — the existing exclusive vacancy rule.
       try {
         await ctx.run(ctx.actor, "endTenancy", {
           rentalId: rental.id,
@@ -121,13 +143,17 @@ async function applySpaceFields(ctx, payload) {
         if (e.code !== "RENTAL_ALREADY_CLOSED" && e.code !== "RENTAL_NOT_ACTIVE") throw e;
       }
       rental = null;
+      await ctx.run(ctx.actor, "setSpaceOccupancy", { spaceId: space.id, occupancy: occ }, STEP(ctx.requestId, "occ"));
+    } else if (!activeOther) {
+      await ctx.run(ctx.actor, "setSpaceOccupancy", { spaceId: space.id, occupancy: occ }, STEP(ctx.requestId, "occ"));
     }
-    await ctx.run(ctx.actor, "setSpaceOccupancy", { spaceId: space.id, occupancy: occ }, STEP(ctx.requestId, "occ"));
     // Clear CURRENT tenant projection in extras — history stays on obligations/receipts.
     await patchSpaceExtras(ctx, space.id, {
       tenant: "", phone: "", start_date: "", end_date: "", due_date: "",
       deposit: "", collectionMethod: "", collectedBy: "", note: occ === "staff" ? "موظفين" : "فارغ",
-      status: occ, draftClearedByVacate: true, rent: 0, paid_amount: 0, partial: false,
+      status: occ, draftClearedByVacate: true,
+      rent: occ === "staff" && fields.rent != null && fields.rent !== "" ? moneyFils(fields.rent) / 100 : 0,
+      paid_amount: 0, partial: false,
     });
     return;
   }
@@ -136,6 +162,9 @@ async function applySpaceFields(ctx, payload) {
   // setSpaceOccupancy(rented) first left partial rented-with-no-tenant state when
   // TENANT_REQUIRED fired — matching the live iPhone failure.
   const rentFils = moneyFils(fields.rent);
+  if (!rental && activeOther) {
+    throw new DomainError("SPACE_ALREADY_RENTED", { rentalId: activeOther.id });
+  }
   if (!rental && rentFils > 0) {
     if (isPlaceholderTenant(fields.tenant)) {
       throw new DomainError("TENANT_REQUIRED", { tenant: fields.tenant });
@@ -157,7 +186,7 @@ async function applySpaceFields(ctx, payload) {
     return;
   } else if (rental) {
     if (fields.tenant || fields.phone) {
-      const patch = { rentalId: rental.id };
+      const patch = { rentalId: rental.id, effectivePeriod: ctx.period };
       if (fields.tenant) patch.tenantName = String(fields.tenant).slice(0, 160);
       if (fields.phone) patch.tenantPhone = String(fields.phone).slice(0, 40);
       try {
@@ -179,6 +208,7 @@ async function applySpaceFields(ctx, payload) {
         await ctx.run(ctx.actor, "updateRentalSchedule", {
           rentalId: rental.id,
           startDate: fields.start_date,
+          effectivePeriod: ctx.period,
         }, STEP(ctx.requestId, "sched"));
       } catch (e) {
         if (e.code !== "NOTHING_TO_UPDATE") throw e;

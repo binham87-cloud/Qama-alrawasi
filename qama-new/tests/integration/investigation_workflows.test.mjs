@@ -32,12 +32,23 @@ test("vacate→rent→vacate: second vacate closes NEW rental (distinct opIds)",
   }, "occ-" + spaceId + "-vacant-" + r1);
   assert.equal(vac1Replay.replay, true);
 
+  await assert.rejects(
+    () => run(db, owner, "createRental", {
+      spaceId,
+      tenantName: "مستأجر متداخل",
+      contractualAmountFils: 10000,
+      dueDayOfMonth: 5,
+      startDate: "2026-09-10",
+    }, opId("rent-overlap")),
+    (err) => err && err.code === "PERIOD_ALREADY_COVERED",
+  );
+
   const r2 = await run(db, owner, "createRental", {
     spaceId,
     tenantName: "مستأجر ثاني",
     contractualAmountFils: 10000,
     dueDayOfMonth: 5,
-    startDate: "2026-09-10",
+    startDate: "2026-11-01",
   }, opId("rent2"));
   assert.ok(r2.rentalId);
   assert.notEqual(r2.rentalId, r1);

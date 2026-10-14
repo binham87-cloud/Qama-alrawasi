@@ -60,9 +60,61 @@ export function mergeDraftPartial(mapped, extra, sp) {
  * - Card/KPI status stays on engine money truth (never force status:"collected" without receipt).
  * - `_collectDraft` + collectionMethod let the open editor keep محصّل + method picker.
  */
+/**
+ * Canonical dashboard occupancy wins over a stale local month snapshot.
+ * A cached فارغ card must not replace a server rented/late/collected partition.
+ */
+/**
+ * Fields the user actually changed on one space.
+ * A full extras blob from a stale client must not be written back over
+ * another device's newer note, phone, or start date.
+ */
+export function changedSpaceFields(baseFields, nextFields) {
+  const prev = baseFields && typeof baseFields === "object" ? baseFields : {};
+  const next = nextFields && typeof nextFields === "object" ? nextFields : {};
+  const delta = {};
+  for (const [key, value] of Object.entries(next)) {
+    if (JSON.stringify(prev[key]) !== JSON.stringify(value)) delta[key] = value;
+  }
+  return delta;
+}
+
+/**
+ * Contract start and phone shown on a rented card come from the rental.
+ * Period extras are a draft only when the server has no committed value.
+ */
+export function displayContractStart({ rented, contractStartDate, cycleStart, extraStart }) {
+  if (rented && contractStartDate) return String(contractStartDate).slice(0, 10);
+  return extraStart || cycleStart || contractStartDate || "";
+}
+
+export function displayTenantPhone({ rented, tenantPhone, extraPhone }) {
+  if (rented && tenantPhone) return String(tenantPhone);
+  return extraPhone || tenantPhone || "";
+}
+
+export function partitionOccupancyFromServer(serverPart, localPart) {
+  if (!serverPart) return serverPart;
+  const st = String(serverPart.status || "");
+  const serverOccupied = st && st !== "vacant" && st !== "staff";
+  const localVacant = !!(localPart && (localPart.status === "vacant" || localPart.status === "staff"));
+  if (!serverOccupied || !localVacant) return serverPart;
+  return {
+    ...serverPart,
+    status: st,
+    tenant: serverPart.tenant || "",
+    note: serverPart.note === "فارغ" ? "" : (serverPart.note || ""),
+    _rentalId: serverPart._rentalId || null,
+  };
+}
+
 export function mergeDraftStatus(mapped, extra, sp) {
   const draft = String((extra && extra.status) || "");
   const eng = String((mapped && mapped.status) || "");
+  // Stale extras/local «فارغ» must not paint over a canonical rented month.
+  if ((draft === "vacant" || draft === "staff") && eng && eng !== "vacant" && eng !== "staff") {
+    return {};
+  }
   const tenantOk = !!(
     (extra && String(extra.tenant || "").trim()) ||
     (sp && String(sp.tenantName || "").trim())
