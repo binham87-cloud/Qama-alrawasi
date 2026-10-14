@@ -9,28 +9,55 @@
  */
 import {
   DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant, rentalCoversPeriod,
+  assertCashReversalFitsSharedHolding,
 } from "../domain/finance.mjs";
 
 const STEP = (requestId, name) => (`cwr-${requestId}-${name}`).slice(0, 140);
 
-export async function commitWorkRequestFlow({ db, actor, payload, operationId, now, run }) {
+export async function commitWorkRequestFlow({
+  db, actor, payload, operationId, now, run, enforceCorrectionPolicy = false,
+}) {
   const requestId = payload.requestId;
-  const req = await readDoc(db, "uiRequests", requestId);
-  if (!req) throw new DomainError("REQUEST_NOT_FOUND", { requestId });
-  if (req.status === "approved") {
+  const existing = await readDoc(db, "uiRequests", requestId);
+  if (!existing) throw new DomainError("REQUEST_NOT_FOUND", { requestId });
+  if (existing.status === "approved") {
     await rememberOperation(db, { operationId, command: "commitWorkRequest", actor, now, result: { requestId, status: "approved", alreadyApplied: true } });
     return { requestId, status: "approved", alreadyApplied: true, replay: false };
   }
-  if (req.status === "rejected") throw new DomainError("REQUEST_NOT_PENDING", { status: req.status });
+  if (enforceCorrectionPolicy) {
+    if (existing.type !== "receipt_correction") throw new DomainError("FORBIDDEN", { command: "applyReceiptCorrection" });
+    if (actor.role !== "owner") {
+      const policy = await readCorrectionPolicy(db);
+      if (policy !== "employee_direct") {
+        throw new DomainError("CORRECTION_APPROVAL_REQUIRED", { policy });
+      }
+    }
+  }
+  const claimed = await claimPendingRequest(db, actor, requestId, now, payload.expectedVersion);
+  if (claimed.alreadyApplied) {
+    await rememberOperation(db, { operationId, command: "commitWorkRequest", actor, now, result: { requestId, status: "approved", alreadyApplied: true } });
+    return { requestId, status: "approved", alreadyApplied: true, replay: false };
+  }
+  const req = claimed.doc;
 
   const body = parseJson(req.payloadJson, req.payload);
   const period = periodOfRequest(req);
+  if (await periodIsClosed(db, period)) {
+    await markRequest(db, actor, requestId, now, "pending", "MONTH_CLOSED");
+    throw new DomainError("MONTH_CLOSED", { period });
+  }
   const collectorUserId = req.by || actor.userId;
   const snap = await loadSnapshot(db);
 
   try {
+    // Employee direct policy already passed. The reversal command itself stays
+    // owner-only for every other caller; this path is the configured exception.
+    const dispatchActor = (enforceCorrectionPolicy && actor.role !== "owner")
+      ? { ...actor, role: "owner" }
+      : actor;
     await dispatchRequest({
-      db, actor, now, run, req, body, period, collectorUserId, snap, requestId,
+      db, actor: dispatchActor, now, run, req, body, period, collectorUserId, snap, requestId,
+      confirmDepositReconciliation: payload.confirmDepositReconciliation === true,
     });
     await markRequest(db, actor, requestId, now, "approved", null);
     const result = { requestId, status: "approved", alreadyApplied: false };
@@ -94,6 +121,10 @@ async function dispatchRequest(ctx) {
   }
   if (type === "add_facility_maintenance") {
     await addMaintenance(ctx, "facilityMaintenance", ctx.body.maintenance || ctx.body);
+    return;
+  }
+  if (type === "receipt_correction") {
+    await applyReceiptCorrection(ctx);
     return;
   }
   throw new DomainError("UNKNOWN_REQUEST_TYPE", { type });
@@ -292,6 +323,89 @@ async function applySpaceFields(ctx, payload) {
       collectorUserId: ctx.collectorUserId,
     }, STEP(ctx.requestId, "cash"));
   }
+}
+
+async function applyReceiptCorrection(ctx) {
+  const body = ctx.body || {};
+  const receiptId = body.receiptId;
+  if (!receiptId) throw new DomainError("MISSING_FIELD", { field: "receiptId" });
+  const reason = String(body.reason || "").trim();
+  if (!reason) throw new DomainError("CORRECTION_REASON_REQUIRED");
+  const corrected = Number(body.correctedAmountFils);
+  if (!Number.isInteger(corrected) || corrected < 0) throw new DomainError("INVALID_AMOUNT");
+
+  const receipt = await readDoc(ctx.db, "receipts", receiptId);
+  if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
+  if (receipt.period && await periodIsClosed(ctx.db, receipt.period)) {
+    throw new DomainError("MONTH_CLOSED", { period: receipt.period });
+  }
+  const original = Number(receipt.amountFils || 0);
+  if (corrected > original) {
+    throw new DomainError("INVALID_CORRECTION", { originalAmountFils: original, correctedAmountFils: corrected });
+  }
+  if (receipt.state === "reversed" && corrected === 0) {
+    return { alreadyApplied: true, receiptId };
+  }
+  if (receipt.state === "recognized" && corrected === original) {
+    return { alreadyApplied: true, receiptId, correctedAmountFils: corrected };
+  }
+  if (receipt.state !== "recognized" && receipt.state !== "reversed") {
+    throw new DomainError("RECEIPT_NOT_RECOGNIZED", { state: receipt.state });
+  }
+
+  if (receipt.state === "recognized") {
+    const allReceipts = await queryAll(ctx.db, "receipts");
+    const allDeposits = await queryAll(ctx.db, "deposits");
+    if (receipt.method === "cash") {
+      try {
+        assertCashReversalFitsSharedHolding({
+          receipts: allReceipts, deposits: allDeposits, reversingReceiptIds: [receipt.id],
+        });
+      } catch (e) {
+        if (e.code === "RECEIPT_ALREADY_DEPOSITED") {
+          throw new DomainError("DEPOSIT_RECONCILIATION_REQUIRED", {
+            receiptId,
+            message: "الإيصال داخل إيداع معتمد. لا يُعكس تلقائياً. اعكس الإيداع أولاً ثم أعد اعتماد التصحيح.",
+          });
+        }
+        throw e;
+      }
+    }
+    if (receipt.method === "bank" && !ctx.confirmDepositReconciliation) {
+      throw new DomainError("DEPOSIT_RECONCILIATION_REQUIRED", {
+        receiptId,
+        message: "تصحيح تحويل بنكي معتمد يحتاج تأكيداً صريحاً من المدير. سجل الإيداع لا يُحذف.",
+      });
+    }
+    await ctx.run(ctx.actor, "reverseReceipt", { receiptId: receipt.id, reason }, STEP(ctx.requestId, "rev"));
+  }
+  if (corrected > 0) {
+    const date = validDate(receipt.collectionDate) || ctx.now.slice(0, 10);
+    if (receipt.method === "bank") {
+      const sub = await ctx.run(ctx.actor, "submitBankReceipt", {
+        obligationId: receipt.obligationId,
+        amountFils: corrected,
+        collectionDate: date,
+        bankReference: ("تصحيح-" + ctx.requestId).slice(0, 120),
+        collectorUserId: receipt.collectorUserId || ctx.collectorUserId,
+      }, STEP(ctx.requestId, "bank"));
+      if (sub && sub.receiptId) {
+        try {
+          await ctx.run(ctx.actor, "approveBankReceipt", { receiptId: sub.receiptId }, STEP(ctx.requestId, "bankap"));
+        } catch (e) {
+          if (e.code !== "RECEIPT_NOT_PENDING") throw e;
+        }
+      }
+    } else {
+      await ctx.run(ctx.actor, "createCashReceipt", {
+        obligationId: receipt.obligationId,
+        amountFils: corrected,
+        collectionDate: date,
+        collectorUserId: receipt.collectorUserId || ctx.collectorUserId,
+      }, STEP(ctx.requestId, "cash"));
+    }
+  }
+  return { receiptId, originalAmountFils: original, correctedAmountFils: corrected };
 }
 
 async function deleteSpaceOrUnit(ctx, whole) {
@@ -525,6 +639,51 @@ function queryAll(db, collection) {
 }
 function readDoc(db, collection, id) {
   return db.runTransaction((tx) => tx.get(collection, id));
+}
+
+async function claimPendingRequest(db, actor, requestId, now, expectedVersion) {
+  return db.runTransaction(async (tx) => {
+    const doc = await tx.get("uiRequests", requestId);
+    if (!doc) throw new DomainError("REQUEST_NOT_FOUND", { requestId });
+    if (doc.status === "approved") return { alreadyApplied: true, doc };
+    if (doc.status === "rejected") throw new DomainError("REQUEST_NOT_PENDING", { status: doc.status });
+    if (doc.status === "processing") throw new DomainError("REQUEST_BEING_APPROVED", { requestId });
+    if (doc.status !== "pending") throw new DomainError("REQUEST_NOT_PENDING", { status: doc.status });
+    const version = Number(doc.version || 1);
+    if (expectedVersion != null && Number(expectedVersion) !== version) {
+      throw new DomainError("STALE_REQUEST_VERSION", { requestId, version, expectedVersion });
+    }
+    if (version > 1 && expectedVersion == null) {
+      throw new DomainError("STALE_REQUEST_VERSION", { requestId, version });
+    }
+    tx.update("uiRequests", requestId, {
+      status: "processing",
+      approvingVersion: version,
+      approvingBy: actor.userId,
+      approvingAt: now,
+    });
+    return { alreadyApplied: false, doc, version };
+  });
+}
+
+async function periodIsClosed(db, period) {
+  if (!period) return false;
+  const doc = await readDoc(db, "uiConfig", `close-state:${period}`);
+  if (!doc) return false;
+  let data = {};
+  try { data = JSON.parse(doc.json || "{}"); } catch { data = {}; }
+  return data.status === "closed";
+}
+
+async function readCorrectionPolicy(db) {
+  const doc = await readDoc(db, "uiConfig", "correctionPolicy");
+  if (!doc) return "manager_approval";
+  try {
+    const data = JSON.parse(doc.json || "{}");
+    return data.undeposited === "employee_direct" ? "employee_direct" : "manager_approval";
+  } catch {
+    return "manager_approval";
+  }
 }
 
 async function markRequest(db, actor, requestId, now, status, lastError) {

@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="QAMA-STAFF-STAY-20261013T2355Z"/>
-<title>قمة الرواسي · QAMA-STAFF-STAY-20261013T2355Z</title>
+<meta name="qama-ui-build" content="QAMA-ACCT-CLOSE-20261014T2145Z"/>
+<title>قمة الرواسي · QAMA-ACCT-CLOSE-20261014T2145Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -213,6 +213,34 @@ async function loadLocksFromServer(){
 function isMonthLocked(y,m){return !!(S.lockedMonths&&S.lockedMonths[getMonthKey(y,m)]);}
 
 // ===== REQUEST SYSTEM =====
+async function requestReceiptCorrection(rc){
+  if(!rc||!rc.id)return;
+  const reason=typeof prompt==="function"?prompt("سبب تصحيح الإيصال"):"";
+  if(!reason||!String(reason).trim()){showMsg("سبب التصحيح مطلوب");return;}
+  const entered=typeof prompt==="function"?prompt("المبلغ الصحيح بالدرهم. صفر يعني إلغاء التحصيل",String((Number(rc.amountFils||0)/100))):"";
+  if(entered==null||entered===""){showMsg("المبلغ المصحح مطلوب");return;}
+  const correctedFils=Math.round(Number(entered)*100);
+  if(!Number.isFinite(correctedFils)||correctedFils<0){showMsg("المبلغ المصحح غير صالح");return;}
+  try{
+    const preview=await engineCommand("previewReceiptCorrection",{receiptId:rc.id,correctedAmountFils:correctedFils},("prevrcpt-"+rc.id+"-"+Date.now()).slice(0,120));
+    const from=((Number(preview.originalAmountFils)||0)/100).toLocaleString();
+    const to=((Number(preview.correctedAmountFils)||0)/100).toLocaleString();
+    const delta=((Number(preview.deltaFils)||0)/100).toLocaleString();
+    const warn=preview.blocked?"\n\nلن يُنفَّذ التصحيح تلقائياً لأن الإيصال مرتبط بإيداع أو تحويل معتمد.":"";
+    if(!confirm("أثر التصحيح\nمن "+from+" إلى "+to+" د.إ\nالفرق: "+delta+" د.إ\nالشهر: "+(preview.period||"—")+"\nالقسمة: "+(preview.spaceName||preview.spaceId||"—")+warn+"\nإرسال للمدير؟"))return;
+    await engineCommand("submitReceiptCorrection",{
+      requestId:"req_corr_"+Date.now(),
+      receiptId:rc.id,
+      reason:String(reason).trim().slice(0,300),
+      correctedAmountFils:correctedFils,
+      month:S.month,
+      year:S.year
+    },("corrrcpt-"+rc.id+"-"+Date.now()).slice(0,120));
+    showMsg("تم إرسال تصحيح الإيصال للمدير");
+    try{await loadRequests();}catch(_e){}
+  }catch(e){showMsg("⛔ "+(typeof formatEngineError==="function"?formatEngineError(e):(e&&e.message||e)));}
+}
+
 async function submitRequest(type, desc, payload){
   if(!S.user)return;
   // منع الضغط المزدوج على الزر — set flag before any await
@@ -245,6 +273,24 @@ async function submitRequest(type, desc, payload){
       Number(r.payload?.expense?.amount)===Number(payload?.expense?.amount)&&
       String(r.payload?.expense?.desc||"")===String(payload?.expense?.desc||""))
   ));
+  if(dupe && (type==="update_partition"||type==="update_full")){
+    const reason=typeof prompt==="function"?prompt("سبب تصحيح الطلب المعلق"):"";
+    if(!reason||!String(reason).trim()){showMsg("سبب التصحيح مطلوب");return;}
+    try{
+      await engineCommand("reviseWorkRequest",{
+        requestId:dupe.id,
+        expectedVersion:Number(dupe.version||1),
+        reason:String(reason).trim().slice(0,300),
+        payloadJson:JSON.stringify(payload),
+        desc:String(desc||"").slice(0,800)
+      },("revise-"+dupe.id+"-"+Date.now()).slice(0,120));
+      showMsg("تم تحديث الطلب المعلق — النسخة السابقة محفوظة للمدير");
+      await loadRequests();
+    }catch(e){
+      showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):"تعذر تصحيح الطلب"));
+    }
+    return;
+  }
   if(dupe){showMsg("⏳ لديك طلب معلق بنفس البيانات بالفعل");return;}
   R(); // تعطيل الزر فوراً
   const req={
@@ -520,7 +566,13 @@ async function approveRequest(req){
       return;
     }
     // Canonical server commit first (idempotent). UI card status updates only after success.
-    const commit=await engineCommand("commitWorkRequest",{requestId:req.id},"commit-"+req.id);
+    const commitPayload={requestId:req.id,expectedVersion:Number(req.version||1)};
+    if(req.type==="receipt_correction" && req.impact && (req.impact.blocked||req.impact.method==="bank")){
+      const ok=confirm("هذا التصحيح يمس إيصالاً مرتبطاً بإيداع أو تحويل بنكي.\nلن يُحذف سجل الإيداع المعتمد.\nإذا كان المبلغ ما زال داخل الإيداع سيُرفض التصحيح حتى يُعكس الإيداع أولاً.\nمتابعة؟");
+      if(!ok){S.approvingReqId=null;R();return;}
+      commitPayload.confirmDepositReconciliation=true;
+    }
+    const commit=await engineCommand("commitWorkRequest",commitPayload,"commit-"+req.id);
     if(!(commit&&(commit.status==="approved"||commit.alreadyApplied))){
       throw new Error((commit&&commit.status)||"APPROVE_FAILED");
     }
@@ -3257,7 +3309,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI QAMA-STAFF-STAY-20261013T2355Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI QAMA-ACCT-CLOSE-20261014T2145Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -3493,7 +3545,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-STAFF-STAY-20261013T2355Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-ACCT-CLOSE-20261014T2145Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -3604,6 +3656,39 @@ function renderApp(){
     };
     content=h("div",{},[
       monthNav(),
+      h("div",{"data-testid":"month-close-card",class:"card",style:{padding:"14px",marginBottom:"14px",border:"1px solid #1e3a5f"}},[
+        h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff",marginBottom:"6px"}},["إقفال الشهر المحاسبي"]),
+        h("div",{style:{fontSize:"12px",color:"#888",marginBottom:"8px"}},["المتأخرات والعهدة المسجّلة لا تمنعان الإقفال. التعارضات غير المفسّرة تمنعه. لا يُقفل الشهر تلقائياً."]),
+        h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},[
+          h("button",{"data-testid":"btn-review-close",class:"btn",style:{background:"#0c1a2e",color:"#93c5fd",borderRadius:"8px",padding:"8px 10px",fontSize:"13px"},onClick:async()=>{
+            try{
+              const period=periodOfMonth(S.year,S.month);
+              const report=await engineCommand("reviewAccountingClose",{period},"review-close-"+period+"-"+Date.now());
+              const lines=(report.blockers||[]).map(b=>"• "+(b.message||b.code)).join("\n")||"لا توجد تعارضات";
+              const notes=(report.notes||[]).filter(n=>n.code==="ARREARS"||n.code==="UNDEPOSITED_HOLDING").length;
+              showMsg((report.ready?"الجاهزية: يمكن الإقفال":"الجاهزية: لا يُقفل")+"\n"+lines+(notes?"\nملاحظات مشروعة: "+notes:""));
+              S._closeReport=report; R();
+            }catch(e){showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):"تعذر المراجعة"));}
+          }},["مراجعة الجاهزية"]),
+          h("button",{"data-testid":"btn-close-month",class:"btn",style:{background:"#fff",color:"#000",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:async()=>{
+            const period=periodOfMonth(S.year,S.month);
+            if(!confirm("إقفال "+period+"؟\nتُحفظ لقطة لا تُعدَّل، ويُمنع تعديل الموظفين لهذا الشهر."))return;
+            try{
+              const closed=await engineCommand("closeAccountingPeriod",{period},"close-"+period+"-"+Date.now());
+              showMsg("✓ أُقفل الشهر. اللقطة "+(closed.snapshotId||""));
+            }catch(e){showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):"تعذر الإقفال"));}
+          }},["إقفال الشهر"]),
+          h("button",{"data-testid":"btn-reopen-month",class:"btn",style:{background:"#1a1a1a",color:"#fff",borderRadius:"8px",padding:"8px 10px",fontSize:"13px"},onClick:async()=>{
+            const period=periodOfMonth(S.year,S.month);
+            const reason=prompt("سبب إعادة فتح "+period);
+            if(!reason||!String(reason).trim()){showMsg("سبب إعادة الفتح مطلوب");return;}
+            try{
+              await engineCommand("reopenAccountingPeriod",{period,reason:String(reason).trim().slice(0,300)},"reopen-"+period+"-"+Date.now());
+              showMsg("✓ أُعيد فتح الشهر. اللقطة الأصلية محفوظة");
+            }catch(e){showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):"تعذر إعادة الفتح"));}
+          }},["إعادة فتح"])
+        ])
+      ]),
       lateList.length>0&&h("div",{style:{background:"#450a0a",border:"1px solid #7f1d1d",borderRadius:"10px",padding:"10px 14px",marginBottom:"14px",fontSize:"15px",color:"#fca5a5"}},
         ["⚠ "+lateList.length+" متأخر · "+vacantList.length+" شاغر"]),
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"14px"}},[
@@ -4108,7 +4193,7 @@ function renderApp(){
           h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📝 ملاحظات"]),
             (()=>{const inp=h("input",{"data-testid":"partition-notes",type:"text",placeholder:"ملاحظات عن المستأجر...",value:p.note||""});inp.addEventListener("input",e=>updateP("note",e.target.value,true));inp.addEventListener("change",e=>updateP("note",e.target.value));return inp;})()]),
           // Manager حذف الإيصال — linked reversal via canonical engine (never hard-delete).
-          isOwner&&(p._receipts||[]).length?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px"}},[
+          (p._receipts||[]).length?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px"}},[
             h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#ddd",marginBottom:"8px"}},["الإيصالات"]),
             ...(p._receipts||[]).map(rc=>{
               const aed=(Number(rc.amountFils||0)/100);
@@ -4119,7 +4204,9 @@ function renderApp(){
                   h("div",{style:{fontSize:"13px",color:"#eee"}},[method+" · "+aed.toLocaleString()+" د.إ · "+st]),
                   h("div",{style:{fontSize:"11px",color:"#666"}},[(rc.collectionDate||"")+" · "+(rc.collectorName||"")])
                 ]),
-                (rc.state==="recognized"&&typeof engineCommand==="function")?h("button",{class:"btn",style:{...dangerBtnStyle,padding:"6px 10px",fontSize:"12px"},onClick:async()=>{
+                (rc.state==="recognized"&&typeof engineCommand==="function")?h("div",{style:{display:"flex",gap:"6px"}},[
+                  h("button",{"data-testid":"btn-correct-receipt",class:"btn",style:{padding:"6px 10px",fontSize:"12px",background:"#1a1a1a",color:"#fff",borderRadius:"8px"},onClick:()=>requestReceiptCorrection(rc)},["طلب تصحيح"]),
+                  isOwner?h("button",{class:"btn",style:{...dangerBtnStyle,padding:"6px 10px",fontSize:"12px"},onClick:async()=>{
                   if(!confirm("حذف الإيصال؟ سيتم عكسه محاسبياً مع الإبقاء على السجل التاريخي."))return;
                   try{
                     await engineCommand("reverseReceipt",{receiptId:rc.id,reason:"حذف الإيصال من الشاشة"},("revrcpt-"+rc.id).slice(0,120));
@@ -4127,7 +4214,8 @@ function renderApp(){
                     try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
                     set({editPart:unit.id+"-"+p.id});
                   }catch(e){showMsg("⛔ "+(e&&e.message||e));}
-                }},["حذف الإيصال"]):h("span",{style:{fontSize:"11px",color:"#666"}},[st])
+                }},["حذف الإيصال"]):null
+                ]):h("span",{style:{fontSize:"11px",color:"#666"}},[st])
               ]);
             })
           ]):null,
@@ -4593,7 +4681,7 @@ function renderApp(){
               (()=>{const inp=h("input",{"data-testid":"full-deposit",type:"number",placeholder:"مبلغ التأمين",value:u.deposit||""});inp.addEventListener("input",e=>updateFull("deposit",e.target.value,true));inp.addEventListener("change",e=>updateFull("deposit",e.target.value));return inp;})()])]),
           h("div",{},[h("div",{style:{fontSize:"14px",color:"#555",marginBottom:"3px"}},["📝 ملاحظات"]),
             (()=>{const inp=h("input",{"data-testid":"full-notes",type:"text",placeholder:"ملاحظات...",value:u.note||""});inp.addEventListener("input",e=>updateFull("note",e.target.value,true));inp.addEventListener("change",e=>updateFull("note",e.target.value));return inp;})()]),
-          isOwner&&(u._receipts||[]).length?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px"}},[
+          (u._receipts||[]).length?h("div",{style:{marginTop:"8px",padding:"10px",background:"#0a0a0a",border:"1px solid #222",borderRadius:"8px"}},[
             h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#ddd",marginBottom:"8px"}},["الإيصالات"]),
             ...(u._receipts||[]).map(rc=>{
               const aed=(Number(rc.amountFils||0)/100);
@@ -4604,7 +4692,9 @@ function renderApp(){
                   h("div",{style:{fontSize:"13px",color:"#eee"}},[method+" · "+aed.toLocaleString()+" د.إ · "+st]),
                   h("div",{style:{fontSize:"11px",color:"#666"}},[(rc.collectionDate||"")+" · "+(rc.collectorName||"")])
                 ]),
-                (rc.state==="recognized"&&typeof engineCommand==="function")?h("button",{class:"btn",style:{...dangerBtnStyle,padding:"6px 10px",fontSize:"12px"},onClick:async()=>{
+                (rc.state==="recognized"&&typeof engineCommand==="function")?h("div",{style:{display:"flex",gap:"6px"}},[
+                  h("button",{"data-testid":"btn-correct-receipt-full",class:"btn",style:{padding:"6px 10px",fontSize:"12px",background:"#1a1a1a",color:"#fff",borderRadius:"8px"},onClick:()=>requestReceiptCorrection(rc)},["طلب تصحيح"]),
+                  isOwner?h("button",{class:"btn",style:{...dangerBtnStyle,padding:"6px 10px",fontSize:"12px"},onClick:async()=>{
                   if(!confirm("حذف الإيصال؟ سيتم عكسه محاسبياً مع الإبقاء على السجل التاريخي."))return;
                   try{
                     await engineCommand("reverseReceipt",{receiptId:rc.id,reason:"حذف الإيصال من الشاشة"},("revrcpt-"+rc.id).slice(0,120));
@@ -4612,7 +4702,8 @@ function renderApp(){
                     try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
                     set({editPart:"full-"+u.id});
                   }catch(e){showMsg("⛔ "+(e&&e.message||e));}
-                }},["حذف الإيصال"]):h("span",{style:{fontSize:"11px",color:"#666"}},[st])
+                }},["حذف الإيصال"]):null
+                ]):h("span",{style:{fontSize:"11px",color:"#666"}},[st])
               ]);
             })
           ]):null,
@@ -5756,7 +5847,8 @@ function renderApp(){
       bank_history:"تحويل بنكي",
       add_unit:"إضافة شقة بارتشنات",add_full_unit:"إضافة شقة كاملة",
       delete_partition:"حذف بارتشن",delete_full:"حذف شقة",
-      add_unit_maintenance:"صيانة شقة",add_facility_maintenance:"صيانة مرافق",add_daily:"حجز يومي"
+      add_unit_maintenance:"صيانة شقة",add_facility_maintenance:"صيانة مرافق",add_daily:"حجز يومي",
+      receipt_correction:"تصحيح إيصال"
     };
     const statusColor={pending:"#fbbf24",approved:"#4ade80",rejected:"#f87171",revoked:"#f97316",cancelled:"#6b7280",processing:"#93c5fd"};
     const statusLabel={pending:"قيد الاعتماد",approved:"✓ معتمد",rejected:"✗ مرفوض",processing:"🔄 قيد المعالجة"};
@@ -5828,6 +5920,28 @@ function renderApp(){
         detailRows.push(detailRow("المبلغ", amt!=null&&!Number.isNaN(amt)?(amt.toLocaleString()+" د.إ"):"غير متوفر",{big:true,testId:"expense-req-amount"}));
         detailRows.push(detailRow("الوصف", ex.desc||req.desc||"—"));
         detailRows.push(detailRow("الموظف", req.byName||USERS[req.by]?.name||req.by||"—"));
+      }
+      if(req.type==="receipt_correction" && req.impact){
+        const im=req.impact;
+        const aed=(n)=>((Number(n)||0)/100).toLocaleString()+" د.إ";
+        detailRows.push(detailRow("الإيصال", im.receiptId));
+        detailRows.push(detailRow("القسمة", im.spaceName||im.spaceId||"—"));
+        detailRows.push(detailRow("شهر المحاسبة", im.period||"—"));
+        detailRows.push(detailRow("المبلغ الأصلي", aed(im.originalAmountFils),{big:true}));
+        detailRows.push(detailRow("المبلغ المصحح", aed(im.correctedAmountFils),{big:true}));
+        detailRows.push(detailRow("الأثر", aed(im.deltaFils)));
+        if(im.blocked) detailRows.push(detailRow("التنبيه", "مرتبط بإيداع معتمد — لن يُعكس تلقائياً"));
+      }
+      detailRows.push(detailRow("نسخة الطلب", req.version||1));
+      if(Array.isArray(req.revisions)&&req.revisions.length){
+        req.revisions.forEach((rev)=>{
+          const when=String(rev.at||"").slice(0,16).replace("T"," ");
+          const oldv=rev.oldValues?JSON.stringify(rev.oldValues):"—";
+          const newv=rev.newValues?JSON.stringify(rev.newValues):"—";
+          detailRows.push(detailRow("مراجعة "+rev.version, (rev.byName||rev.by||"")+" · "+when+" · "+(rev.reason||"")));
+          if(rev.oldValues) detailRows.push(detailRow("قبل", oldv));
+          if(rev.newValues) detailRows.push(detailRow("بعد", newv));
+        });
       }
 
       return h("div",{"data-testid":"request-card",class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(req.status==="pending"?"#854d0e":req.status==="approved"?"#166534":"#7f1d1d")}},[

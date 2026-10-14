@@ -670,6 +670,10 @@ async function buildUiBundle({ db, period }) {
         approvedAt: r.status === "approved" ? (r.resolvedAt || r.approvedAt || null) : null,
         rejectedAt: r.status === "rejected" ? (r.resolvedAt || r.rejectedAt || null) : null,
         depositId: payload.depositId || (payload.transaction && payload.transaction.depositId) || null,
+        version: Number(r.version || 1),
+        revisions: Array.isArray(r.revisions) ? r.revisions : [],
+        originalPayload: parseJsonSafe(r.originalPayloadJson, null),
+        impact: r.impact || payload.impact || null,
       };
     });
   return { config, requests: sortRequestsNewestFirst(reqs), extras };

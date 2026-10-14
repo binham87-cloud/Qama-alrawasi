@@ -371,5 +371,5 @@ test("5 Daily prepaid: Target+Collected+Holding; idempotent; period isolation", 
 test("5b UI: daily prepaid path present; no paid=0 collected paint requirement", () => {
   assert.match(html, /createDailyBookingPrepaid/);
   assert.match(html, /محصّل \/ لم يودع/);
-  assert.match(html, /QAMA-STAFF-STAY-20261013T2355Z/);
+  assert.match(html, /QAMA-ACCT-CLOSE-20261014T2145Z/);
 });

@@ -21,6 +21,7 @@ import {
   cyclePeriod,
 } from "../domain/rental_cycle.mjs";
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
+import { reviewPeriodClose } from "../domain/closing_review.mjs";
 
 /**
  * Cancel unpaid obligations that fall AFTER the vacancy effective date.
@@ -650,6 +651,14 @@ export const PERMISSIONS = Object.freeze({
   payInstallment: OWNER,
   reverseInstallment: OWNER,
   submitWorkRequest: BOTH,
+  reviseWorkRequest: BOTH,
+  previewReceiptCorrection: BOTH,
+  submitReceiptCorrection: BOTH,
+  applyReceiptCorrection: BOTH,
+  setCorrectionPolicy: OWNER,
+  reviewAccountingClose: OWNER,
+  closeAccountingPeriod: OWNER,
+  reopenAccountingPeriod: OWNER,
   resolveWorkRequest: OWNER,
   commitWorkRequest: OWNER,
   uncollectObligation: OWNER,
@@ -797,8 +806,32 @@ export const SCHEMAS = Object.freeze({
     requestId: S.id(), type: S.str(80), desc: S.str(800), payloadJson: S.str(100000),
     month: S.int(0, 11), year: S.int(2020, 2100),
   },
+  reviseWorkRequest: {
+    requestId: S.id(), expectedVersion: S.int(1, 100000), reason: S.str(300),
+    payloadJson: S.str(100000), desc: S.opt(S.str(800)),
+  },
+  previewReceiptCorrection: {
+    receiptId: S.id(), correctedAmountFils: S.filsNonNegative(),
+  },
+  submitReceiptCorrection: {
+    requestId: S.id(), receiptId: S.id(), reason: S.str(300),
+    correctedAmountFils: S.filsNonNegative(),
+    month: S.int(0, 11), year: S.int(2020, 2100),
+  },
+  applyReceiptCorrection: {
+    requestId: S.id(), expectedVersion: S.opt(S.int(1, 100000)),
+    confirmDepositReconciliation: S.opt(S.bool()),
+  },
+  setCorrectionPolicy: { undeposited: S.enum(["manager_approval", "employee_direct"]) },
+  reviewAccountingClose: { period: S.period() },
+  closeAccountingPeriod: { period: S.period() },
+  reopenAccountingPeriod: { period: S.period(), reason: S.str(300) },
   resolveWorkRequest: { requestId: S.id(), decision: S.enum(["pending", "processing", "approved", "rejected", "failed"]) },
-  commitWorkRequest: { requestId: S.id() },
+  commitWorkRequest: {
+    requestId: S.id(),
+    expectedVersion: S.opt(S.int(1, 100000)),
+    confirmDepositReconciliation: S.opt(S.bool()),
+  },
   uncollectObligation: { obligationId: S.id(), reason: S.str(300) },
   savePeriodExtras: {
     period: S.period(),
@@ -902,11 +935,14 @@ export async function executeCommand({ db, actor, command, payload, operationId,
   }
   const clean = validatePayload(command, payload);
 
-  if (command === "commitWorkRequest") {
+  if (command === "commitWorkRequest" || command === "applyReceiptCorrection") {
     const run = (who, cmd, body, op) => executeCommand({
       db, actor: who, command: cmd, payload: body, operationId: op, now,
     });
-    return commitWorkRequestFlow({ db, actor, payload: clean, operationId, now, run });
+    return commitWorkRequestFlow({
+      db, actor, payload: clean, operationId, now, run,
+      enforceCorrectionPolicy: command === "applyReceiptCorrection",
+    });
   }
 
   return db.runTransaction(async (tx) => {
@@ -1209,6 +1245,7 @@ const HANDLERS = {
       obligations: spaceObligations,
     });
     if (coverageConflict) throw new DomainError("PERIOD_ALREADY_COVERED", coverageConflict);
+    await assertPeriodMutable(ctx, periodOf(ctx.payload.startDate));
 
     const id = newId("rental", ctx);
     ctx.tx.create("rentals", id, {
@@ -1527,6 +1564,7 @@ const HANDLERS = {
    */
   async generateObligations(ctx) {
     const period = ctx.payload.period;
+    await assertPeriodMutable(ctx, period);
     const rentals = await ctx.tx.query("rentals", [["state", "==", "active"]]);
     const created = [];
     for (const rental of rentals) {
@@ -1864,6 +1902,7 @@ const HANDLERS = {
     if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
     if (receipt.state === RECEIPT_STATE.REVERSED) throw new DomainError("ALREADY_REVERSED");
     if (receipt.state !== RECEIPT_STATE.RECOGNIZED) throw new DomainError("RECEIPT_NOT_RECOGNIZED", { state: receipt.state });
+    await assertPeriodMutable(ctx, receipt.period);
 
     // Shared-pool safety: reversing cash is allowed only if عهدة الموظفين stays >= 0.
     if (receipt.method === "cash") {
@@ -1971,6 +2010,7 @@ const HANDLERS = {
     const ob = await ctx.tx.get("obligations", ctx.payload.obligationId);
     if (!ob) throw new DomainError("OBLIGATION_NOT_FOUND");
     await assertEmployeePeriodOpen(ctx, ob.period);
+    await assertPeriodMutable(ctx, ob.period);
     const receipts = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
     const live = receipts.filter((r) => r.state === RECEIPT_STATE.RECOGNIZED);
     const cashLive = live.filter((r) => r.method === "cash");
@@ -2032,6 +2072,7 @@ const HANDLERS = {
     }
     const listPeriod = accountingPeriod || sourcePeriod || periodOf(ctx.payload.depositDate);
     await assertEmployeePeriodOpen(ctx, listPeriod);
+    await assertPeriodMutable(ctx, listPeriod);
     const receipts = await ctx.tx.query("receipts", []);
     const deposits = await ctx.tx.query("deposits", []);
     // Holding deposits must fit Holding(sourcePeriod) only. External does not reduce Holding.
@@ -2573,6 +2614,9 @@ const HANDLERS = {
       type: ctx.payload.type,
       desc: ctx.payload.desc,
       payloadJson: ctx.payload.payloadJson,
+      originalPayloadJson: ctx.payload.payloadJson,
+      version: 1,
+      revisions: [originalRevision(ctx, ctx.payload.payloadJson)],
       month: ctx.payload.month,
       year: ctx.payload.year,
       by: ctx.actor.userId,
@@ -2602,7 +2646,203 @@ const HANDLERS = {
       else ctx.tx.create("uiRequests", lockId, lockRec);
     }
     audit(ctx, "work_request_submitted", "uiRequest", id, { type: ctx.payload.type });
-    return { requestId: id, status: "pending" };
+    return { requestId: id, status: "pending", version: 1 };
+  },
+
+  async reviseWorkRequest(ctx) {
+    const doc = await ctx.tx.get("uiRequests", ctx.payload.requestId);
+    if (!doc) throw new DomainError("REQUEST_NOT_FOUND");
+    if (doc.status !== "pending") {
+      throw new DomainError("REQUEST_NOT_EDITABLE", { status: doc.status });
+    }
+    const sameUser = ctx.actor.userId === doc.by || actorKey(ctx.actor) === doc.byKey;
+    if (!sameUser) throw new DomainError("FORBIDDEN", { why: "not the submitter" });
+    const version = Number(doc.version || 1);
+    if (ctx.payload.expectedVersion !== version) {
+      throw new DomainError("STALE_REQUEST_VERSION", {
+        requestId: doc.id, version, expectedVersion: ctx.payload.expectedVersion,
+      });
+    }
+    let nextPayload = {};
+    try { nextPayload = JSON.parse(ctx.payload.payloadJson); } catch { nextPayload = {}; }
+    if (doc.lockId) {
+      const nextLock = pendingRequestLockId({
+        type: doc.type,
+        actorKey: doc.byKey || actorKey(ctx.actor),
+        year: doc.year,
+        month: doc.month,
+        payload: nextPayload,
+      });
+      if (nextLock && nextLock !== doc.lockId) {
+        throw new DomainError("CORRECTION_CHANGES_TARGET", { lockId: doc.lockId, nextLock });
+      }
+    }
+    const revisions = Array.isArray(doc.revisions) ? doc.revisions.slice() : [
+      originalRevision({ ...ctx, actor: { userId: doc.by, displayName: doc.byName }, now: doc.createdAt }, doc.payloadJson),
+    ];
+    const nextVersion = version + 1;
+    revisions.push({
+      version: nextVersion,
+      at: ctx.now,
+      by: ctx.actor.userId,
+      byName: ctx.actor.displayName || actorKey(ctx.actor),
+      reason: ctx.payload.reason,
+      oldValues: payloadSnapshot(doc.payloadJson),
+      newValues: payloadSnapshot(ctx.payload.payloadJson),
+    });
+    ctx.tx.update("uiRequests", doc.id, {
+      payloadJson: ctx.payload.payloadJson,
+      desc: ctx.payload.desc || doc.desc,
+      version: nextVersion,
+      revisions,
+      originalPayloadJson: doc.originalPayloadJson || doc.payloadJson,
+      correctedAt: ctx.now,
+      correctedBy: ctx.actor.userId,
+    });
+    audit(ctx, "work_request_revised", "uiRequest", doc.id, {
+      version: nextVersion, reason: ctx.payload.reason,
+    });
+    return { requestId: doc.id, status: "pending", version: nextVersion };
+  },
+
+  async previewReceiptCorrection(ctx) {
+    const impact = await receiptCorrectionImpact(ctx, ctx.payload.receiptId, ctx.payload.correctedAmountFils);
+    return { ...impact, preview: true };
+  },
+
+  async submitReceiptCorrection(ctx) {
+    const id = ctx.payload.requestId;
+    if (await ctx.tx.get("uiRequests", id)) throw new DomainError("REQUEST_EXISTS", { requestId: id });
+    const impact = await receiptCorrectionImpact(ctx, ctx.payload.receiptId, ctx.payload.correctedAmountFils);
+    await assertPeriodMutable(ctx, impact.period);
+    const lockId = `lock:rcptcorr:${String(ctx.payload.receiptId).replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80)}`;
+    const lock = await ctx.tx.get("uiRequests", lockId);
+    if (lock && lock.status === "pending" && lock.activeRequestId) {
+      const existing = await ctx.tx.get("uiRequests", lock.activeRequestId);
+      if (existing && existing.status === "pending") {
+        throw new DomainError("DUPLICATE_PENDING_REQUEST", { requestId: existing.id, lockId });
+      }
+    }
+    const payload = {
+      receiptId: ctx.payload.receiptId,
+      reason: ctx.payload.reason,
+      correctedAmountFils: ctx.payload.correctedAmountFils,
+      impact,
+    };
+    const payloadJson = JSON.stringify(payload);
+    ctx.tx.create("uiRequests", id, {
+      id,
+      type: "receipt_correction",
+      desc: `تصحيح إيصال ${ctx.payload.receiptId}`,
+      payloadJson,
+      originalPayloadJson: payloadJson,
+      version: 1,
+      revisions: [originalRevision(ctx, payloadJson)],
+      impact,
+      month: ctx.payload.month,
+      year: ctx.payload.year,
+      by: ctx.actor.userId,
+      byKey: actorKey(ctx.actor),
+      byName: ctx.actor.displayName || actorKey(ctx.actor),
+      status: "pending",
+      lockId,
+      createdAt: ctx.now,
+      ...base(ctx),
+    });
+    const lockRec = {
+      id: lockId, type: "pending_lock", status: "pending", activeRequestId: id,
+      lockType: "receipt_correction", by: ctx.actor.userId, byKey: actorKey(ctx.actor),
+      month: ctx.payload.month, year: ctx.payload.year, updatedAt: ctx.now, ...base(ctx),
+    };
+    if (lock) ctx.tx.update("uiRequests", lockId, lockRec);
+    else ctx.tx.create("uiRequests", lockId, lockRec);
+    audit(ctx, "receipt_correction_requested", "uiRequest", id, {
+      receiptId: ctx.payload.receiptId,
+      originalAmountFils: impact.originalAmountFils,
+      correctedAmountFils: impact.correctedAmountFils,
+      reason: ctx.payload.reason,
+    });
+    return { requestId: id, status: "pending", version: 1, impact };
+  },
+
+  async setCorrectionPolicy(ctx) {
+    const json = JSON.stringify({ undeposited: ctx.payload.undeposited });
+    const prev = await ctx.tx.get("uiConfig", "correctionPolicy");
+    const rec = {
+      id: "correctionPolicy", json, updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
+    };
+    if (prev) ctx.tx.update("uiConfig", "correctionPolicy", rec);
+    else ctx.tx.create("uiConfig", "correctionPolicy", { ...rec, ...base(ctx) });
+    audit(ctx, "correction_policy_set", "uiConfig", "correctionPolicy", { undeposited: ctx.payload.undeposited });
+    return { undeposited: ctx.payload.undeposited };
+  },
+
+  async reviewAccountingClose(ctx) {
+    return buildCloseReport(ctx, ctx.payload.period);
+  },
+
+  async closeAccountingPeriod(ctx) {
+    const period = ctx.payload.period;
+    const report = await buildCloseReport(ctx, period);
+    if (!report.ready) throw new DomainError("MONTH_NOT_READY", { period, blockers: report.blockers });
+    const stateId = `close-state:${period}`;
+    const state = await ctx.tx.get("uiConfig", stateId);
+    const stateData = parseConfigJson(state);
+    if (stateData.status === "closed") throw new DomainError("ALREADY_CLOSED", { period, snapshotId: stateData.snapshotId });
+    const version = Number(stateData.version || 0) + 1;
+    const snapshotId = `close:${period}:v${version}`;
+    if (await ctx.tx.get("uiConfig", snapshotId)) throw new DomainError("ALREADY_CLOSED", { snapshotId });
+    const snapshot = {
+      period, version, report, closedAt: ctx.now, closedBy: ctx.actor.userId,
+    };
+    ctx.tx.create("uiConfig", snapshotId, {
+      id: snapshotId, json: JSON.stringify(snapshot), period, version, immutable: true, ...base(ctx),
+    });
+    const nextState = {
+      status: "closed", snapshotId, version, closedAt: ctx.now, closedBy: ctx.actor.userId,
+    };
+    const stateRec = {
+      id: stateId, json: JSON.stringify(nextState), updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
+    };
+    if (state) ctx.tx.update("uiConfig", stateId, stateRec);
+    else ctx.tx.create("uiConfig", stateId, { ...stateRec, ...base(ctx) });
+    await writeMonthLock(ctx, period, true);
+    audit(ctx, "accounting_period_closed", "period", period, { snapshotId, version });
+    return { period, snapshotId, version, ready: true };
+  },
+
+  async reopenAccountingPeriod(ctx) {
+    const period = ctx.payload.period;
+    const stateId = `close-state:${period}`;
+    const state = await ctx.tx.get("uiConfig", stateId);
+    const stateData = parseConfigJson(state);
+    if (stateData.status !== "closed") throw new DomainError("PERIOD_NOT_CLOSED", { period });
+    const eventId = `close-reopen:${period}:${ctx.operationId}`.slice(0, 140);
+    ctx.tx.create("uiConfig", eventId, {
+      id: eventId,
+      json: JSON.stringify({
+        period, reason: ctx.payload.reason, reopenedBy: ctx.actor.userId, at: ctx.now,
+        snapshotId: stateData.snapshotId, version: stateData.version,
+      }),
+      ...base(ctx),
+    });
+    ctx.tx.update("uiConfig", stateId, {
+      json: JSON.stringify({
+        status: "open",
+        snapshotId: stateData.snapshotId,
+        version: stateData.version,
+        reopenedAt: ctx.now,
+        reopenedBy: ctx.actor.userId,
+        reason: ctx.payload.reason,
+      }),
+      updatedAt: ctx.now,
+      updatedBy: ctx.actor.userId,
+    });
+    await writeMonthLock(ctx, period, false);
+    audit(ctx, "accounting_period_reopened", "period", period, {
+      reason: ctx.payload.reason, snapshotId: stateData.snapshotId,
+    });
+    return { period, status: "open", snapshotId: stateData.snapshotId };
   },
 
   async resolveWorkRequest(ctx) {
@@ -2659,6 +2899,7 @@ async function createReceipt(ctx, extra) {
   if (!ob) throw new DomainError("OBLIGATION_NOT_FOUND");
   if (ob.state !== "active") throw new DomainError("OBLIGATION_NOT_ACTIVE");
   await assertEmployeePeriodOpen(ctx, ob.period);
+  await assertPeriodMutable(ctx, ob.period);
 
   const siblings = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
 
@@ -2789,6 +3030,109 @@ async function depositEmployeeFor(ctx) {
     if (user && user.active !== false) return user.id;
   }
   return ctx.actor.userId;
+}
+
+function parseConfigJson(doc) {
+  if (!doc) return {};
+  try { return JSON.parse(doc.json || "{}") || {}; } catch { return {}; }
+}
+
+function payloadSnapshot(raw) {
+  let payload = {};
+  try { payload = JSON.parse(raw || "{}"); } catch { payload = {}; }
+  const fields = payload.fields || payload;
+  const out = {};
+  for (const key of ["status", "rent", "tenant", "paid_amount", "partial", "collectionMethod", "start_date", "note"]) {
+    if (fields[key] != null && fields[key] !== "") out[key] = fields[key];
+  }
+  if (payload.receiptId) out.receiptId = payload.receiptId;
+  if (payload.correctedAmountFils != null) out.correctedAmountFils = payload.correctedAmountFils;
+  if (payload.reason) out.reason = payload.reason;
+  return out;
+}
+
+function originalRevision(ctx, payloadJson) {
+  return {
+    version: 1,
+    at: ctx.now,
+    by: ctx.actor.userId,
+    byName: ctx.actor.displayName || actorKey(ctx.actor),
+    reason: "التقديم الأصلي",
+    newValues: payloadSnapshot(payloadJson),
+  };
+}
+
+async function assertPeriodMutable(ctx, period) {
+  if (!period || !/^\d{4}-\d{2}$/.test(String(period))) return;
+  const data = parseConfigJson(await ctx.tx.get("uiConfig", `close-state:${period}`));
+  if (data.status === "closed") throw new DomainError("MONTH_CLOSED", { period });
+}
+
+async function receiptCorrectionImpact(ctx, receiptId, correctedAmountFils) {
+  const receipt = await ctx.tx.get("receipts", receiptId);
+  if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
+  if (receipt.state !== RECEIPT_STATE.RECOGNIZED) {
+    throw new DomainError("RECEIPT_NOT_RECOGNIZED", { state: receipt.state });
+  }
+  const original = Number(receipt.amountFils || 0);
+  const corrected = Number(correctedAmountFils);
+  if (!Number.isInteger(corrected) || corrected < 0 || corrected > original) {
+    throw new DomainError("INVALID_CORRECTION", { originalAmountFils: original, correctedAmountFils: corrected });
+  }
+  const receipts = await ctx.tx.query("receipts", []);
+  const deposits = await ctx.tx.query("deposits", []);
+  let blocked = null;
+  if (receipt.method === "cash") {
+    try {
+      assertCashReversalFitsSharedHolding({
+        receipts, deposits, reversingReceiptIds: [receipt.id],
+      });
+    } catch (e) {
+      if (e.code !== "RECEIPT_ALREADY_DEPOSITED") throw e;
+      blocked = "DEPOSIT_RECONCILIATION_REQUIRED";
+    }
+  }
+  if (receipt.method === "bank") blocked = blocked || "BANK_RECONCILIATION_REQUIRED";
+  const space = receipt.spaceId ? await ctx.tx.get("spaces", receipt.spaceId) : null;
+  return {
+    receiptId: receipt.id,
+    obligationId: receipt.obligationId,
+    period: receipt.period,
+    spaceId: receipt.spaceId || null,
+    spaceName: space && space.name || null,
+    method: receipt.method,
+    originalAmountFils: original,
+    correctedAmountFils: corrected,
+    deltaFils: corrected - original,
+    holdingDeltaFils: receipt.method === "cash" ? corrected - original : 0,
+    blocked,
+  };
+}
+
+async function buildCloseReport(ctx, period) {
+  const [obligations, receipts, deposits, rentals, requests] = await Promise.all([
+    ctx.tx.query("obligations", []),
+    ctx.tx.query("receipts", []),
+    ctx.tx.query("deposits", []),
+    ctx.tx.query("rentals", []),
+    ctx.tx.query("uiRequests", []),
+  ]);
+  return reviewPeriodClose({ period, obligations, receipts, deposits, rentals, requests });
+}
+
+async function writeMonthLock(ctx, period, locked) {
+  const locksDoc = await ctx.tx.get("uiConfig", "locks");
+  let data = parseConfigJson(locksDoc);
+  if (data && data.data && typeof data.data === "object") data = { ...data, ...data.data };
+  const [y, m] = String(period).split("-").map(Number);
+  const key = `${y}_${m - 1}`;
+  if (locked) data[key] = true;
+  else delete data[key];
+  const rec = {
+    id: "locks", json: JSON.stringify(data), updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
+  };
+  if (locksDoc) ctx.tx.update("uiConfig", "locks", rec);
+  else ctx.tx.create("uiConfig", "locks", { ...rec, ...base(ctx) });
 }
 
 export function actorKey(actor) {
