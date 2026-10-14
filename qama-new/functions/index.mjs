@@ -7,7 +7,8 @@
  *
  * There is no debug endpoint, no test shortcut and no privileged client path.
  * Deploy marker: deposit-expense-revenue-2026-09-04
- * Deploy marker: ACCT-CLOSE-20261014T2145Z
+ * Deploy marker: PREDEPLOY-20261014T2215Z
+ * Previous marker: ACCT-CLOSE-20261014T2145Z
  * Previous production marker: OCC-CONTINUITY-20261011T2255Z
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";

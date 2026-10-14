@@ -180,7 +180,8 @@ function formatEngineError(err) {
   if (/PERIOD_ALREADY_COVERED/i.test(raw)) return "يوجد عقد يغطي نفس القسم ونفس الشهر — لا يُنشأ عقد ثانٍ";
   if (/STALE_REQUEST_VERSION/i.test(raw)) return "تغيّر الطلب بعد فتحه. حدّث الشاشة ثم اعتمد النسخة الأخيرة";
   if (/REQUEST_NOT_EDITABLE/i.test(raw)) return "لا يمكن تعديل الطلب بعد الاعتماد أو الرفض";
-  if (/REQUEST_BEING_APPROVED/i.test(raw)) return "الطلب قيد الاعتماد الآن. انتظر ثم حدّث الشاشة";
+  if (/REQUEST_BEING_APPROVED/i.test(raw)) return "الطلب قيد الاعتماد الآن. استأنف نفس الطلب ولا تُنشئ طلباً جديداً";
+  if (/REQUEST_PARTIALLY_APPLIED/i.test(raw)) return "الاعتماد توقف بعد حركة مالية. استأنف نفس الطلب حتى لا يتكرر الإيصال";
   if (/CORRECTION_CHANGES_TARGET/i.test(raw)) return "التصحيح يجب أن يبقى على نفس القسم ونفس الشهر";
   if (/CORRECTION_REASON_REQUIRED/i.test(raw)) return "سبب التصحيح مطلوب";
   if (/CORRECTION_APPROVAL_REQUIRED/i.test(raw)) return "تصحيح التحصيل يحتاج اعتماد المدير";

@@ -4,8 +4,9 @@
  * Runs as a sequence of real commands (separate transactions) so each step sees
  * committed state. Sub-operation ids are derived from the request id, so retry
  * after a crash is idempotent. The request is marked approved only after every
- * step succeeds. On failure it returns to pending with lastError — never left
- * permanently in "processing".
+ * step succeeds. If a failure happens before any step commits, the request
+ * returns to pending. If a step already committed, it stays processing until
+ * an explicit resume of the same steps. Nothing retries it by itself.
  */
 import {
   DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant, rentalCoversPeriod,
@@ -33,12 +34,22 @@ export async function commitWorkRequestFlow({
       }
     }
   }
-  const claimed = await claimPendingRequest(db, actor, requestId, now, payload.expectedVersion);
-  if (claimed.alreadyApplied) {
-    await rememberOperation(db, { operationId, command: "commitWorkRequest", actor, now, result: { requestId, status: "approved", alreadyApplied: true } });
-    return { requestId, status: "approved", alreadyApplied: true, replay: false };
+  let req = existing;
+  if (existing.status === "processing") {
+    // A stuck approval is resumed only by an explicit request. Nothing retries it alone.
+    if (payload.resume !== true) throw new DomainError("REQUEST_BEING_APPROVED", { requestId });
+    const version = Number(existing.approvingVersion || existing.version || 1);
+    if (payload.expectedVersion != null && Number(payload.expectedVersion) !== version) {
+      throw new DomainError("STALE_REQUEST_VERSION", { requestId, version, expectedVersion: payload.expectedVersion });
+    }
+  } else {
+    const claimed = await claimPendingRequest(db, actor, requestId, now, payload.expectedVersion);
+    if (claimed.alreadyApplied) {
+      await rememberOperation(db, { operationId, command: "commitWorkRequest", actor, now, result: { requestId, status: "approved", alreadyApplied: true } });
+      return { requestId, status: "approved", alreadyApplied: true, replay: false };
+    }
+    req = claimed.doc;
   }
-  const req = claimed.doc;
 
   const body = parseJson(req.payloadJson, req.payload);
   const period = periodOfRequest(req);
@@ -49,14 +60,15 @@ export async function commitWorkRequestFlow({
   const collectorUserId = req.by || actor.userId;
   const snap = await loadSnapshot(db);
 
+  // Cash correction steps may run as the employee. The grant names this request
+  // only; the actor role stays employee and is what the audit records.
+  const stepGrant = (enforceCorrectionPolicy && actor.role !== "owner" && req.type === "receipt_correction")
+    ? { kind: "receipt_correction", requestId }
+    : undefined;
+
   try {
-    // Employee direct policy already passed. The reversal command itself stays
-    // owner-only for every other caller; this path is the configured exception.
-    const dispatchActor = (enforceCorrectionPolicy && actor.role !== "owner")
-      ? { ...actor, role: "owner" }
-      : actor;
     await dispatchRequest({
-      db, actor: dispatchActor, now, run, req, body, period, collectorUserId, snap, requestId,
+      db, actor, now, run, req, body, period, collectorUserId, snap, requestId, stepGrant,
       confirmDepositReconciliation: payload.confirmDepositReconciliation === true,
     });
     await markRequest(db, actor, requestId, now, "approved", null);
@@ -64,8 +76,13 @@ export async function commitWorkRequestFlow({
     await rememberOperation(db, { operationId, command: "commitWorkRequest", actor, now, result });
     return { ...result, replay: false };
   } catch (err) {
+    const partial = await requestHasCommittedSteps(db, requestId);
     try {
-      await markRequest(db, actor, requestId, now, "pending", err.code || err.message || "FAILED");
+      await markRequest(
+        db, actor, requestId, now,
+        partial ? "processing" : "pending",
+        err.code || err.message || "FAILED",
+      );
     } catch { /* still throw the original */ }
     throw err;
   }
@@ -255,6 +272,11 @@ async function applySpaceFields(ctx, payload) {
       if (e.code !== "NOTHING_TO_UPDATE") throw e;
     }
   }
+  // A resumed approval may already have created the rental before the crash.
+  // The same step id replays, so this does not create a second obligation.
+  if (rental && (status === "collected" || fields.partial)) {
+    await ctx.run(ctx.actor, "generateObligations", { period: ctx.period }, STEP(ctx.requestId, "genobl"));
+  }
   // Resolve obligation by explicit id, then live period match (cycle ids ≠ rentalId_period).
   let ob = null;
   if (fields._obligationId) {
@@ -371,13 +393,16 @@ async function applyReceiptCorrection(ctx) {
         throw e;
       }
     }
+    if (receipt.method === "bank" && ctx.actor.role !== "owner") {
+      throw new DomainError("CORRECTION_APPROVAL_REQUIRED", { method: "bank" });
+    }
     if (receipt.method === "bank" && !ctx.confirmDepositReconciliation) {
       throw new DomainError("DEPOSIT_RECONCILIATION_REQUIRED", {
         receiptId,
         message: "تصحيح تحويل بنكي معتمد يحتاج تأكيداً صريحاً من المدير. سجل الإيداع لا يُحذف.",
       });
     }
-    await ctx.run(ctx.actor, "reverseReceipt", { receiptId: receipt.id, reason }, STEP(ctx.requestId, "rev"));
+    await ctx.run(ctx.actor, "reverseReceipt", { receiptId: receipt.id, reason }, STEP(ctx.requestId, "rev"), ctx.stepGrant);
   }
   if (corrected > 0) {
     const date = validDate(receipt.collectionDate) || ctx.now.slice(0, 10);
@@ -402,7 +427,7 @@ async function applyReceiptCorrection(ctx) {
         amountFils: corrected,
         collectionDate: date,
         collectorUserId: receipt.collectorUserId || ctx.collectorUserId,
-      }, STEP(ctx.requestId, "cash"));
+      }, STEP(ctx.requestId, "cash"), ctx.stepGrant);
     }
   }
   return { receiptId, originalAmountFils: original, correctedAmountFils: corrected };
@@ -639,6 +664,12 @@ function queryAll(db, collection) {
 }
 function readDoc(db, collection, id) {
   return db.runTransaction((tx) => tx.get(collection, id));
+}
+
+async function requestHasCommittedSteps(db, requestId) {
+  const ops = await db.runTransaction((tx) => tx.query("operations", []));
+  const prefix = `cwr-${requestId}-`;
+  return (ops || []).some((op) => op && String(op.operationId || "").startsWith(prefix));
 }
 
 async function claimPendingRequest(db, actor, requestId, now, expectedVersion) {

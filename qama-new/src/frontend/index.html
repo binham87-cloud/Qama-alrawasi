@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="QAMA-ACCT-CLOSE-20261014T2145Z"/>
-<title>قمة الرواسي · QAMA-ACCT-CLOSE-20261014T2145Z</title>
+<meta name="qama-ui-build" content="QAMA-PREDEPLOY-20261014T2215Z"/>
+<title>قمة الرواسي · QAMA-PREDEPLOY-20261014T2215Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -290,7 +290,8 @@ function formatEngineError(err) {
   if (/PERIOD_ALREADY_COVERED/i.test(raw)) return "يوجد عقد يغطي نفس القسم ونفس الشهر — لا يُنشأ عقد ثانٍ";
   if (/STALE_REQUEST_VERSION/i.test(raw)) return "تغيّر الطلب بعد فتحه. حدّث الشاشة ثم اعتمد النسخة الأخيرة";
   if (/REQUEST_NOT_EDITABLE/i.test(raw)) return "لا يمكن تعديل الطلب بعد الاعتماد أو الرفض";
-  if (/REQUEST_BEING_APPROVED/i.test(raw)) return "الطلب قيد الاعتماد الآن. انتظر ثم حدّث الشاشة";
+  if (/REQUEST_BEING_APPROVED/i.test(raw)) return "الطلب قيد الاعتماد الآن. استأنف نفس الطلب ولا تُنشئ طلباً جديداً";
+  if (/REQUEST_PARTIALLY_APPLIED/i.test(raw)) return "الاعتماد توقف بعد حركة مالية. استأنف نفس الطلب حتى لا يتكرر الإيصال";
   if (/CORRECTION_CHANGES_TARGET/i.test(raw)) return "التصحيح يجب أن يبقى على نفس القسم ونفس الشهر";
   if (/CORRECTION_REASON_REQUIRED/i.test(raw)) return "سبب التصحيح مطلوب";
   if (/CORRECTION_APPROVAL_REQUIRED/i.test(raw)) return "تصحيح التحصيل يحتاج اعتماد المدير";
@@ -5398,7 +5399,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI QAMA-ACCT-CLOSE-20261014T2145Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI QAMA-PREDEPLOY-20261014T2215Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -5634,7 +5635,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-ACCT-CLOSE-20261014T2145Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-PREDEPLOY-20261014T2215Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -8052,16 +8053,16 @@ function renderApp(){
             onClick:()=>rejectRequest(req)},["✗ رفض"])]):null,
         // FIX 5: زر الإنقاذ للمدير — يُعيد الطلب العالق (processing) إلى pending أو rejected
         showActions&&req.status==="processing"?h("div",{style:{background:"#0c1a2e",border:"1px solid #1e3a5f",borderRadius:"8px",padding:"10px",marginTop:"4px"}},[
-          h("div",{style:{fontSize:"12px",color:"#93c5fd",marginBottom:"8px"}},["🔄 هذا الطلب علق أثناء المعالجة — اختر الإجراء:"]),
+          h("div",{style:{fontSize:"12px",color:"#93c5fd",marginBottom:"8px"}},["🔄 الاعتماد توقف. الاستئناف يكمل نفس الطلب ولا ينشئ إيصالاً ثانياً."]),
           h("div",{style:{display:"flex",gap:"8px"}},[
-            h("button",{class:"btn",style:{flex:"1",background:"#1e3a1e",border:"1px solid #166534",color:"#4ade80",borderRadius:"8px",padding:"7px",fontSize:"13px",fontWeight:"700"},
+            h("button",{"data-testid":"req-resume",class:"btn",style:{flex:"1",background:"#1e3a1e",border:"1px solid #166534",color:"#4ade80",borderRadius:"8px",padding:"7px",fontSize:"13px",fontWeight:"700"},
               onClick:async()=>{
                 try{
-                  await setDoc(doc(db,"requests",req.id),{...req,status:"pending",recoveredAt:new Date().toISOString()},{merge:true});
-                  showMsg("✓ تم إرجاع الطلب إلى معلّق");
+                  await engineCommand("commitWorkRequest",{requestId:req.id,expectedVersion:Number(req.version||1),resume:true},"resume-"+req.id);
+                  showMsg("✓ تم استئناف الاعتماد");
                   await loadRequests();R();
-                }catch(e){showMsg("⚠ خطأ: "+e.message);}
-              }},["↩ إرجاع لمعلّق"]),
+                }catch(e){showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):"تعذر الاستئناف"));}
+              }},["↩ استئناف الاعتماد"]),
             h("button",{class:"btn",style:{flex:"1",background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"7px",fontSize:"13px"},
               onClick:async()=>{
                 try{

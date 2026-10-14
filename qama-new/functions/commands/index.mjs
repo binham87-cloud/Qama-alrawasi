@@ -821,6 +821,7 @@ export const SCHEMAS = Object.freeze({
   applyReceiptCorrection: {
     requestId: S.id(), expectedVersion: S.opt(S.int(1, 100000)),
     confirmDepositReconciliation: S.opt(S.bool()),
+    resume: S.opt(S.bool()),
   },
   setCorrectionPolicy: { undeposited: S.enum(["manager_approval", "employee_direct"]) },
   reviewAccountingClose: { period: S.period() },
@@ -831,6 +832,7 @@ export const SCHEMAS = Object.freeze({
     requestId: S.id(),
     expectedVersion: S.opt(S.int(1, 100000)),
     confirmDepositReconciliation: S.opt(S.bool()),
+    resume: S.opt(S.bool()),
   },
   uncollectObligation: { obligationId: S.id(), reason: S.str(300) },
   savePeriodExtras: {
@@ -923,21 +925,50 @@ function coerce(command, field, rule, value) {
  * @param operationId  idempotency key
  * @param now       ISO timestamp supplied by the caller so the domain stays pure
  */
-export async function executeCommand({ db, actor, command, payload, operationId, now }) {
+const CORRECTION_GRANT_COMMANDS = new Set(["reverseReceipt", "createCashReceipt"]);
+
+/**
+ * An employee may run only the cash steps of their own processing receipt
+ * correction. The grant is attached by commitWorkRequestFlow, never by the
+ * callable payload. Role stays employee, so the audit names that employee.
+ */
+async function correctionGrantAllows({ db, actor, command, payload, operationId, grant }) {
+  if (!grant || grant.kind !== "receipt_correction") return false;
+  if (!CORRECTION_GRANT_COMMANDS.has(command)) return false;
+  const requestId = String(grant.requestId || "");
+  if (!requestId || operationId !== `cwr-${requestId}-${command === "reverseReceipt" ? "rev" : "cash"}`) return false;
+  const req = await db.runTransaction((tx) => tx.get("uiRequests", requestId));
+  if (!req || req.type !== "receipt_correction" || req.status !== "processing") return false;
+  if (req.approvingBy !== actor.userId) return false;
+  let body = {};
+  try { body = JSON.parse(req.payloadJson || "{}"); } catch { return false; }
+  if (command === "reverseReceipt") return payload.receiptId === body.receiptId;
+  const receipt = await db.runTransaction((tx) => tx.get("receipts", body.receiptId));
+  if (!receipt || receipt.method !== "cash") return false;
+  if (payload.collectorUserId && payload.collectorUserId !== receipt.collectorUserId) return false;
+  return payload.obligationId === receipt.obligationId
+    && payload.amountFils === Number(body.correctedAmountFils);
+}
+
+export async function executeCommand({ db, actor, command, payload, operationId, now, grant }) {
   if (!PERMISSIONS[command]) throw new DomainError("UNKNOWN_COMMAND", { command });
   if (!actor || !actor.userId) throw new DomainError("UNAUTHENTICATED");
   if (actor.active === false) throw new DomainError("ACCOUNT_DISABLED");
-  if (!PERMISSIONS[command].includes(actor.role)) {
-    throw new DomainError("FORBIDDEN", { command, role: actor.role });
-  }
   if (typeof operationId !== "string" || !ID_RE.test(operationId) || operationId.length < 8) {
     throw new DomainError("INVALID_OPERATION_ID");
   }
+  const roleAllowed = PERMISSIONS[command].includes(actor.role);
+  if (!roleAllowed && !grant) throw new DomainError("FORBIDDEN", { command, role: actor.role });
   const clean = validatePayload(command, payload);
+  let usedCorrectionGrant = false;
+  if (!roleAllowed) {
+    usedCorrectionGrant = await correctionGrantAllows({ db, actor, command, payload: clean, operationId, grant });
+    if (!usedCorrectionGrant) throw new DomainError("FORBIDDEN", { command, role: actor.role });
+  }
 
   if (command === "commitWorkRequest" || command === "applyReceiptCorrection") {
-    const run = (who, cmd, body, op) => executeCommand({
-      db, actor: who, command: cmd, payload: body, operationId: op, now,
+    const run = (who, cmd, body, op, stepGrant) => executeCommand({
+      db, actor: who, command: cmd, payload: body, operationId: op, now, grant: stepGrant,
     });
     return commitWorkRequestFlow({
       db, actor, payload: clean, operationId, now, run,
@@ -954,7 +985,7 @@ export async function executeCommand({ db, actor, command, payload, operationId,
       return { ...prior.result, replay: true };
     }
 
-    const ctx = { tx, actor, now, operationId, payload: clean };
+    const ctx = { tx, actor, now, operationId, payload: clean, usedCorrectionGrant };
     const result = await HANDLERS[command](ctx);
 
     // `create` (not set) so two concurrent duplicates collide at the database.
@@ -2657,6 +2688,10 @@ const HANDLERS = {
     }
     const sameUser = ctx.actor.userId === doc.by || actorKey(ctx.actor) === doc.byKey;
     if (!sameUser) throw new DomainError("FORBIDDEN", { why: "not the submitter" });
+    const steps = await ctx.tx.query("operations", []);
+    if ((steps || []).some((op) => op && String(op.operationId || "").startsWith(`cwr-${doc.id}-`))) {
+      throw new DomainError("REQUEST_PARTIALLY_APPLIED", { requestId: doc.id });
+    }
     const version = Number(doc.version || 1);
     if (ctx.payload.expectedVersion !== version) {
       throw new DomainError("STALE_REQUEST_VERSION", {
@@ -2849,6 +2884,12 @@ const HANDLERS = {
     const doc = await ctx.tx.get("uiRequests", ctx.payload.requestId);
     if (!doc) throw new DomainError("REQUEST_NOT_FOUND");
     const next = ctx.payload.decision;
+    if (next === "pending") {
+      const steps = await ctx.tx.query("operations", []);
+      if ((steps || []).some((op) => op && String(op.operationId || "").startsWith(`cwr-${doc.id}-`))) {
+        throw new DomainError("REQUEST_PARTIALLY_APPLIED", { requestId: doc.id });
+      }
+    }
     if (next === "approved" || next === "rejected") {
       if (doc.status !== "pending" && doc.status !== "processing") {
         throw new DomainError("REQUEST_NOT_PENDING", { status: doc.status });
@@ -3016,8 +3057,9 @@ export { HANDLERS };
 
 async function collectorFor(ctx) {
   // Employees cannot forge collector identity. Only the owner may attribute a receipt
-  // to an employee (the old approve-request path).
-  if (ctx.actor.role === "owner" && ctx.payload.collectorUserId) {
+  // to an employee (the old approve-request path). A granted correction may keep
+  // the original collector, and only that collector.
+  if ((ctx.actor.role === "owner" || ctx.usedCorrectionGrant) && ctx.payload.collectorUserId) {
     const user = await ctx.tx.get("users", ctx.payload.collectorUserId);
     if (user && user.active !== false) return user.id;
   }

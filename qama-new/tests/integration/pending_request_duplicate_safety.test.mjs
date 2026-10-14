@@ -265,5 +265,9 @@ test("an approved deposit blocks receipt reversal and stays approved", async () 
   assert.equal(recognized(db, space.spaceId).length, 1);
   assert.equal(db.dump("deposits").find((d) => d.id === deposit.depositId).state, "approved");
   const stuck = db.dump("uiRequests").find((r) => r.id === "req_late_after_deposit");
-  assert.equal(stuck.status, "pending");
+  assert.equal(stuck.status, "processing");
+  await assert.rejects(
+    () => run(db, owner, "resolveWorkRequest", { requestId: "req_late_after_deposit", decision: "pending" }, opId("reopen-deposited")),
+    (err) => err && err.code === "REQUEST_PARTIALLY_APPLIED",
+  );
 });
