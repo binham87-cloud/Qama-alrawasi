@@ -136,7 +136,7 @@ test("two employees may both submit, and two full approvals still collect once",
   assert.equal(db.dump("rentals").filter((r) => r.spaceId === space.spaceId).length, 1);
 });
 
-test("a second absolute partial does not add another receipt; a higher absolute adds only the difference", async () => {
+test("a second partial payment is another receipt, and an amount above remaining is refused", async () => {
   const db = freshDb();
   const owner = await bootstrapOwner(db);
   const nader = await createUser(db, owner, { displayName: "نادر", role: "employee", pin: "1111" });
@@ -151,14 +151,16 @@ test("a second absolute partial does not add another receipt; a higher absolute 
     fields: { status: "partial", partial: true, paid_amount: 400, rent: 1200, tenant: "هنا", start_date: "2026-09-01", collectionMethod: "cash" },
   });
   await commitAt(db, owner, "req_partial_400_again", "2026-09-11T20:00:00.000Z");
-  assert.equal(recognized(db, space.spaceId).reduce((s, r) => s + r.amountFils, 0), 40000);
-  await submit(db, nader, {
-    requestId: "req_partial_900", unitId: unit.unitId, spaceId: space.spaceId,
-    fields: { status: "partial", partial: true, paid_amount: 900, rent: 1200, tenant: "هنا", start_date: "2026-09-01", collectionMethod: "cash" },
-  });
-  await commitAt(db, owner, "req_partial_900", "2026-09-12T20:00:00.000Z");
+  assert.equal(recognized(db, space.spaceId).reduce((s, r) => s + r.amountFils, 0), 80000);
+  await assert.rejects(
+    () => submit(db, nader, {
+      requestId: "req_partial_900", unitId: unit.unitId, spaceId: space.spaceId,
+      fields: { status: "partial", partial: true, paid_amount: 900, rent: 1200, tenant: "هنا", start_date: "2026-09-01", collectionMethod: "cash" },
+    }).then(() => commitAt(db, owner, "req_partial_900", "2026-09-12T20:00:00.000Z")),
+    (e) => e.code === "AMOUNT_EXCEEDS_REMAINING",
+  );
   const total = recognized(db, space.spaceId).reduce((s, r) => s + r.amountFils, 0);
-  assert.equal(total, 90000);
+  assert.equal(total, 80000);
   assert.equal(recognized(db, space.spaceId).length, 2);
 });
 

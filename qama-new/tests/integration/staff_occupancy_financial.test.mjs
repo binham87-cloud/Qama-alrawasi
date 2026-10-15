@@ -1,7 +1,7 @@
 /**
  * Staff occupancy is independent from collection.
  * Zero rent must not create a future obligation or inflate target.
- * Positive staff rent stays chargeable. Historical receipts stay.
+ * A positive staff amount does not create a charge. Historical receipts stay.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -29,21 +29,28 @@ test("STAFF zero rent creates no obligation and does not inflate target", async 
   assert.ok(openObs.every((o) => o.period < "2026-10" || o.state === "cancelled" || Number(o.amountFils) === 0));
 });
 
-test("STAFF positive rent creates one charge and keeps it unpaid until a receipt", async () => {
+test("STAFF positive rent does not create a charge or a receipt", async () => {
   const db = freshDb();
   const owner = await bootstrapOwner(db);
   const building = await seedBuilding(db, owner);
   const spaceId = building.space.spaceId;
+  const before = db.dump("receipts").length;
   const result = await run(db, owner, "setSpaceOccupancy", {
     spaceId, occupancy: "staff", staffRentFils: 150000,
   }, opId("staff-pay"));
   assert.equal(result.occupancy, "staff");
-  assert.ok(result.staffCharge && result.staffCharge.obligationId);
-  const ob = db.dump("obligations").find((o) => o.id === result.staffCharge.obligationId);
-  assert.equal(ob.amountFils, 150000);
-  assert.notEqual(ob.state, "cancelled");
-  const receipts = db.dump("receipts").filter((r) => r.obligationId === ob.id && r.state === "recognized");
-  assert.equal(receipts.length, 0);
+  assert.equal(result.staffRentFils, 0);
+  const space = db.dump("spaces").find((s) => s.id === spaceId);
+  assert.equal(space.occupancy, "staff");
+  assert.equal(space.staffRentFils, 0);
+  const staffCharges = db.dump("obligations").filter((o) => o.spaceId === spaceId && o.purpose === "staff");
+  assert.equal(staffCharges.length, 0);
+  const september = db.dump("obligations").find((o) => o.id === building.obligationId);
+  assert.equal(september.state, "active");
+  assert.equal(september.amountFils, 920000);
+  assert.equal(db.dump("receipts").length, before);
+  const dash = buildDashboardFromDump(db, "2026-10", "2026-10-20");
+  assert.equal(dash.summary.targetFils, 0);
 });
 
 test("RENTED after zero-rent STAFF does not invent an obligation or a receipt", async () => {

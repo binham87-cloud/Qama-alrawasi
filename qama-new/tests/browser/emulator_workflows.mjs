@@ -76,7 +76,7 @@ async function login(page, label, pin) {
   await page.goto("http://127.0.0.1:5000/", { waitUntil: "networkidle0", timeout: 30000 });
   await page.waitForSelector('[data-testid="ui-build-stamp"]');
   const stamp = await page.$eval('[data-testid="ui-build-stamp"]', (el) => el.textContent);
-  if (!stamp.includes("QAMA-PREDEPLOY-20261014T2215Z")) throw new Error("unexpected stamp " + stamp);
+  if (!stamp.includes("QAMA-STABLE-20261015T1830Z")) throw new Error("unexpected stamp " + stamp);
   await page.evaluate((name) => {
     const button = [...document.querySelectorAll("button")].find((el) => el.textContent.includes(name));
     if (!button) throw new Error("missing user " + name);

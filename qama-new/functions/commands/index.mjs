@@ -195,11 +195,10 @@ async function applyStaffZeroRent(ctx, rentalId, staffPeriod, reason) {
 }
 
 /**
- * Staff rent rule:
- * - 0 fils: accommodation. No obligation, no target, no collected income, no receipt.
- * - greater than 0: one chargeable obligation for the staff month and later months.
- *   It stays unpaid until a genuine receipt. Recognized receipts are never invented
- *   and never reversed here. Months before the staff date are not rewritten.
+ * Staff accommodation is not chargeable.
+ * Zero rent closes an unpaid staff agreement without reversing recognized receipts.
+ * A positive amount does not open a new rental or a new obligation, and it does
+ * not rewrite an existing staff agreement.
  */
 async function syncStaffCharge(ctx, space, staffRentFils, { closedRentalIds = [] } = {}) {
   const today = String(ctx.now).slice(0, 10);
@@ -222,115 +221,15 @@ async function syncStaffCharge(ctx, space, staffRentFils, { closedRentalIds = []
     return { rentalId: null, obligationId: null, amountFils: 0, closedStaffRentalIds: closed };
   }
 
-  let rental = staffRentals[0] || null;
-  if (!rental) {
-    const spaceRentals = (await ctx.tx.query("rentals", [["spaceId", "==", space.id]])).map((r) => (
-      r && closedSet.has(r.id) ? { ...r, state: "closed", endDate: today } : r
-    ));
-    const spaceObligations = await ctx.tx.query("obligations", [["spaceId", "==", space.id]]);
-    const coverageConflict = findPeriodCoverageConflict({
-      spaceId: space.id,
-      startDate: today,
-      rentals: spaceRentals,
-      obligations: spaceObligations,
-    });
-    if (coverageConflict) throw new DomainError("PERIOD_ALREADY_COVERED", coverageConflict);
-    const id = newId("rental", ctx);
-    const dueDay = Math.min(31, Math.max(1, Number(today.slice(8, 10)) || 1));
-    ctx.tx.create("rentals", id, {
-      id,
-      propertyId: space.propertyId,
-      unitId: space.unitId,
-      spaceId: space.id,
-      tenantName: "موظفين",
-      tenantPhone: null,
-      contractualAmountFils: staffRentFils,
-      dueDayOfMonth: dueDay,
-      startDate: today,
-      endDate: null,
-      state: "active",
-      purpose: "staff",
-      securityDepositFils: 0,
-      ...base(ctx),
-    });
-    rental = {
-      id,
-      propertyId: space.propertyId,
-      unitId: space.unitId,
-      spaceId: space.id,
-      tenantName: "موظفين",
-      contractualAmountFils: staffRentFils,
-      dueDayOfMonth: dueDay,
-      startDate: today,
-      purpose: "staff",
-      state: "active",
-    };
-    audit(ctx, "staff_charge_opened", "rental", id, { amountFils: staffRentFils, period });
-  } else if (Number(rental.contractualAmountFils) !== staffRentFils) {
-    const rentRevisions = Array.isArray(rental.rentRevisions) ? rental.rentRevisions.slice() : [];
-    const startPeriod = periodOf(String(rental.startDate || today).slice(0, 10));
-    if (!rentRevisions.some((r) => r && r.effectivePeriod === startPeriod)) {
-      rentRevisions.push({ effectivePeriod: startPeriod, amountFils: rental.contractualAmountFils });
-    }
-    const nextRentRevs = rentRevisions.filter((r) => r && r.effectivePeriod !== period);
-    nextRentRevs.push({ effectivePeriod: period, amountFils: staffRentFils });
-    ctx.tx.update("rentals", rental.id, {
-      contractualAmountFils: staffRentFils,
-      rentRevisions: nextRentRevs,
-    });
-    rental = { ...rental, contractualAmountFils: staffRentFils };
-  }
-
-  const existingForRental = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
-  const periodHit = (existingForRental || []).find((o) =>
-    o && o.state === "active" && o.baselineExcluded !== true && (
-      o.period === period
-      || String(o.cycleStart || o.dueDate || "").slice(0, 7) === period
-    )
-  );
-  if (periodHit) {
-    const receipts = await ctx.tx.query("receipts", [["obligationId", "==", periodHit.id]]);
-    const live = receipts.filter((r) =>
-      r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING
-    );
-    if (!live.length && Number(periodHit.amountFils) !== staffRentFils) {
-      ctx.tx.update("obligations", periodHit.id, { amountFils: staffRentFils });
-    }
-    return { rentalId: rental.id, obligationId: periodHit.id, amountFils: staffRentFils, closedStaffRentalIds: [] };
-  }
-
-  const fields = buildCycleFields({
-    rentalId: rental.id,
-    cycleStart: today,
-    previousCycleId: null,
-    amountFils: staffRentFils,
-    tenantName: "موظفين",
-    anniversaryDay: rental.dueDayOfMonth,
-  });
-  const already = await ctx.tx.get("obligations", fields.id);
-  if (already) {
-    return { rentalId: rental.id, obligationId: already.id, amountFils: staffRentFils, closedStaffRentalIds: [] };
-  }
-  ctx.tx.create("obligations", fields.id, {
-    id: fields.id,
-    rentalCycleId: fields.rentalCycleId,
-    rentalId: rental.id,
-    propertyId: rental.propertyId || space.propertyId,
-    unitId: rental.unitId || space.unitId,
-    spaceId: space.id,
-    period: fields.period,
-    amountFils: fields.amountFils,
-    dueDate: fields.dueDate,
-    cycleStart: fields.cycleStart,
-    cycleEnd: fields.cycleEnd,
-    previousCycleId: fields.previousCycleId,
-    anniversaryDay: fields.anniversaryDay,
-    tenantNameSnapshot: fields.tenantNameSnapshot,
-    state: "active",
-    purpose: "staff",
-    ...base(ctx),
-  });
-  return { rentalId: rental.id, obligationId: fields.id, amountFils: staffRentFils, closedStaffRentalIds: [] };
+  // Positive staff rent is not a rental charge. Leave any existing agreement unchanged.
+  const existing = staffRentals[0] || null;
+  return {
+    rentalId: existing ? existing.id : null,
+    obligationId: null,
+    amountFils: 0,
+    closedStaffRentalIds: [],
+    refusedCharge: true,
+  };
 }
 
 async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, reverseLiveMoney = false, retainArrears = false, staffZeroRent = false, staffFromPeriod = null }) {
@@ -1187,10 +1086,8 @@ const HANDLERS = {
     const staffRentSpecified = Object.prototype.hasOwnProperty.call(ctx.payload, "staffRentFils");
     let staffRentFils = null;
     if (next === "staff") {
-      if (staffRentSpecified) staffRentFils = ctx.payload.staffRentFils;
-      else if (space.occupancy === "staff" && Number.isSafeInteger(space.staffRentFils)) {
-        staffRentFils = space.staffRentFils;
-      } else staffRentFils = 0;
+      // Staff accommodation is never a rental charge, including a typed positive amount.
+      staffRentFils = 0;
     }
     const closed = [];
     const requestedStaffPeriod = /^\d{4}-\d{2}$/.test(String(ctx.payload.staffEffectivePeriod || ""))

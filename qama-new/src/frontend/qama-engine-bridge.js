@@ -173,6 +173,8 @@ function formatEngineError(err) {
   if (/RECEIPT_ALREADY_DEPOSITED/i.test(raw)) {
     return "لا يمكن عكس الإيصال — المبلغ مضمّن في إيداع معتمد. اعكس الإيداع أولاً.";
   }
+  if (/ZERO_FULL_COLLECTION/i.test(raw)) return "تحصيل كامل بمبلغ صفر بينما المتبقي أكبر من صفر — أعد إرسال المبلغ المتبقي";
+  if (/FULL_AMOUNT_MUST_EQUAL_REMAINING/i.test(raw)) return "الدفع الكامل يجب أن يساوي المتبقي فقط، وليس الإيجار الأصلي مرة ثانية";
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/TENANT_REQUIRED/i.test(raw)) return "اسم المستأجر مطلوب قبل التأجير";
   if (/PARTIAL_AMOUNT_REQUIRED/i.test(raw)) return "مبلغ الدفع الجزئي مطلوب وأكبر من صفر";
@@ -860,10 +862,17 @@ async function applyCollection(item, dashSp) {
     }
     want = already + add;
   } else if (item.status === "collected" || item._collectDraft) {
-    // كامل: amount field may be 0/blank — use exact remaining obligation, never UI paid_amount.
+    // كامل uses the exact remaining obligation, never a blank paid_amount.
     const remaining = (dashSp && dashSp.remainingFils != null)
       ? Number(dashSp.remainingFils)
       : Math.max(0, aedToFils(item.rent) - already);
+    if (remaining > 0) {
+      item.paid_amount = remaining / 100;
+      item.newPaymentAed = item.paid_amount;
+      item.newPaymentFils = remaining;
+      item.paymentResolved = true;
+      item.partial = false;
+    }
     want = already + remaining;
   } else return;
   const delta = want - already;
@@ -1014,7 +1023,7 @@ async function syncOccupancyAndTenant(item, dashSp) {
     if (occ === "staff") {
       // 0 is valid staff accommodation. A typed positive amount is a charge.
       // Do not replace either value with an implicit zero after the save.
-      const staffRentFils = aedToFils(item.rent);
+      const staffRentFils = 0;
       try {
         await engineCommand("setSpaceOccupancy", {
           spaceId: item._spaceId,

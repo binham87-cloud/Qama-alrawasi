@@ -11,6 +11,7 @@
 import {
   DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant, rentalCoversPeriod,
   assertCashReversalFitsSharedHolding, assertCashAdjustmentFitsSharedHolding,
+  resolveCollectionPayment,
 } from "../domain/finance.mjs";
 
 const STEP = (requestId, name) => (`cwr-${requestId}-${name}`).slice(0, 140);
@@ -307,11 +308,6 @@ async function applySpaceFields(ctx, payload) {
 
   const paidNow = await recognizedPaid(ctx.db, ob.id);
   const dueFils = Number(ob.amountFils || 0);
-  const remainingFils = Math.max(0, dueFils - paidNow);
-  // كامل = full REMAINING only (never mint another full due when already partially paid).
-  const wantPaid = fields.partial
-    ? moneyFils(fields.paid_amount)
-    : (status === "collected" ? paidNow + remainingFils : 0);
   // OLD UI keeps paid_amount when switching محصّل → متأخر. Treat non-partial late as unpaid.
   const unpaidIntent = (status === "late" || status === "pending") && (!fields.partial || moneyFils(fields.paid_amount) === 0);
   if (unpaidIntent) {
@@ -322,9 +318,24 @@ async function applySpaceFields(ctx, payload) {
   }
   if (status !== "collected" && !fields.partial) return;
 
-  const delta = wantPaid - paidNow;
+  const decision = resolveCollectionPayment({
+    dueFils,
+    recognizedPaidFils: paidNow,
+    status: fields.partial ? "partial" : "collected",
+    partial: !!fields.partial,
+    statedAmountFils: statedCollectionFils(fields),
+  });
+  if (decision.error) {
+    throw new DomainError(decision.error, {
+      obligationId: ob.id,
+      dueFils,
+      paidFils: paidNow,
+      remainingFils: decision.remainingFils,
+      statedAmountFils: decision.statedAmountFils ?? statedCollectionFils(fields),
+    });
+  }
+  const delta = decision.newPaymentFils;
   if (delta <= 0) {
-    // Already fully applied — idempotent no-op for محصل+كامل retries.
     return { obligationId: ob.id, alreadyApplied: true, paidFils: paidNow };
   }
   const date = validDate(fields.due_date) || validDate(fields.start_date) || ctx.now.slice(0, 10);
@@ -778,6 +789,17 @@ function moneyFils(v) {
   if (v == null || v === "") return 0;
   const n = parseAedToFils(v);
   return n == null ? 0 : n;
+}
+/** New payment stated by the employee. Null means the request did not name an amount. */
+function statedCollectionFils(fields) {
+  if (!fields) return null;
+  if (Number.isInteger(fields.newPaymentFils)) return fields.newPaymentFils;
+  if (fields.newPaymentAed != null && fields.newPaymentAed !== "") {
+    const n = parseAedToFils(fields.newPaymentAed);
+    if (n != null) return n;
+  }
+  if (fields.paid_amount != null && fields.paid_amount !== "") return moneyFils(fields.paid_amount);
+  return null;
 }
 function validDate(v) {
   return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;

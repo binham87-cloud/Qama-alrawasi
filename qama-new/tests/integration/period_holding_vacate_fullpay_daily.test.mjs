@@ -256,7 +256,8 @@ test("3b commitWorkRequest Full uses remaining and finds cycle obligation", asyn
     payloadJson: JSON.stringify({
       unitId: unit.unitId, partId: 1,
       fields: {
-        status: "collected", rent: 900, paid_amount: 0, partial: false,
+        status: "collected", rent: 900, paid_amount: 900, partial: false,
+        newPaymentAed: 900, newPaymentFils: 90000, paymentResolved: true,
         collectionMethod: "cash", start_date: "2026-09-01", tenant: "مستأجر",
         _spaceId: space.spaceId,
       },
@@ -371,5 +372,5 @@ test("5 Daily prepaid: Target+Collected+Holding; idempotent; period isolation", 
 test("5b UI: daily prepaid path present; no paid=0 collected paint requirement", () => {
   assert.match(html, /createDailyBookingPrepaid/);
   assert.match(html, /محصّل \/ لم يودع/);
-  assert.match(html, /QAMA-PREDEPLOY-20261014T2215Z/);
+  assert.match(html, /QAMA-STABLE-20261015T1830Z/);
 });

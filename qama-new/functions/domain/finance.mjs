@@ -340,10 +340,12 @@ export function liveObligationsForPeriod(obligations, rentals, receipts = null) 
       earnedObIds.add(r.obligationId);
     }
   }
-  return (obligations || []).filter((o) => {
+  const filtered = (obligations || []).filter((o) => {
     if (!o || o.state !== "active" || o.baselineExcluded === true) return false;
     if (o.rentMonthSuppressed === true) return false;
+    if (o.purpose === "staff") return false;
     const rental = rentalsById.get(o.rentalId);
+    if (rental && rental.purpose === "staff") return false;
     // Advance cash booked to a month after move-out is not that month's rent.
     if (isObligationAfterTenancyEnd(o, rental)) return false;
     if (activeRentalIds.has(o.rentalId)) return true;
@@ -355,6 +357,130 @@ export function liveObligationsForPeriod(obligations, rentals, receipts = null) 
     if (rental && obPeriod && rentalCoversPeriod(rental, obPeriod)) return true;
     return false;
   });
+  return collapseOneRentPerSpacePeriod(filtered, receipts, rentals);
+}
+
+/**
+ * One rent due per space per rental period.
+ * An empty duplicate obligation is omitted from Target.
+ * Every obligation that already has recognized money stays, so a real payment
+ * is not dropped. Cancelling the extra document is a separate owner decision.
+ */
+function rentalRangesOverlap(a, b) {
+  if (!a || !b) return true;
+  const aEnd = a.endDate ? String(a.endDate).slice(0, 10) : "9999-12-31";
+  const bEnd = b.endDate ? String(b.endDate).slice(0, 10) : "9999-12-31";
+  const aStart = String(a.startDate || "").slice(0, 10);
+  const bStart = String(b.startDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(aStart) || !/^\d{4}-\d{2}-\d{2}$/.test(bStart)) return true;
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
+export function collapseOneRentPerSpacePeriod(obligations, receipts, rentals = null) {
+  const list = obligations || [];
+  if (!Array.isArray(receipts)) return list;
+  const rentalsById = new Map((rentals || []).filter(Boolean).map((r) => [r.id, r]));
+  const earned = new Set();
+  for (const r of receipts) {
+    if (isRecognizedReceipt(r) && r.obligationId && toSafeFils(r.amountFils) > 0) earned.add(r.obligationId);
+  }
+  const groups = new Map();
+  const order = [];
+  for (const o of list) {
+    const period = o.period || (o.dueDate ? periodOf(String(o.dueDate).slice(0, 10)) : "");
+    const key = `${o.spaceId}|${period}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key).push(o);
+  }
+  const out = [];
+  for (const key of order) {
+    const group = groups.get(key);
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    const paid = group.filter((o) => earned.has(o.id));
+    if (!paid.length) {
+      const sorted = group.slice().sort((a, b) => String(a.createdAt || a.id).localeCompare(String(b.createdAt || b.id)));
+      out.push(sorted[0]);
+      continue;
+    }
+    out.push(...paid);
+    for (const extra of group) {
+      if (earned.has(extra.id)) continue;
+      const extraRental = rentalsById.get(extra.rentalId);
+      const duplicate = paid.some((p) => {
+        const paidRental = rentalsById.get(p.rentalId);
+        if (!extraRental || !paidRental) return true;
+        const startPeriod = /^\d{4}-\d{2}-\d{2}$/.test(String(extraRental.startDate || ""))
+          ? String(extraRental.startDate).slice(0, 7)
+          : null;
+        const extraPeriod = extra.period || "";
+        if (startPeriod && extraPeriod && extraPeriod < startPeriod) return true;
+        return rentalRangesOverlap(extraRental, paidRental);
+      });
+      if (!duplicate) out.push(extra);
+    }
+  }
+  return out;
+}
+
+/**
+ * The only definition of a new collection amount.
+ * Full means the current remaining balance, never the original rent again,
+ * and never AED 0 while money is still due.
+ * A missing or zero stated amount is not proof that cash was received.
+ */
+export function resolveCollectionPayment({
+  dueFils, recognizedPaidFils, status, partial = false, statedAmountFils = null,
+}) {
+  const due = toSafeFils(dueFils);
+  const paid = toSafeFils(recognizedPaidFils);
+  const remaining = due - paid;
+  const rem = remaining > 0 ? remaining : 0;
+  const stated = statedAmountFils == null ? null : toSafeFils(statedAmountFils);
+  if (status === "staff" || status === "vacant" || status === "late" || status === "pending") {
+    return { newPaymentFils: 0, kind: "none", remainingFils: rem, error: null };
+  }
+  if (partial || status === "partial") {
+    if (stated == null || stated <= 0) {
+      return { newPaymentFils: 0, kind: "partial", remainingFils: rem, error: "PARTIAL_AMOUNT_REQUIRED" };
+    }
+    if (stated > rem) {
+      return {
+        newPaymentFils: 0, kind: "partial", remainingFils: rem, statedAmountFils: stated,
+        error: "AMOUNT_EXCEEDS_REMAINING",
+      };
+    }
+    return { newPaymentFils: stated, kind: "partial", remainingFils: rem, error: null };
+  }
+  if (status === "collected") {
+    if (rem <= 0) {
+      return { newPaymentFils: 0, kind: "full", remainingFils: 0, error: null, alreadySettled: true };
+    }
+    // Omitted amount: the system collects the remaining balance.
+    // An explicit zero is not proof that money was received.
+    if (stated == null) {
+      return { newPaymentFils: rem, kind: "full", remainingFils: rem, error: null, computed: true };
+    }
+    if (stated <= 0) {
+      return {
+        newPaymentFils: 0, kind: "full", remainingFils: rem, dueFils: due, paidFils: paid,
+        error: "ZERO_FULL_COLLECTION",
+      };
+    }
+    if (stated !== rem) {
+      return {
+        newPaymentFils: 0, kind: "full", remainingFils: rem, statedAmountFils: stated,
+        error: "FULL_AMOUNT_MUST_EQUAL_REMAINING",
+      };
+    }
+    return { newPaymentFils: rem, kind: "full", remainingFils: rem, error: null };
+  }
+  return { newPaymentFils: 0, kind: "none", remainingFils: rem, error: null };
 }
 
 /** Obligation ids that may attribute cash to rent-month Holding. */

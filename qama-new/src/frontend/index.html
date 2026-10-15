@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
 <meta http-equiv="Expires" content="0"/>
-<meta name="qama-ui-build" content="QAMA-PREDEPLOY-20261014T2215Z"/>
-<title>قمة الرواسي · QAMA-PREDEPLOY-20261014T2215Z</title>
+<meta name="qama-ui-build" content="QAMA-STABLE-20261015T1830Z"/>
+<title>قمة الرواسي · QAMA-STABLE-20261015T1830Z</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -283,6 +283,8 @@ function formatEngineError(err) {
   if (/RECEIPT_ALREADY_DEPOSITED/i.test(raw)) {
     return "لا يمكن عكس الإيصال — المبلغ مضمّن في إيداع معتمد. اعكس الإيداع أولاً.";
   }
+  if (/ZERO_FULL_COLLECTION/i.test(raw)) return "تحصيل كامل بمبلغ صفر بينما المتبقي أكبر من صفر — أعد إرسال المبلغ المتبقي";
+  if (/FULL_AMOUNT_MUST_EQUAL_REMAINING/i.test(raw)) return "الدفع الكامل يجب أن يساوي المتبقي فقط، وليس الإيجار الأصلي مرة ثانية";
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
   if (/TENANT_REQUIRED/i.test(raw)) return "اسم المستأجر مطلوب قبل التأجير";
   if (/PARTIAL_AMOUNT_REQUIRED/i.test(raw)) return "مبلغ الدفع الجزئي مطلوب وأكبر من صفر";
@@ -1048,10 +1050,17 @@ async function applyCollection(item, dashSp) {
     }
     want = already + add;
   } else if (item.status === "collected" || item._collectDraft) {
-    // كامل: amount field may be 0/blank — use exact remaining obligation, never UI paid_amount.
+    // كامل uses the exact remaining obligation, never a blank paid_amount.
     const remaining = (dashSp && dashSp.remainingFils != null)
       ? Number(dashSp.remainingFils)
       : Math.max(0, aedToFils(item.rent) - already);
+    if (remaining > 0) {
+      item.paid_amount = remaining / 100;
+      item.newPaymentAed = item.paid_amount;
+      item.newPaymentFils = remaining;
+      item.paymentResolved = true;
+      item.partial = false;
+    }
     want = already + remaining;
   } else return;
   const delta = want - already;
@@ -1202,7 +1211,7 @@ async function syncOccupancyAndTenant(item, dashSp) {
     if (occ === "staff") {
       // 0 is valid staff accommodation. A typed positive amount is a charge.
       // Do not replace either value with an implicit zero after the save.
-      const staffRentFils = aedToFils(item.rent);
+      const staffRentFils = 0;
       try {
         await engineCommand("setSpaceOccupancy", {
           spaceId: item._spaceId,
@@ -2640,6 +2649,11 @@ async function approveRequest(req){
   // Never Object.assign paid/status into the month and save before this.
   if(S.approvingReqId){showMsg("⏳ جاري اعتماد طلب آخر...");return;}
   if(!req||!req.id){showMsg("⚠ طلب غير صالح");return;}
+  const reqFields=req.payload&&req.payload.fields;
+  if(zeroFullCollection(reqFields)){
+    showMsg("لا يمكن الاعتماد: التحصيل الكامل مسجّل بمبلغ صفر. أعد الموظف إرسال المتبقي.");
+    return;
+  }
   S.approvingReqId=req.id; R();
   const keepY=S.year, keepM=S.month, keepTab=S.tab;
   try{
@@ -4759,6 +4773,40 @@ function fieldErrBorder(testId, okBorder){
   return (S._fieldErrors&&S._fieldErrors[testId])?"1px solid #b91c1c":(okBorder||"1px solid #2a2a2a");
 }
 
+/** Stamp the new payment onto the record before it is stored or shown to the manager. */
+function stampCollectionPayment(item){
+  if(!item) return item;
+  const rent=Number(item.rent)||0;
+  const already=Number(item._enginePaid||0);
+  const remaining=Math.max(0, Math.round((rent-already)*100)/100);
+  if(item.status==="vacant"||item.status==="staff"){
+    item.newPaymentAed=0;
+    item.newPaymentFils=0;
+    item.paymentResolved=false;
+    return item;
+  }
+  if(item.partial){
+    const add=Number(item.paid_amount)||0;
+    item.newPaymentAed=add;
+    item.newPaymentFils=Math.round(add*100);
+    item.paymentResolved=add>0;
+    return item;
+  }
+  if(item.status==="collected"||item._collectDraft){
+    item.partial=false;
+    item.paid_amount=remaining;
+    item.newPaymentAed=remaining;
+    item.newPaymentFils=Math.round(remaining*100);
+    item.paymentResolved=remaining>0;
+  }
+  return item;
+}
+function zeroFullCollection(fields){
+  if(!fields) return false;
+  const full=fields.status==="collected" && !fields.partial;
+  const stated=Number(fields.newPaymentAed!=null?fields.newPaymentAed:fields.paid_amount)||0;
+  return full && !(stated>0) && Number(fields.rent||0)>0;
+}
 /** Client-side intent check before owner save / employee submit — never wipe form. */
 function validateRentCollectIntent(item, opts){
   opts=opts||{};
@@ -5399,7 +5447,7 @@ function renderHome(){
     h("div",{style:{textAlign:"center",marginBottom:"44px"}},[
       h("div",{style:{fontSize:"15px",color:"#333",letterSpacing:"4px",marginBottom:"10px"}},["QAMA ALRAWASI"]),
       h("div",{style:{fontSize:"30px",fontWeight:"900",color:"#fff",marginBottom:"4px"}},["قمة الرواسي"]),
-      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI QAMA-PREDEPLOY-20261014T2215Z"]),
+      h("div",{"data-testid":"ui-build-stamp",style:{fontSize:"11px",color:"#555",marginBottom:"10px"}},["UI QAMA-STABLE-20261015T1830Z"]),
       h("div",{style:{fontSize:"14px",color:"#444"}},["نظام إدارة البناية"])]),
     h("div",{style:{display:"flex",flexDirection:"column",gap:"12px",width:"100%",maxWidth:"300px"}},[
       h("button",{class:"btn",style:{background:"#fff",color:"#000",borderRadius:"14px",padding:"16px",fontSize:"17px",fontWeight:"700"},onClick:()=>set({screen:"pin",pendingUser:"saeed",pin:"",pinErr:false})},["👤  مدير"]),
@@ -5635,7 +5683,7 @@ function renderApp(){
 
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
-      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-PREDEPLOY-20261014T2215Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
+      h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-STABLE-20261015T1830Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
       h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
         S.msg?h("span",{style:{fontSize:"15px",color:"#4ade80"}},[S.msg]):(S.syncMsg?h("span",{style:{fontSize:"14px",color:"#555"}},[S.syncMsg]):null),
         h("button",{class:"btn",style:{background:"#111",border:"1px solid #222",borderRadius:"8px",padding:"5px 8px",fontSize:"15px",color:"#888"},onClick:async()=>{await loadLocksFromServer();loadMonthOnline(S.year,S.month);loadBalances().then(()=>R());}},["تحديث"]),
@@ -6089,6 +6137,7 @@ function renderApp(){
           S._savingPartition=true;
           p._rentPeriodFrozen=false;
           try{readLiveEditorFields(p,"partition");}catch(_e){}
+          stampCollectionPayment(p);
           if(!rejectNonPositiveLiveRent(p,"partition")){
             S._savingPartition=false;
             set({editPart:unit.id+"-"+p.id});
@@ -6623,6 +6672,7 @@ function renderApp(){
           S._savingFull=true;
           u._rentPeriodFrozen=false;
           try{readLiveEditorFields(u,"full");}catch(_e){}
+          stampCollectionPayment(u);
           if(!rejectNonPositiveLiveRent(u,"full")){
             S._savingFull=false;
             set({editPart:"full-"+u.id});
@@ -7960,6 +8010,7 @@ function renderApp(){
           start_date:"بداية",due_date:"استحقاق",partial:"نوع الدفع",paid_amount:"المدفوع",
           elec_paid:"الكهرباء",elec_amount:"مبلغ الكهرباء"};
         Object.entries(fields).forEach(([k,v])=>{
+          if(k==="paid_amount") return;
           if(labels[k] && v!==null && v!==undefined && v!==""){
             let display=v;
             if(k==="status") display={"collected":"محصّل","late":"متأخر","vacant":"فارغ","staff":"موظفين"}[v]||v;
@@ -7968,6 +8019,10 @@ function renderApp(){
             detailRows.push(detailRow(labels[k],display));
           }
         });
+        const newPay=fields.newPaymentAed!=null?Number(fields.newPaymentAed):(fields.partial?Number(fields.paid_amount||0):Number(fields.paid_amount||0));
+        const blocked=zeroFullCollection(fields);
+        detailRows.push(detailRow("المبلغ الجديد", (Number.isFinite(newPay)?newPay:0).toLocaleString()+" د.إ", {big:true, testId:"request-new-payment"}));
+        if(blocked) detailRows.push(detailRow("تنبيه", "تحصيل كامل بمبلغ صفر — لن يُعتمد حتى يُعاد إرسال المتبقي"));
       }
       // Deposit approval card — amount must be visually obvious before اعتماد.
       if(req.type==="add_transaction"||req.type==="bank_history"||(req.type==="engine_approval"&&(req._approveCommand==="approveDeposit"||req._kind==="deposit"||req._approveCommand==="approveBankReceipt"||req._kind==="bank"))){
@@ -8046,7 +8101,8 @@ function renderApp(){
           h("span",{style:{background:statusBg[req.status],color:statusColor[req.status],borderRadius:"6px",padding:"2px 8px",fontSize:"15px",fontWeight:"600",flexShrink:"0",marginRight:"4px"}},
             [statusLabel[req.status]||req.status])]),
         detailRows.length>0?h("div",{"data-testid":"request-finance-details",style:{background:"#0f0f0f",borderRadius:"8px",padding:"8px 10px",marginBottom:"10px"}},detailRows.filter(Boolean)):null,
-        showActions&&req.status==="pending"?h("div",{style:{display:"flex",gap:"8px"}},[
+        showActions&&req.status==="pending"&&zeroFullCollection(req.payload&&req.payload.fields)?h("div",{style:{fontSize:"13px",color:"#f87171",padding:"8px"}},["الاعتماد متوقف: المبلغ الجديد صفر"]):null,
+        showActions&&req.status==="pending"&&!zeroFullCollection(req.payload&&req.payload.fields)?h("div",{style:{display:"flex",gap:"8px"}},[
           h("button",{"data-testid":"req-approve","data-reqid":req.id,class:"btn",style:{flex:"1",background:S.approvingReqId===req.id?"#555":"#fff",color:"#000",borderRadius:"8px",padding:"8px",fontSize:"15px",fontWeight:"700"},
             onClick:()=>approveRequest(req)},[S.approvingReqId===req.id?"⏳ جاري...":"✓ اعتماد"]),
           h("button",{"data-testid":"req-reject","data-reqid":req.id,class:"btn",style:{flex:"1",background:"#450a0a",border:"1px solid #7f1d1d",color:"#f87171",borderRadius:"8px",padding:"8px",fontSize:"15px"},

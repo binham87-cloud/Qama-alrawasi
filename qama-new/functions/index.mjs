@@ -7,7 +7,7 @@
  *
  * There is no debug endpoint, no test shortcut and no privileged client path.
  * Deploy marker: deposit-expense-revenue-2026-09-04
- * Deploy marker: PREDEPLOY-20261014T2215Z
+ * Deploy marker: QAMA-STABLE-20261015T1830Z
  * Previous marker: ACCT-CLOSE-20261014T2145Z
  * Previous production marker: OCC-CONTINUITY-20261011T2255Z
  */

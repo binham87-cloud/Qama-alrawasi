@@ -91,7 +91,7 @@ test("Manager bank reject uses rejectBankReceipt path, not resolveWorkRequest al
   const htmlSlice = html.slice(htmlRej, htmlRej + 900);
   assert.match(htmlSlice, /_rejectCommand/);
   assert.match(htmlSlice, /engineCommand/);
-  assert.match(html, /QAMA-PREDEPLOY-20261014T2215Z/);
+  assert.match(html, /QAMA-STABLE-20261015T1830Z/);
   assert.match(authSrc, /d\.state === "rejected"/);
   assert.match(authSrc, /fromBankReceipt === true/);
   const readModel = readFileSync(resolve(root, "functions/services/readModel.mjs"), "utf8");
@@ -122,7 +122,7 @@ test("month navigation clears stale dash and seeds period obligations for any ro
   const refreshSlice = bridge.slice(refreshAt, refreshAt + 500);
   assert.match(refreshSlice, /generateObligations/);
   assert.doesNotMatch(refreshSlice, /role === "owner"[\s\S]{0,120}generateObligations/);
-  assert.match(html, /QAMA-PREDEPLOY-20261014T2215Z/);
+  assert.match(html, /QAMA-STABLE-20261015T1830Z/);
   assert.match(bridge, /sp\.cycleStart \|\| sp\.startDate/);
 });
 
