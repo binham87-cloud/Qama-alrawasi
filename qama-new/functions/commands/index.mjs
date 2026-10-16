@@ -54,6 +54,7 @@ async function cancelUnpaidObligationsForRental(
       : due <= vacateDay;
     if (covered && due <= vacateDay) {
       // Past/current-due unpaid: freeze as historical — do not cancel.
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, {
         frozenHistoricalObligation: true,
         frozenAtVacateOn: vacateDay,
@@ -61,7 +62,8 @@ async function cancelUnpaidObligationsForRental(
       continue;
     }
     // Future unpaid after vacancy effective date → cancel (not Target/Holding).
-    ctx.tx.update("obligations", ob.id, {
+    await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
       state: "cancelled",
       cancelledBy: ctx.actor.userId,
       cancelledAt: ctx.now,
@@ -169,6 +171,7 @@ async function applyStaffZeroRent(ctx, rentalId, staffPeriod, reason) {
       .reduce((s, r) => s + Number(r.amountFils || 0), 0);
     const future = String(obPeriod) > String(period);
     if (paid <= 0) {
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, {
         state: "cancelled",
         cancelledBy: ctx.actor.userId,
@@ -183,6 +186,7 @@ async function applyStaffZeroRent(ctx, rentalId, staffPeriod, reason) {
     // A recognized receipt stays in its original month. Staff does not suppress
     // it and does not reverse it. Only an unpaid remainder is released.
     if (Number(ob.amountFils || 0) > paid) {
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, {
         amountFils: paid,
         staffUnpaidReleased: true,
@@ -271,7 +275,8 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
       // Future not-yet-due unpaid obligation: CANCEL — never Target/Collected/Holding.
       // Vacancy must never invent collection. No receipts ⇒ no money event.
       if (remaining > 0 && !livePaid && due > vacateDay) {
-        ctx.tx.update("obligations", ob.id, {
+        await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
           state: "cancelled",
           cancelledBy: ctx.actor.userId,
           cancelledAt: ctx.now,
@@ -281,17 +286,35 @@ async function closeRentalInTx(ctx, rental, { endDate, reason, setVacant, revers
         cancelledObligationIds.push(ob.id);
         continue;
       }
+      // A contract that starts and ends the same day, with no payment, is not
+      // a month of rent. The vacate button retains arrears by default; that
+      // must not invent a collectible balance for a same-day stay.
+      const startDay = String(rental.startDate || "").slice(0, 10);
+      if (remaining > 0 && !livePaid && startDay && startDay === vacateDay) {
+        await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
+          state: "cancelled",
+          cancelledBy: ctx.actor.userId,
+          cancelledAt: ctx.now,
+          cancelReason: closeReason,
+          cancelledAsSameDayUnpaid: true,
+        });
+        cancelledObligationIds.push(ob.id);
+        continue;
+      }
       if (remaining > 0) {
         // Due/past unpaid arrears: retain collectible debt (not Holding).
         // Past months covered by the rental stay historically attributable.
-        ctx.tx.update("obligations", ob.id, {
+        await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
           retainArrearsAfterVacate: true,
           arrearsRemainingFilsSnapshot: remaining,
           frozenHistoricalObligation: rentalCoversPeriod(closedRental, obPeriod),
         });
       } else if (!livePaid && !rentalCoversPeriod(closedRental, obPeriod)) {
         // Zero leftover in a non-covered (future) period — cancel.
-        ctx.tx.update("obligations", ob.id, {
+        await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
           state: "cancelled",
           cancelledBy: ctx.actor.userId,
           cancelledAt: ctx.now,
@@ -355,12 +378,14 @@ async function suppressFutureRentMonthObligations(ctx, rental, vacateDay) {
     );
     if (live.length) {
       // Keep the receipt. Drop November (etc.) Target/Collected/Holding only.
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, {
         rentMonthSuppressed: true,
         suppressedReason: "tenancy_ended_before_period",
         suppressedAt: ctx.now,
       });
     } else if (ob.state === "active") {
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, {
         state: "cancelled",
         rentMonthSuppressed: true,
@@ -371,6 +396,7 @@ async function suppressFutureRentMonthObligations(ctx, rental, vacateDay) {
         cancelReason: "tenancy ended before period",
       });
     } else if (!ob.rentMonthSuppressed) {
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, {
         rentMonthSuppressed: true,
         suppressedReason: "tenancy_ended_before_period",
@@ -1051,13 +1077,15 @@ const HANDLERS = {
         if (obPeriod && String(obPeriod) < String(effectivePeriod)) {
           // Freeze the name that was valid before this change. Never overwrite it.
           if (!ob.tenantNameSnapshot) {
-            ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: rental.tenantName });
+            await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: rental.tenantName });
             frozen.push(ob.id);
           }
           continue;
         }
         if (ob.tenantNameSnapshot === tenantPatch.tenantName) continue;
-        ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: tenantPatch.tenantName });
+        await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, { tenantNameSnapshot: tenantPatch.tenantName });
         revised.push(ob.id);
       }
     }
@@ -1240,7 +1268,8 @@ const HANDLERS = {
         // A collected month can be lowered only down to what is already recognized.
         // It cannot be raised here, and it cannot fall below the live receipts.
         if (next < Number(ob.amountFils || 0) && next >= paid) {
-          ctx.tx.update("obligations", ob.id, { amountFils: next });
+          await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, { amountFils: next });
           revised.push(ob.id);
         } else {
           receiptFrozen.push(ob.id);
@@ -1248,6 +1277,7 @@ const HANDLERS = {
         continue;
       }
       if (ob.amountFils === ctx.payload.contractualAmountFils) continue;
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, { amountFils: ctx.payload.contractualAmountFils });
       revised.push(ob.id);
     }
@@ -1285,6 +1315,18 @@ const HANDLERS = {
       // A later month's cycle start must not move the contract start forward
       // (that would uncover September when October is saved).
       if (!prevStart || periodOf(nextStart) <= periodOf(prevStart)) patch.startDate = nextStart;
+      if (patch.startDate && (!prevStart || periodOf(patch.startDate) < periodOf(prevStart))) {
+        const spaceRentals = await ctx.tx.query("rentals", [["spaceId", "==", rental.spaceId]]);
+        const spaceObligations = await ctx.tx.query("obligations", [["spaceId", "==", rental.spaceId]]);
+        const backdateConflict = findPeriodCoverageConflict({
+          spaceId: rental.spaceId,
+          startDate: patch.startDate,
+          rentals: spaceRentals,
+          obligations: spaceObligations,
+          excludeRentalId: rental.id,
+        });
+        if (backdateConflict) throw new DomainError("PERIOD_ALREADY_COVERED", backdateConflict);
+      }
     }
     if (ctx.payload.dueDayOfMonth != null) patch.dueDayOfMonth = ctx.payload.dueDayOfMonth;
 
@@ -1312,6 +1354,7 @@ const HANDLERS = {
       }
       const nextDue = dueDateFor(ob.period, nextDueDay);
       if (ob.dueDate === nextDue) continue;
+      await assertObligationMutable(ctx, ob);
       ctx.tx.update("obligations", ob.id, { dueDate: nextDue });
       revised.push({ obligationId: ob.id, before: ob.dueDate, after: nextDue });
     }
@@ -1609,7 +1652,8 @@ const HANDLERS = {
     const live = receipts.filter((r) => r.state === RECEIPT_STATE.RECOGNIZED || r.state === RECEIPT_STATE.PENDING);
     // Refusing beats orphaning money: reverse the receipts first, deliberately.
     if (live.length) throw new DomainError("OBLIGATION_HAS_RECEIPTS", { count: live.length });
-    ctx.tx.update("obligations", ob.id, {
+    await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
       state: "cancelled", cancelledBy: ctx.actor.userId, cancelledAt: ctx.now, cancelReason: ctx.payload.reason,
     });
     audit(ctx, "obligation_cancelled", "obligation", ob.id, { reason: ctx.payload.reason });
@@ -1631,6 +1675,7 @@ const HANDLERS = {
    */
   async createDailyCashReceipt(ctx) {
     await assertEmployeePeriodOpen(ctx, ctx.payload.period);
+    await assertPeriodMutable(ctx, ctx.payload.period);
     const collectorUserId = await collectorFor(ctx);
     const bookingId = ctx.payload.bookingId;
     const periodDoc = await ctx.tx.get("uiPeriods", `period:${ctx.payload.period}`);
@@ -1642,14 +1687,18 @@ const HANDLERS = {
           : (periodDoc.extras || {});
       } catch { extras = periodDoc.extras || {}; }
     }
-    const booking = (extras.dailyBookings || []).find((b) => b && String(b.id) === String(bookingId));
-    if (booking && String(booking.status || "") !== "cancelled") {
-      const expectedFils = Math.round(Number(booking.total) * 100);
-      if (!Number.isFinite(expectedFils) || expectedFils <= 0 || ctx.payload.amountFils !== expectedFils) {
-        throw new DomainError("BOOKING_AMOUNT_MISMATCH", {
-          bookingTotalFils: expectedFils, amountFils: ctx.payload.amountFils,
-        });
-      }
+    const bookingList = Array.isArray(extras.dailyBookings) ? extras.dailyBookings.slice() : [];
+    const bookingIdx = bookingList.findIndex((b) => b && String(b.id) === String(bookingId));
+    const booking = bookingIdx >= 0 ? bookingList[bookingIdx] : null;
+    if (!booking) throw new DomainError("BOOKING_NOT_FOUND", { bookingId, period: ctx.payload.period });
+    if (String(booking.status || "") === "cancelled" || booking.cancelled === true) {
+      throw new DomainError("BOOKING_CANCELLED", { bookingId });
+    }
+    const expectedFils = Math.round(Number(booking.total) * 100);
+    if (!Number.isFinite(expectedFils) || expectedFils <= 0 || ctx.payload.amountFils !== expectedFils) {
+      throw new DomainError("BOOKING_AMOUNT_MISMATCH", {
+        bookingTotalFils: expectedFils, amountFils: ctx.payload.amountFils,
+      });
     }
     // Idempotent: one recognized cash receipt per daily booking.
     const existing = await ctx.tx.query("receipts", [["obligationId", "==", `daily:${bookingId}`]]);
@@ -1657,6 +1706,14 @@ const HANDLERS = {
       (r) => r && r.state === RECEIPT_STATE.RECOGNIZED && r.sourceType === "daily_booking",
     );
     if (live) {
+      if (!booking.receiptId || booking.paymentStatus !== "collected") {
+        bookingList[bookingIdx] = { ...booking, paymentStatus: "collected", receiptId: live.id };
+        extras.dailyBookings = bookingList;
+        const periodDocId = `period:${ctx.payload.period}`;
+        ctx.tx.update("uiPeriods", periodDocId, {
+          extrasJson: JSON.stringify(extras), updatedAt: ctx.now, updatedBy: ctx.actor.userId,
+        });
+      }
       return {
         receiptId: live.id, state: RECEIPT_STATE.RECOGNIZED, method: "cash",
         bookingId, alreadyApplied: true,
@@ -1682,6 +1739,11 @@ const HANDLERS = {
       bookingId,
       ...base(ctx),
     });
+    bookingList[bookingIdx] = { ...booking, paymentStatus: "collected", receiptId: id };
+    extras.dailyBookings = bookingList;
+    ctx.tx.update("uiPeriods", `period:${ctx.payload.period}`, {
+      extrasJson: JSON.stringify(extras), updatedAt: ctx.now, updatedBy: ctx.actor.userId,
+    });
     audit(ctx, "daily_cash_receipt_created", "receipt", id, {
       amountFils: ctx.payload.amountFils, bookingId, method: "cash",
     });
@@ -1697,6 +1759,7 @@ const HANDLERS = {
   async createDailyBookingPrepaid(ctx) {
     const period = ctx.payload.period;
     await assertEmployeePeriodOpen(ctx, period);
+    await assertPeriodMutable(ctx, period);
     assertPositiveFils(ctx.payload.amountFils, "INVALID_AMOUNT");
     let booking;
     try {
@@ -1808,6 +1871,7 @@ const HANDLERS = {
     const receipt = await ctx.tx.get("receipts", ctx.payload.receiptId);
     if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
     if (receipt.state !== RECEIPT_STATE.PENDING) throw new DomainError("RECEIPT_NOT_PENDING", { state: receipt.state });
+    await assertPeriodMutable(ctx, receipt.period);
 
     // Re-check the fit at approval time: the obligation may have been paid meanwhile.
     const ob = await ctx.tx.get("obligations", receipt.obligationId);
@@ -1835,6 +1899,7 @@ const HANDLERS = {
     const receipt = await ctx.tx.get("receipts", ctx.payload.receiptId);
     if (!receipt) throw new DomainError("RECEIPT_NOT_FOUND");
     if (receipt.state !== RECEIPT_STATE.PENDING) throw new DomainError("RECEIPT_NOT_PENDING");
+    await assertPeriodMutable(ctx, receipt.period);
     ctx.tx.update("receipts", receipt.id, {
       state: RECEIPT_STATE.REJECTED, rejectedBy: ctx.actor.userId, rejectedAt: ctx.now,
       rejectReason: ctx.payload.reason,
@@ -1944,6 +2009,7 @@ const HANDLERS = {
         reversalAmountFils: reversal.amountFils,
       });
     }
+    await assertPeriodMutable(ctx, receipt.period);
     if (receipt.obligationId) {
       const ob = await ctx.tx.get("obligations", receipt.obligationId);
       if (!ob || ob.state !== "active") throw new DomainError("OBLIGATION_NOT_ACTIVE");
@@ -2106,6 +2172,7 @@ const HANDLERS = {
     const dep = await ctx.tx.get("deposits", ctx.payload.depositId);
     if (!dep) throw new DomainError("DEPOSIT_NOT_FOUND");
     if (dep.state !== APPROVAL_STATE.PENDING) throw new DomainError("DEPOSIT_NOT_PENDING", { state: dep.state });
+    await assertPeriodMutable(ctx, depositSourcePeriod(dep) || dep.period);
 
     // Same Firestore transaction: refuse if amount exceeds Holding for the deposit's source period.
     // External deposits never drew from Holding — skip custody check.
@@ -2141,6 +2208,7 @@ const HANDLERS = {
     const dep = await ctx.tx.get("deposits", ctx.payload.depositId);
     if (!dep) throw new DomainError("DEPOSIT_NOT_FOUND");
     if (dep.state !== APPROVAL_STATE.PENDING) throw new DomainError("DEPOSIT_NOT_PENDING");
+    await assertPeriodMutable(ctx, depositSourcePeriod(dep) || dep.period);
     ctx.tx.update("deposits", dep.id, {
       state: APPROVAL_STATE.REJECTED, rejectedBy: ctx.actor.userId, rejectedAt: ctx.now,
       rejectReason: ctx.payload.reason,
@@ -2153,6 +2221,7 @@ const HANDLERS = {
     if (!dep) throw new DomainError("DEPOSIT_NOT_FOUND");
     if (dep.state === APPROVAL_STATE.REVERSED) throw new DomainError("ALREADY_REVERSED");
     if (dep.state !== APPROVAL_STATE.APPROVED) throw new DomainError("DEPOSIT_NOT_APPROVED", { state: dep.state });
+    await assertPeriodMutable(ctx, depositSourcePeriod(dep) || dep.period);
     const reversalId = newId("rev", ctx);
     ctx.tx.create("reversals", reversalId, {
       id: reversalId, targetType: "deposit", targetId: dep.id,
@@ -2179,6 +2248,7 @@ const HANDLERS = {
       ? String(ctx.payload.period)
       : periodOf(ctx.payload.expenseDate);
     await assertEmployeePeriodOpen(ctx, accountingPeriod);
+    await assertPeriodMutable(ctx, accountingPeriod);
     const account = await ctx.tx.get("accounts", ctx.payload.paidFromAccountId);
     if (!account || account.active === false) throw new DomainError("ACCOUNT_NOT_FOUND");
     const id = newId("exp", ctx);
@@ -2220,6 +2290,7 @@ const HANDLERS = {
     const exp = await ctx.tx.get("expenses", ctx.payload.expenseId);
     if (!exp) throw new DomainError("EXPENSE_NOT_FOUND");
     if (exp.state !== APPROVAL_STATE.PENDING) throw new DomainError("EXPENSE_NOT_PENDING", { state: exp.state });
+    await assertPeriodMutable(ctx, exp.period);
     ctx.tx.update("expenses", exp.id, {
       state: APPROVAL_STATE.APPROVED, approvedBy: ctx.actor.userId, approvedAt: ctx.now,
     });
@@ -2238,6 +2309,7 @@ const HANDLERS = {
     const exp = await ctx.tx.get("expenses", ctx.payload.expenseId);
     if (!exp) throw new DomainError("EXPENSE_NOT_FOUND");
     if (exp.state !== APPROVAL_STATE.PENDING) throw new DomainError("EXPENSE_NOT_PENDING");
+    await assertPeriodMutable(ctx, exp.period);
     ctx.tx.update("expenses", exp.id, {
       state: APPROVAL_STATE.REJECTED, rejectedBy: ctx.actor.userId, rejectedAt: ctx.now,
       rejectReason: ctx.payload.reason,
@@ -2250,6 +2322,7 @@ const HANDLERS = {
     if (!exp) throw new DomainError("EXPENSE_NOT_FOUND");
     if (exp.state === APPROVAL_STATE.REVERSED) throw new DomainError("ALREADY_REVERSED");
     if (exp.state !== APPROVAL_STATE.APPROVED) throw new DomainError("EXPENSE_NOT_APPROVED");
+    await assertPeriodMutable(ctx, exp.period);
     const reversalId = newId("rev", ctx);
     ctx.tx.create("reversals", reversalId, {
       id: reversalId, targetType: "expense", targetId: exp.id,
@@ -2866,6 +2939,7 @@ const HANDLERS = {
 
   async savePeriodExtras(ctx) {
     await assertEmployeePeriodOpen(ctx, ctx.payload.period);
+    await assertPeriodMutable(ctx, ctx.payload.period);
     parseJsonField(ctx.payload.extrasJson, "extrasJson");
     const id = `period:${ctx.payload.period}`;
     const existing = await ctx.tx.get("uiPeriods", id);
@@ -2909,7 +2983,8 @@ async function createReceipt(ctx, extra) {
   });
   // Touch the obligation so a concurrent second collection conflicts and retries
   // against the receipt just written, instead of both passing the remaining check.
-  ctx.tx.update("obligations", ob.id, {
+  await assertObligationMutable(ctx, ob);
+      ctx.tx.update("obligations", ob.id, {
     lastCollectionOperationId: ctx.operationId,
     lastCollectionAt: ctx.now,
   });
@@ -3062,6 +3137,11 @@ async function assertPeriodMutable(ctx, period) {
   if (!period || !/^\d{4}-\d{2}$/.test(String(period))) return;
   const data = parseConfigJson(await ctx.tx.get("uiConfig", `close-state:${period}`));
   if (data.status === "closed") throw new DomainError("MONTH_CLOSED", { period });
+}
+
+async function assertObligationMutable(ctx, ob) {
+  const period = ob && (ob.period || (ob.dueDate ? String(ob.dueDate).slice(0, 7) : ""));
+  await assertPeriodMutable(ctx, period);
 }
 
 async function receiptCorrectionImpact(ctx, receiptId, correctedAmountFils) {

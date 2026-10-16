@@ -12,6 +12,6 @@ const html = await res.text();
 if (!html.includes('dir="rtl"')) throw new Error("missing dir=rtl");
 if (!html.includes('lang="ar"')) throw new Error("missing lang=ar");
 if (!html.includes("قمة الرواسي")) throw new Error("missing Arabic title");
-if (!html.includes("app.mjs")) throw new Error("missing app module");
+if (!html.includes('name="qama-ui-build"')) throw new Error("missing bundled UI build marker");
 
 console.log("HOSTING_SMOKE_PASS", url);

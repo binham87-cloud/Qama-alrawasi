@@ -12,6 +12,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { commitScreenSave, selectSeededAccountingMonth } from "./select_seed_month.mjs";
 
 const HOST = process.env.FIREBASE_HOSTING_EMULATOR_HOST || "127.0.0.1:5000";
 const PROJECT = process.env.GCLOUD_PROJECT || "qama-new-prod-2026";
@@ -67,6 +68,7 @@ async function pinLogin(page, who, pin) {
     const t = window.__qamaTest?.authState?.();
     return t && t.screen === "app" && t.user && t.hasDash && !t.loading;
   }, { timeout: 90000 });
+  await selectSeededAccountingMonth(page, "سبتمبر 2026");
 }
 
 async function selectTestId(page, id, value) {
@@ -139,24 +141,29 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 page.setViewport({ width: 390, height: 844 });
+page.on("dialog", async (d) => { await d.accept(); });
 
 try {
   await pinLogin(page, "مدير", "1325");
   await openVacant(page);
-  await typeSave(page, "partition-tenant", "مسودة-دورة-تجربة");
-  await typeSave(page, "partition-rent", "1000");
+  await typeTestId(page, "partition-tenant", "مسودة-دورة-تجربة");
+  await selectTestId(page, "partition-occupancy", "rented");
+  await sleep(300);
+  await typeTestId(page, "partition-rent", "1000");
 
-  // Collect
+  // Collect — financial fields stay local until حفظ.
   await selectTestId(page, "partition-status", "collected");
   await sleep(400);
   await page.waitForSelector('[data-testid="partition-collection-method"]');
-  await selectSave(page, "partition-collection-method", "cash");
+  await selectTestId(page, "partition-collection-method", "cash");
+  await commitScreenSave(page, "btn-save-partition");
   let k = await waitHolding(100000);
   rec("collect once → holding 1000 / 1 live", k.holding === 100000 && k.liveReceipts === 1 ? "PASS" : "FAIL",
     JSON.stringify(k));
 
   // Uncollect
-  await selectSave(page, "partition-status", "late");
+  await selectTestId(page, "partition-status", "late");
+  await commitScreenSave(page, "btn-save-partition");
   k = await waitHolding(0);
   rec("uncollect → holding 0 / 0 live / ≥1 reversed", k.holding === 0 && k.liveReceipts === 0 && k.reversed >= 1 ? "PASS" : "FAIL",
     JSON.stringify(k));
@@ -179,19 +186,22 @@ try {
   await selectTestId(page, "partition-status", "collected");
   await sleep(500);
   await page.waitForSelector('[data-testid="partition-collection-method"]', { timeout: 15000 });
-  await selectSave(page, "partition-collection-method", "cash");
+  await selectTestId(page, "partition-collection-method", "cash");
+  await commitScreenSave(page, "btn-save-partition");
   k = await waitHolding(100000);
   rec("recollect once → holding 1000 / exactly 1 live (no double)",
     k.holding === 100000 && k.liveReceipts === 1 ? "PASS" : "FAIL",
     JSON.stringify({ holding: k.holding, live: k.liveReceipts, reversed: k.reversed, ids: k.liveIds }));
 
   // Second uncollect + recollect cycle
-  await selectSave(page, "partition-status", "late");
+  await selectTestId(page, "partition-status", "late");
+  await commitScreenSave(page, "btn-save-partition");
   await waitHolding(0);
   await selectTestId(page, "partition-status", "collected");
   await sleep(500);
   await page.waitForSelector('[data-testid="partition-collection-method"]', { timeout: 15000 });
-  await selectSave(page, "partition-collection-method", "cash");
+  await selectTestId(page, "partition-collection-method", "cash");
+  await commitScreenSave(page, "btn-save-partition");
   k = await waitHolding(100000);
   rec("second recollect cycle still exactly 1 live",
     k.holding === 100000 && k.liveReceipts === 1 && k.reversed >= 2 ? "PASS" : "FAIL",

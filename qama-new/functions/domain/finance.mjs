@@ -361,6 +361,28 @@ export function liveObligationsForPeriod(obligations, rentals, receipts = null) 
 }
 
 /**
+ * Units-screen rent for a covered month whose only obligation was cancelled
+ * and never paid. A rental that has not minted an obligation yet still shows
+ * its contractual rent. A live obligation, including a second paid contract
+ * on the same space, still shows.
+ */
+export function cancelledUnpaidRentHidden({ rental, obligations, receipts, period, liveView }) {
+  if (liveView) return false;
+  if (!rental || rental.state !== "closed" || !period) return false;
+  const rows = (obligations || []).filter((o) => {
+    if (!o || o.rentalId !== rental.id || o.baselineExcluded === true) return false;
+    const p = o.period || (o.dueDate ? String(o.dueDate).slice(0, 7) : "");
+    return p === period;
+  });
+  if (!rows.length) return false;
+  if (rows.some((o) => o.state === "active")) return false;
+  if (!rows.some((o) => o.state === "cancelled")) return false;
+  const ids = new Set(rows.map((o) => o.id));
+  const paid = (receipts || []).some((r) => r && ids.has(r.obligationId) && isRecognizedReceipt(r));
+  return !paid;
+}
+
+/**
  * One rent due per space per rental period.
  * An empty duplicate obligation is omitted from Target.
  * Every obligation that already has recognized money stays, so a real payment

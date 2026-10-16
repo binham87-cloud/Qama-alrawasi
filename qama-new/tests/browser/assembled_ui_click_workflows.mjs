@@ -12,6 +12,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initializeApp, getApps, deleteApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { commitScreenSave, selectSeededAccountingMonth } from "./select_seed_month.mjs";
 
 const HOST = process.env.FIREBASE_HOSTING_EMULATOR_HOST || "127.0.0.1:5000";
 const PROJECT = process.env.GCLOUD_PROJECT || "qama-new-prod-2026";
@@ -136,6 +137,7 @@ async function pinLogin(page, who, pin) {
     const t = window.__qamaTest?.authState?.();
     return t && t.screen === "app" && t.user && t.hasDash && !t.loading;
   }, { timeout: 90000 });
+  await selectSeededAccountingMonth(page, "سبتمبر 2026");
   return page.evaluate(() => window.__qamaTest.authState());
 }
 
@@ -265,9 +267,10 @@ try {
       // Collect
       await selectTestId(page, "partition-status", "collected");
       actions.push("select الحالة=محصّل (collected)");
-      await sleep(600);
-      { const __b = await markSave(page); await selectTestId(page, "partition-collection-method", "cash"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
-      actions.push("select طريقة التحصيل=نقداً");
+      await sleep(400);
+      await selectTestId(page, "partition-collection-method", "cash");
+      await commitScreenSave(page, "btn-save-partition");
+      actions.push("حفظ التحصيل النقدي");
 
       let after = await waitHolding(before.holding + 10000);
       let st = await uiStatus(page);
@@ -292,8 +295,9 @@ try {
       actions.push("تحديث → status still collected + holding persisted");
 
       // Uncollect / overdue (late)
-      { const __b = await markSave(page); await selectTestId(page, "partition-status", "late"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
-      actions.push("select الحالة=متأخر (late/overdue)");
+      await selectTestId(page, "partition-status", "late");
+      await commitScreenSave(page, "btn-save-partition");
+      actions.push("select الحالة=متأخر ثم حفظ");
 
       after = await waitHolding(before.holding);
       st = await uiStatus(page);
@@ -306,10 +310,11 @@ try {
         throw new Error("editor closed after uncollect — product must keep editPart open");
       }
       await selectTestId(page, "partition-status", "collected");
-      await sleep(500);
+      await sleep(400);
       await page.waitForSelector('[data-testid="partition-collection-method"]', { timeout: 10000 });
-      { const __b = await markSave(page); await selectTestId(page, "partition-collection-method", "cash"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
-      actions.push("collect again + cash");
+      await selectTestId(page, "partition-collection-method", "cash");
+      await commitScreenSave(page, "btn-save-partition");
+      actions.push("collect again + cash + حفظ");
 
       after = await waitHolding(before.holding + 10000);
       if (after.holding !== before.holding + 10000) {
@@ -319,8 +324,9 @@ try {
       }
 
       // Uncollect again
-      { const __b = await markSave(page); await selectTestId(page, "partition-status", "late"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
-      actions.push("uncollect again → late");
+      await selectTestId(page, "partition-status", "late");
+      await commitScreenSave(page, "btn-save-partition");
+      actions.push("uncollect again → late + حفظ");
 
       after = await waitHolding(before.holding, 25000);
       if (after.holding !== before.holding) throw new Error("2nd uncollect holding " + after.holding);
@@ -356,7 +362,7 @@ try {
         method.dispatchEvent(new Event("change", { bubbles: true }));
       });
       actions.push("paid=40 + method=cash on live form");
-      try { await waitOnline(page, 20000, bPartial); } catch (_e) { /* holding assert below */ }
+      await commitScreenSave(page, "btn-save-partition");
       after = await waitHolding(before.holding + 4000, 30000);
       const partialOk = after.holding === before.holding + 4000;
       if (!partialOk) {
@@ -415,9 +421,10 @@ try {
 
       await selectTestId(page, "full-status", "collected");
       actions.push("full status=collected");
-      await sleep(500);
-      { const __b = await markSave(page); await selectTestId(page, "full-collection-method", "cash"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
-      actions.push("full method=cash");
+      await sleep(400);
+      await selectTestId(page, "full-collection-method", "cash");
+      await commitScreenSave(page, "btn-save-full");
+      actions.push("full method=cash + حفظ");
 
       let after = await waitHolding(before.holding + 20000);
       if (after.holding !== before.holding + 20000) {
@@ -434,7 +441,8 @@ try {
         el.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await sleep(200);
-      await typeTestIdSave(page, "full-tenant", "اسم كامل بعد المسح");
+      await typeTestId(page, "full-tenant", "اسم كامل بعد المسح");
+      await commitScreenSave(page, "btn-save-full");
       const tenantAfter = await page.$eval('[data-testid="full-tenant"]', (el) => el.value);
       const holdRename = await kpi();
       if (holdRename.holding !== after.holding || tenantAfter !== "اسم كامل بعد المسح") {
@@ -442,8 +450,9 @@ try {
       }
       actions.push("full tenant clear→newtype keeps holding");
 
-      { const __b = await markSave(page); await selectTestId(page, "full-status", "late"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
-      actions.push("full status=late");
+      await selectTestId(page, "full-status", "late");
+      await commitScreenSave(page, "btn-save-full");
+      actions.push("full status=late + حفظ");
 
       after = await waitHolding(before.holding);
       if (after.holding !== before.holding) throw new Error("full uncollect " + after.holding);
@@ -451,12 +460,14 @@ try {
       await selectTestId(page, "full-status", "collected");
       await sleep(500);
       await page.waitForSelector('[data-testid="full-collection-method"]', { timeout: 15000 });
-      { const __b = await markSave(page); await selectTestId(page, "full-collection-method", "cash"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
+      await selectTestId(page, "full-collection-method", "cash");
+      await commitScreenSave(page, "btn-save-full");
       actions.push("full re-collect");
 
       after = await waitHolding(before.holding + 20000);
 
-      { const __b = await markSave(page); await selectTestId(page, "full-status", "late"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
+      await selectTestId(page, "full-status", "late");
+      await commitScreenSave(page, "btn-save-full");
       actions.push("full uncollect again");
 
       after = await waitHolding(before.holding);
@@ -472,7 +483,8 @@ try {
         el.dispatchEvent(new Event("change", { bubbles: true }));
       });
       await sleep(300);
-      { const __b = await markSave(page); await selectTestId(page, "full-collection-method", "cash"); try { await waitOnline(page, 20000, __b); } catch (_e) { /* holding/KPI asserts below */ } }
+      await selectTestId(page, "full-collection-method", "cash");
+      await commitScreenSave(page, "btn-save-full");
       actions.push("full partial 75 cash");
 
       after = await waitHolding(before.holding + 7500, 30000);
@@ -557,7 +569,9 @@ try {
       const dates = await page.$eval('[data-testid="daily-card-dates"]', (el) => el.textContent);
       if (!/2026-09-10/.test(dates) || !/2026-09-12/.test(dates)) throw new Error("dates " + dates);
 
-      // Edit saved
+      const holdingAfterCreate = (await kpi()).holding;
+
+      // A collected booking must refuse amount and date changes.
       await clickTestId(page, "daily-edit");
       await page.waitForSelector('[data-testid="daily-edit-form"]');
       await page.$eval('[data-testid="daily-edit-end"]', (el) => { el.value = "2026-09-13"; el.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -566,18 +580,34 @@ try {
         el.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await sleep(200);
-      const bEditSave = await markSave(page);
       await clickTestId(page, "daily-edit-save");
-      actions.push("edit: end→09-13 rate→150 → save (total 450)");
-      await waitOnline(page, 45000, bEditSave);
-      await sleep(600);
+      actions.push("paid booking refuses rate/date edit");
+      await sleep(800);
+      const lockMsg = await page.evaluate(() => window.__qamaTest?.authState?.()?.msg || document.body.innerText);
       monthTotal = await page.$eval('[data-testid="daily-month-total"]', (el) => el.textContent);
       const cardTotal = await page.$eval('[data-testid="daily-card-total"]', (el) => el.textContent);
-      if (!/450/.test(monthTotal) || !/450/.test(cardTotal)) {
-        throw new Error(`edit totals month=${monthTotal} card=${cardTotal}`);
+      if (!/مرتبطة بإيصال/.test(lockMsg) || !/200/.test(monthTotal) || !/200/.test(cardTotal)) {
+        throw new Error(`paid edit not locked msg=${String(lockMsg).slice(0, 80)} month=${monthTotal} card=${cardTotal}`);
       }
+      if ((await kpi()).holding !== holdingAfterCreate) throw new Error("paid edit moved holding");
 
-      // Cancel edit form without saving (open edit, change, cancel)
+      // Guest name is not money and may still be saved.
+      await page.$eval('[data-testid="daily-edit-end"]', (el) => { el.value = "2026-09-12"; el.dispatchEvent(new Event("change", { bubbles: true })); });
+      await page.$eval('[data-testid="daily-edit-rate"]', (el) => {
+        el.value = "100";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await page.$eval('[data-testid="daily-edit-guest"]', (el) => {
+        el.value = "نزيل معدّل";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const bGuest = await markSave(page);
+      await clickTestId(page, "daily-edit-save");
+      await waitOnline(page, 45000, bGuest);
+      const guestSaved = await page.$eval('[data-testid="daily-card-guest"]', (el) => el.textContent);
+      if (!/نزيل معدّل/.test(guestSaved)) throw new Error("guest edit did not persist " + guestSaved);
+
+      // Cancel the edit form without a second write.
       await clickTestId(page, "daily-edit");
       await page.waitForSelector('[data-testid="daily-edit-form"]');
       await page.$eval('[data-testid="daily-edit-guest"]', (el) => {
@@ -589,16 +619,17 @@ try {
       const guest = await page.$eval('[data-testid="daily-card-guest"]', (el) => el.textContent);
       if (/يجب ألا يظهر/.test(guest)) throw new Error("edit cancel leaked guest");
 
-      // Delete saved booking (= cancel saved)
+      // Cancel the saved booking: reverse its receipt and drop it from the month total.
       const bDailyDel = await markSave(page);
       await clickTestId(page, "daily-delete");
-      actions.push("حذف saved booking");
+      actions.push("cancel collected booking");
       await waitOnline(page, 45000, bDailyDel);
       await sleep(600);
       cards = await page.$$('[data-testid="daily-booking-card"]');
       monthTotal = await page.$eval('[data-testid="daily-month-total"]', (el) => el.textContent);
-      if (cards.length !== 0 || !/0/.test(monthTotal.replace(/,/g, ""))) {
-        throw new Error(`delete failed cards=${cards.length} total=${monthTotal}`);
+      const holdingAfterCancel = (await kpi()).holding;
+      if (cards.length !== 0 || !/0/.test(monthTotal.replace(/,/g, "")) || holdingAfterCancel !== holdingAfterCreate - 20000) {
+        throw new Error(`cancel failed cards=${cards.length} total=${monthTotal} holding=${holdingAfterCancel}`);
       }
 
       // Financial: daily is extras rollup (no engine receipt) — KPI cash unchanged by daily alone
@@ -634,7 +665,10 @@ try {
       await typeTestId(page, "expense-amount", "33");
       await clickTestId(page, "expense-submit");
       actions.push("employee submit expense 33 (approve path)");
-      await sleep(1200);
+      // Submit switches to طلباتي only after the request write finishes.
+      await page.waitForFunction(() => window.__qamaTest?.authState?.()?.tab === "myrequests", { timeout: 20000 });
+      await clickTestId(page, "tab-expenses");
+      await page.waitForFunction(() => window.__qamaTest?.authState?.()?.tab === "expenses", { timeout: 10000 });
 
       // Duplicate-click on second expense: only one pending with same amount+desc
       await clickTestId(page, "btn-add-expense");
@@ -685,8 +719,9 @@ try {
         const btn = document.querySelector('[data-testid="req-approve"]');
         if (!btn) throw new Error("no approve btn");
         btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       });
-      actions.push("manager click اعتماد on first");
+      actions.push("manager double-click اعتماد on first");
       // Wait until one request leaves pending (approve finishes + R())
       {
         const start = Date.now();
@@ -699,17 +734,9 @@ try {
         if (!ok) throw new Error("approve did not persist approved uiRequest");
       }
       actions.push("approved request persisted");
-
-      // Duplicate approve click on remaining pending (guard should no-op or process one)
-      await page.evaluate(() => {
-        const btn = document.querySelector('[data-testid="req-approve"]');
-        if (btn) {
-          btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-          btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-        }
-      });
-      actions.push("duplicate اعتماد clicks on remaining");
-      await sleep(800);
+      if ((await kpi()).approvedRequests !== beforeApprove.approvedRequests + 1) {
+        throw new Error("double-click اعتماد approved more than one request");
+      }
 
       const beforeReject = await kpi();
       const rejCount = await page.evaluate(() => {

@@ -101,7 +101,7 @@ await run(employee, "submitWorkRequest", {
     unitId: unit.unitId,
     partId: 5,
     fields: {
-      status: "collected", rent: 900, tenant: "مستأجر اختبار", start_date: "2026-09-01",
+      status: "collected", rent: 900, paid_amount: 900, tenant: "مستأجر اختبار", start_date: "2026-09-01",
       collectionMethod: "cash", _spaceId: space.spaceId, _unitId: unit.unitId,
     },
   }),

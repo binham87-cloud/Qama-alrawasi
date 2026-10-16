@@ -191,13 +191,14 @@ async function pinLogin(page) {
           rentalId: space.rentalId, endDate: "2026-09-06", reason: "rn", arrearsDecision: "retain",
         }, t.opId("rn-e"));
       }
-      // start Aug 10 → next Sep 10; asOf on due day so renew is allowed
+      // Previous step may leave a September contract on this space.
+      // Start after that vacancy so re-rent is legitimate, then renew the next cycle.
       await t.engineCommand("createRental", {
         spaceId: space.spaceId, tenantName: "CYCLE-RENEW", contractualAmountFils: 17700,
-        dueDayOfMonth: 10, startDate: "2026-08-10",
+        dueDayOfMonth: 10, startDate: "2026-09-10",
       }, t.opId("rn-rent"));
       await t.engineCommand("setSpaceOccupancy", { spaceId: space.spaceId, occupancy: "rented" }, t.opId("rn-occ"));
-      await t.engineCommand("generateObligations", { period: "2026-08" }, t.opId("rn-ob"));
+      await t.engineCommand("generateObligations", { period: "2026-09" }, t.opId("rn-ob"));
       dash = await t.refreshEngine(2026, 8);
       let sp = dash.unitsTree.flatMap((u) => u.spaces || []).find((s) => s.spaceId === space.spaceId);
       const holdingBefore = Number(dash.summary?.sharedEmployeeHoldingFils ?? dash.summary?.holdingFils ?? 0);
@@ -206,7 +207,7 @@ async function pinLogin(page) {
       const renewOp = "ui-renew-cycle-" + String(sp.rentalId).slice(-24);
       try {
         r = await t.engineCommand("renewRentalCycle", {
-          rentalId: sp.rentalId, asOfDate: "2026-09-10", earlyWindowDays: 7,
+          rentalId: sp.rentalId, asOfDate: "2026-10-10", earlyWindowDays: 7,
         }, renewOp);
       } catch (e) {
         renewErr = e.code || e.message || String(e);
@@ -222,7 +223,7 @@ async function pinLogin(page) {
         };
       }
       const r2 = await t.engineCommand("renewRentalCycle", {
-        rentalId: sp.rentalId, asOfDate: "2026-09-10", earlyWindowDays: 7,
+        rentalId: sp.rentalId, asOfDate: "2026-10-10", earlyWindowDays: 7,
       }, renewOp); // same operationId → replay
       dash = await t.refreshEngine(2026, 8);
       const holdingAfter = Number(dash.summary?.sharedEmployeeHoldingFils ?? dash.summary?.holdingFils ?? 0);
@@ -230,7 +231,7 @@ async function pinLogin(page) {
       let dupErr = null;
       try {
         await t.engineCommand("renewRentalCycle", {
-          rentalId: sp.rentalId, asOfDate: "2026-09-10", earlyWindowDays: 7,
+          rentalId: sp.rentalId, asOfDate: "2026-10-10", earlyWindowDays: 7,
         }, renewOp + "-dup");
       } catch (e) {
         dupErr = e.code || e.message || String(e);
@@ -248,7 +249,7 @@ async function pinLogin(page) {
       };
     });
     const renewOk = !renew.renewErr
-      && renew.cycleStart === "2026-09-10"
+      && renew.cycleStart === "2026-10-10"
       && renew.holdingBefore === renew.holdingAfter
       && renew.replay === true
       && /CYCLE_NOT_DUE_YET|failed-precondition/i.test(String(renew.dupErr || ""));

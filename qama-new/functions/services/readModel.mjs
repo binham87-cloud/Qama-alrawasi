@@ -12,6 +12,7 @@ import {
   operatingNetFils,
   rentalForPeriod, occupancyForPeriod, rentalCoversPeriod,
   tenantNameForPeriod, tenantPhoneForPeriod, rentAmountForPeriod,
+  cancelledUnpaidRentHidden,
 } from "../domain/finance.mjs";
 import { canonicalRequestCreatedAt, sortRequestsNewestFirst } from "../domain/request_order.mjs";
 
@@ -352,12 +353,18 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
               && rentalCoversPeriod(r, period)
             ) || null
             : null;
-          const rental = periodOcc === "staff" ? staffAgreement : covering;
+          let rental = periodOcc === "staff" ? staffAgreement : covering;
           const liveRental = periodOcc === "staff" ? staffAgreement : liveActiveRental(sp.id);
-          const v = periodOcc === "staff"
+          let v = periodOcc === "staff"
             ? (rental ? (views.find((row) => row.spaceId === sp.id && row.rentalId === rental.id) || null) : null)
             : viewFor(sp.id, rental?.id || null);
-          const display = spaceDisplay({
+          if (v && rental && v.rentalId !== rental.id && cancelledUnpaidRentHidden({
+            rental, obligations: allObligations, receipts: allReceipts, period, liveView: null,
+          })) {
+            const earned = rentals.find((r) => r && r.id === v.rentalId);
+            if (earned) rental = earned;
+          }
+          let display = spaceDisplay({
             space: sp,
             view: v,
             rental,
@@ -365,6 +372,13 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             asOfDate,
             occupancyOverride: periodOcc,
           });
+          let cardOccupancy = periodOcc;
+          if (cancelledUnpaidRentHidden({
+            rental, obligations: allObligations, receipts: allReceipts, period, liveView: v,
+          })) {
+            cardOccupancy = "vacant";
+            display = { status: "vacant", dueFils: 0, paidFils: 0, remainingFils: 0, dueDate: null };
+          }
           const periodOb = rental ? periodCycleForRental(rental.id) : null;
           const latestOb = (liveRental && rentalCoversPeriod(liveRental, period))
             ? latestCycleForRental(liveRental.id)
@@ -416,7 +430,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             spaceId: sp.id,
             name: sp.name,
             // Period-aware occupancy (not live space.occupancy).
-            occupancy: periodOcc,
+            occupancy: cardOccupancy,
             liveOccupancy: sp.occupancy || "vacant",
             staffRentFils: Number.isSafeInteger(sp.staffRentFils) ? sp.staffRentFils : null,
             rentalId: rental?.id || null,
@@ -819,13 +833,19 @@ export function buildDashboardFromDump(db, period, asOfDate) {
         kind: u.kind,
         isWhole: u.kind === "whole",
         spaces: mySpaces.map((sp) => {
-          const rental = sp.occupancy === "staff"
+          let rental = sp.occupancy === "staff"
             ? (rentals.find((r) => r && r.id === sp.rentalId && r.purpose === "staff") || null)
             : rentalForPeriod(sp.id, rentals, period, allObligations);
           const v = sp.occupancy === "staff"
             ? (rental ? (views.find((x) => x.spaceId === sp.id && x.rentalId === rental.id) || null) : null)
             : (views.find((x) => x.spaceId === sp.id) || null);
-          const display = spaceDisplay({
+          if (v && rental && v.rentalId !== rental.id && cancelledUnpaidRentHidden({
+            rental, obligations: allObligations, receipts: allReceipts, period, liveView: null,
+          })) {
+            const earned = rentals.find((r) => r && r.id === v.rentalId);
+            if (earned) rental = earned;
+          }
+          let display = spaceDisplay({
             space: sp,
             view: v,
             rental,
@@ -833,10 +853,17 @@ export function buildDashboardFromDump(db, period, asOfDate) {
             asOfDate,
             occupancyOverride: sp.occupancy,
           });
+          let cardOccupancy = sp.occupancy;
+          if (cancelledUnpaidRentHidden({
+            rental, obligations: allObligations, receipts: allReceipts, period, liveView: v,
+          })) {
+            cardOccupancy = "vacant";
+            display = { status: "vacant", dueFils: 0, paidFils: 0, remainingFils: 0, dueDate: null };
+          }
           return {
             spaceId: sp.id,
             name: sp.name,
-            occupancy: sp.occupancy,
+            occupancy: cardOccupancy,
             liveOccupancy: sp.liveOccupancy,
             rentalId: sp.rentalId,
             tenantName: sp.tenantName,

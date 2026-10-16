@@ -1111,7 +1111,11 @@ async function syncOccupancyAndTenant(item, dashSp) {
         err.field = "tenant";
         throw err;
       }
-      const start = item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date) ? item.start_date : engineToday();
+      const viewedPeriod = periodOfMonth(S.year, S.month);
+      const today = engineToday();
+      const start = item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date)
+        ? item.start_date
+        : (String(today).slice(0, 7) === viewedPeriod ? today : viewedPeriod + "-01");
       const dueDay = start ? Number(start.slice(8, 10)) || 1 : 1;
       // NEW rental must never reuse burned rentnew-{spaceId} (caused IDEMPOTENCY_PAYLOAD_MISMATCH).
       if (!item._rentCreateOp) item._rentCreateOp = opId("rentnew");

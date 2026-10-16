@@ -12,6 +12,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { commitScreenSave, selectSeededAccountingMonth } from "./select_seed_month.mjs";
 
 const HOST = process.env.FIREBASE_HOSTING_EMULATOR_HOST || "127.0.0.1:5000";
 const PROJECT = process.env.GCLOUD_PROJECT || "qama-new-prod-2026";
@@ -85,6 +86,7 @@ async function pinLogin(page, who, pin) {
     const t = window.__qamaTest?.authState?.();
     return t && t.screen === "app" && t.user && t.hasDash && !t.loading;
   }, { timeout: 90000 });
+  await selectSeededAccountingMonth(page, "سبتمبر 2026");
 }
 
 async function clickTestId(page, id) {
@@ -181,8 +183,7 @@ try {
     const before = await kpi();
     await openVacantPartition(page);
     await typeTestId(page, "partition-rent", "1000");
-    await waitOnline(page);
-    await selectTestId(page, "partition-status", "collected");
+    await selectTestId(page, "partition-occupancy", "rented");
     await sleep(800);
     const msg = await page.evaluate(() => window.__qamaTest?.authState?.()?.msg || "");
     const body = await page.evaluate(() => document.body.innerText);
@@ -201,14 +202,14 @@ try {
   {
     const before = await kpi();
     await typeTestId(page, "partition-tenant", "اسم قديم للتجربة");
-    await waitOnline(page);
+    await selectTestId(page, "partition-occupancy", "rented");
+    await sleep(300);
     await typeTestId(page, "partition-rent", "1000");
-    await waitOnline(page);
     await selectTestId(page, "partition-status", "collected");
     await sleep(400);
     await page.waitForSelector('[data-testid="partition-collection-method"]', { timeout: 15000 });
     await selectTestId(page, "partition-collection-method", "cash");
-    await waitOnline(page);
+    await commitScreenSave(page, "btn-save-partition");
     const mid = await waitHolding(before.holding + 100000, 25000);
     await page.evaluate(() => {
       const el = document.querySelector('[data-testid="partition-tenant"]');
@@ -218,7 +219,7 @@ try {
     });
     await sleep(300);
     await typeTestId(page, "partition-tenant", "اسم جديد بعد المسح");
-    await waitOnline(page);
+    await commitScreenSave(page, "btn-save-partition");
     const after = await kpi();
     const tenant = await page.$eval('[data-testid="partition-tenant"]', (el) => el.value);
     const st = await page.$eval('[data-testid="partition-status"]', (el) => el.value);
@@ -233,7 +234,8 @@ try {
   // --- B: uncollect (late) then recollect cash → holding restored to +1000 from zero ---
   {
     const beforeUn = await kpi();
-    await selectTestIdSave(page, "partition-status", "late");
+    await selectTestId(page, "partition-status", "late");
+    await commitScreenSave(page, "btn-save-partition");
     const afterUn = await waitHolding(0, 25000);
     const unOk = afterUn.holding === 0 && afterUn.liveReceipts === 0;
     rec("Uncollect after rename collect clears holding", unOk ? "PASS" : "FAIL",
@@ -242,7 +244,8 @@ try {
     await selectTestId(page, "partition-status", "collected");
     await sleep(500);
     await page.waitForSelector('[data-testid="partition-collection-method"]', { timeout: 15000 });
-    await selectTestIdSave(page, "partition-collection-method", "cash");
+    await selectTestId(page, "partition-collection-method", "cash");
+    await commitScreenSave(page, "btn-save-partition");
     const after = await waitHolding(100000);
     const st = await page.$eval('[data-testid="partition-status"]', (el) => el.value);
     const ok = after.holding === 100000 && st === "collected";
@@ -308,7 +311,7 @@ try {
     await clickTestId(page, "tab-financial");
     await sleep(900);
     const body = await page.evaluate(() => document.body.innerText);
-    const hasScheduleUi = /مدفوع:\s*0\s*من\s*[1-9]/.test(body) || /من\s*6\s*أقساط/.test(body);
+    const hasScheduleUi = /الأقساط المدفوعة:\s*0/.test(body);
     const balBefore = await page.evaluate(async () => {
       const d = await window.__qamaTest.refreshEngine(2026, 8);
       const b = d.ui?.config?.balances;
@@ -324,7 +327,7 @@ try {
     });
     await sleep(1500);
     const body2 = await page.evaluate(() => document.body.innerText);
-    const paidUi = /مدفوع:\s*1\s*من/.test(body2);
+    const paidUi = /الأقساط المدفوعة:\s*1/.test(body2);
     const bal = await page.evaluate(async () => {
       const d = await window.__qamaTest.refreshEngine(2026, 8);
       const b = d.ui?.config?.balances;
@@ -343,7 +346,7 @@ try {
     await clickTestId(page, "tab-financial");
     await sleep(900);
     const body3 = await page.evaluate(() => document.body.innerText);
-    const persistUi = /مدفوع:\s*1\s*من/.test(body3);
+    const persistUi = /الأقساط المدفوعة:\s*1/.test(body3);
     const bal2 = await page.evaluate(async () => {
       const d = await window.__qamaTest.refreshEngine(2026, 8);
       const b = d.ui?.config?.balances;

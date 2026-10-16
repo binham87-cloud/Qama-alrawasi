@@ -1299,7 +1299,11 @@ async function syncOccupancyAndTenant(item, dashSp) {
         err.field = "tenant";
         throw err;
       }
-      const start = item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date) ? item.start_date : engineToday();
+      const viewedPeriod = periodOfMonth(S.year, S.month);
+      const today = engineToday();
+      const start = item.start_date && /^\d{4}-\d{2}-\d{2}$/.test(item.start_date)
+        ? item.start_date
+        : (String(today).slice(0, 7) === viewedPeriod ? today : viewedPeriod + "-01");
       const dueDay = start ? Number(start.slice(8, 10)) || 1 : 1;
       // NEW rental must never reuse burned rentnew-{spaceId} (caused IDEMPOTENCY_PAYLOAD_MISMATCH).
       if (!item._rentCreateOp) item._rentCreateOp = opId("rentnew");
@@ -5296,6 +5300,20 @@ function readLiveEditorFields(item, prefix) {
   amount("rent", "rent");
   const dep = node("deposit");
   if (dep && !dep.disabled) item.deposit = dep.value;
+  const status = node("status");
+  if (status && !status.disabled && status.value) item.status = status.value;
+  const method = node("collection-method");
+  if (method && !method.disabled && method.value) item.collectionMethod = method.value;
+  const partial = node("partial");
+  if (partial && !partial.disabled) item.partial = partial.value === "true";
+  const paid = node("paid-amount");
+  if (paid && !paid.disabled) {
+    const raw = String(paid.value ?? "").trim();
+    if (raw !== "") {
+      const n = Number(raw);
+      if (Number.isFinite(n)) item.paid_amount = n;
+    }
+  }
 }
 /** Live DOM rent. Zero and blank are not the previous amount. */
 function rejectNonPositiveLiveRent(item, prefix){
@@ -8311,7 +8329,11 @@ function renderApp(){
 
   // ======= DAILY RENTAL TAB =======
   if(S.tab==="daily"){
-    const dailyList=data.dailyBookings||[];
+    const dailyList=(data.dailyBookings||[]).filter((b)=>{
+      if(!b||b.cancelled===true||b.canceled===true||b.deleted===true||b.reversed===true)return false;
+      const st=String(b.status||"").toLowerCase();
+      return st!=="cancelled"&&st!=="canceled"&&st!=="deleted"&&st!=="reversed";
+    });
     const today=new Date(); today.setHours(0,0,0,0);
     const totalDaily=dailyList.reduce((s,b)=>s+Number(b.total||0),0);
     const allParts=[];
