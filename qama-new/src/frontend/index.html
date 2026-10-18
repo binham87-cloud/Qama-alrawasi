@@ -307,6 +307,9 @@ function formatEngineError(err) {
   if (/PERIOD_OBLIGATION_EXISTS/i.test(raw)) return "يوجد التزام إيجار لهذا القسم في نفس الشهر";
   if (/RENT_REQUIRED/i.test(raw)) return "قيمة الإيجار مطلوبة قبل التأجير";
   if (/START_DATE_REQUIRED/i.test(raw)) return "تاريخ بداية العقد مطلوب";
+  if (/RENEWAL_REQUIRED/i.test(raw)) {
+    return detailObj.message || "يجب تجديد عقد الإيجار للشهر المحدد\nقبل اعتماد التحصيل.";
+  }
   if (/RENEWAL_NOT_CONFIRMED/i.test(raw)) return "الإيجار غير مؤكد. أكّد التجديد قبل التحصيل.";
   if (/MONTHLY_RENT_ALREADY_RECORDED/i.test(raw) || /يوجد إيجار شهري مسجل/.test(raw)) {
     const end = detailObj.coverageEndDate || "";

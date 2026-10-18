@@ -11,10 +11,22 @@
 import {
   DomainError, parseAedToFils, periodOf, obligationIdFor, isPlaceholderTenant, rentalCoversPeriod,
   assertCashReversalFitsSharedHolding, assertCashAdjustmentFitsSharedHolding,
-  resolveCollectionPayment,
+  resolveCollectionPayment, MANUAL_RENEWAL_PERIOD, monthlyRenewalCountsInTarget,
 } from "../domain/finance.mjs";
 
 const STEP = (requestId, name) => (`cwr-${requestId}-${name}`).slice(0, 140);
+
+export const RENEWAL_REQUIRED_MESSAGE =
+  "يجب تجديد عقد الإيجار للشهر المحدد\nقبل اعتماد التحصيل.";
+
+const MONEY_STEP_COMMANDS = new Set([
+  "createCashReceipt", "submitBankReceipt", "approveBankReceipt",
+  "uncollectObligation", "submitDeposit", "approveDeposit",
+  "createDailyCashReceipt", "createDailyBookingPrepaid",
+  "reverseReceipt", "restoreReversedReceipt",
+  "submitExpense", "approveExpense", "reverseExpense",
+  "payInstallment",
+]);
 
 export async function commitWorkRequestFlow({
   db, actor, payload, operationId, now, run, enforceCorrectionPolicy = false,
@@ -36,6 +48,24 @@ export async function commitWorkRequestFlow({
     }
   }
   let req = existing;
+  if (existing.status === "pending" || existing.status === "processing") {
+    const previewBody = parseJson(existing.payloadJson, existing.payload);
+    const previewPeriod = periodOfRequest(existing);
+    const previewSnap = await loadSnapshot(db);
+    try {
+      await assertCollectionRenewalReady(db, existing, previewBody, previewPeriod, previewSnap);
+    } catch (err) {
+      if (err.code === "RENEWAL_REQUIRED" && existing.status === "processing") {
+        const commands = await requestCommittedCommands(db, requestId);
+        const moneyCommitted = commands.some((command) => MONEY_STEP_COMMANDS.has(command));
+        if (!moneyCommitted) {
+          try { await markRequest(db, actor, requestId, now, "pending", err.code); }
+          catch { /* keep the renewal error */ }
+        }
+      }
+      throw err;
+    }
+  }
   if (existing.status === "processing") {
     // A stuck approval is resumed only by an explicit request. Nothing retries it alone.
     if (payload.resume !== true) throw new DomainError("REQUEST_BEING_APPROVED", { requestId });
@@ -686,10 +716,68 @@ function readDoc(db, collection, id) {
   return db.runTransaction((tx) => tx.get(collection, id));
 }
 
-async function requestHasCommittedSteps(db, requestId) {
+async function requestCommittedCommands(db, requestId) {
   const ops = await db.runTransaction((tx) => tx.query("operations", []));
   const prefix = `cwr-${requestId}-`;
-  return (ops || []).some((op) => op && String(op.operationId || "").startsWith(prefix));
+  return (ops || [])
+    .filter((op) => op && String(op.operationId || "").startsWith(prefix))
+    .map((op) => op.command);
+}
+
+async function requestHasCommittedSteps(db, requestId) {
+  const commands = await requestCommittedCommands(db, requestId);
+  return commands.length > 0;
+}
+
+function obligationPeriod(obligation) {
+  return obligation.period || String(obligation.cycleStart || obligation.dueDate || "").slice(0, 7);
+}
+
+/**
+ * November 2026 onward: collecting an existing continuation requires an
+ * explicit renewal first. A contract that starts in the requested month
+ * can still be created. Earlier months are unchanged.
+ */
+export function collectionBlockedUntilRenewal({ period, rental, obligations, receipts, fields }) {
+  if (!period || String(period) < MANUAL_RENEWAL_PERIOD) return false;
+  if (!rental || rental.state !== "active" || rental.purpose === "staff") return false;
+  const status = fields && fields.status;
+  const wantsCollection = status === "collected" || !!(fields && fields.partial);
+  if (!wantsCollection) return false;
+  const stated = fields ? moneyFils(fields.paid_amount) : 0;
+  const unpaidIntent = (status === "late" || status === "pending") && (!fields.partial || stated === 0);
+  if (unpaidIntent) return false;
+  const related = (obligations || []).filter((obligation) =>
+    obligation && obligation.rentalId === rental.id && obligation.state === "active"
+    && obligation.baselineExcluded !== true && obligationPeriod(obligation) === String(period)
+  );
+  if (related.some((obligation) => monthlyRenewalCountsInTarget(obligation, rental, receipts || []))) return false;
+  const startPeriod = String(rental.startDate || "").slice(0, 7);
+  if (startPeriod === String(period) && related.length === 0) return false;
+  return true;
+}
+
+async function assertCollectionRenewalReady(db, req, body, period, snap) {
+  const type = String(req.type || "");
+  if (type !== "update_partition" && type !== "update_full") return;
+  const payload = body && typeof body === "object" ? body : {};
+  const fields = payload.fields || payload;
+  const space = resolveSpace(snap, payload);
+  if (!space) return;
+  const obligations = await queryAll(db, "obligations");
+  const receipts = await queryAll(db, "receipts");
+  const covers = (snap.rentals || []).filter((rental) =>
+    rental && rental.spaceId === space.id && rentalCoversPeriod(rental, period, obligations)
+  );
+  if (covers.length !== 1) return;
+  const rental = covers[0].state === "active" ? covers[0] : null;
+  if (!collectionBlockedUntilRenewal({ period, rental, obligations, receipts, fields })) return;
+  throw new DomainError("RENEWAL_REQUIRED", {
+    rentalId: rental.id,
+    period,
+    spaceId: space.id,
+    message: RENEWAL_REQUIRED_MESSAGE,
+  });
 }
 
 async function claimPendingRequest(db, actor, requestId, now, expectedVersion) {

@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addMonthsClamped, nextCycleStart, cycleEndInclusive, rentalCycleIdFor,
-  renewButtonVisible, buildCycleFields, daysUntilCycleStart,
+  renewButtonVisible, buildCycleFields, daysUntilCycleStart, renewalAttention,
 } from "../../functions/domain/rental_cycle.mjs";
 
 test("15 Sep cycle ends 14 Oct; next starts 15 Oct", () => {
@@ -50,6 +50,29 @@ test("renew button early window", () => {
   assert.equal(renewButtonVisible("2026-10-15", "2026-10-07"), false); // 8 days early
   assert.equal(renewButtonVisible("2026-10-15", "2026-10-01"), false);
   assert.equal(daysUntilCycleStart("2026-10-15", "2026-10-10"), 5);
+});
+
+test("renewal attention starts in November and separates existing from overdue", () => {
+  assert.equal(renewalAttention({
+    period: "2026-10", periodHasObligation: true, nextCycleStart: "2026-11-01",
+    nextObligationExists: false, asOfDate: "2026-10-20",
+  }), null);
+  assert.equal(renewalAttention({
+    period: "2026-10", periodHasObligation: true, nextCycleStart: "2026-11-01",
+    nextObligationExists: false, asOfDate: "2026-10-28",
+  }), "upcoming");
+  assert.equal(renewalAttention({
+    period: "2026-11", periodHasObligation: false, nextCycleStart: "2026-11-10",
+    nextObligationExists: false, asOfDate: "2026-11-16",
+  }), "overdue");
+  assert.equal(renewalAttention({
+    period: "2026-11", periodHasObligation: true, periodRenewalStatus: null,
+    nextCycleStart: "2026-12-10", nextObligationExists: false, asOfDate: "2026-11-16",
+  }), "existing");
+  assert.equal(renewalAttention({
+    period: "2026-11", periodHasObligation: true, periodRenewalStatus: "acknowledged_existing",
+    nextCycleStart: "2026-12-10", nextObligationExists: false, asOfDate: "2026-11-16",
+  }), null);
 });
 
 test("buildCycleFields", () => {
