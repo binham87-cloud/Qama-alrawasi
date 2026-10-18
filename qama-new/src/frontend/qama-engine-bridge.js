@@ -197,6 +197,17 @@ function formatEngineError(err) {
   if (/PERIOD_OBLIGATION_EXISTS/i.test(raw)) return "يوجد التزام إيجار لهذا القسم في نفس الشهر";
   if (/RENT_REQUIRED/i.test(raw)) return "قيمة الإيجار مطلوبة قبل التأجير";
   if (/START_DATE_REQUIRED/i.test(raw)) return "تاريخ بداية العقد مطلوب";
+  if (/RENEWAL_NOT_CONFIRMED/i.test(raw)) return "الإيجار غير مؤكد. أكّد التجديد قبل التحصيل.";
+  if (/MONTHLY_RENT_ALREADY_RECORDED/i.test(raw) || /يوجد إيجار شهري مسجل/.test(raw)) {
+    const end = detailObj.coverageEndDate || "";
+    const shown = /^\d{4}-\d{2}-\d{2}/.test(String(end))
+      ? String(end).slice(8, 10) + "/" + String(end).slice(5, 7) + "/" + String(end).slice(0, 4)
+      : "—";
+    if (detailObj.message) return String(detailObj.message);
+    return "تنبيه: يوجد إيجار شهري مسجل لهذا\nالبارتشن خلال الشهر الحالي.\n\nالإيجار الشهري مسجل حتى تاريخ:\n" + shown + "\n\nلا يمكن تسجيل إيجار شهري آخر\nلهذا البارتشن خلال نفس الشهر.\n\nيرجى تسجيل المستأجر الجديد\nضمن الحجوزات اليومية للفترة المتبقية.\n\nيمكن تسجيل إيجار شهري جديد\nابتداءً من الشهر القادم.";
+  }
+  if (/BOOKING_OVERLAP/i.test(raw)) return "هذه الفترة تتداخل مع حجز يومي موجود على نفس البارتشن.";
+  if (/BOOKING_DISPLAY_ONLY/i.test(raw)) return "هذا الحجز للعرض فقط. التحصيل مسجّل في شهر الحجز ولا يُحصّل مرة أخرى.";
   if (/ARREARS_CONFIRMATION_REQUIRED/i.test(raw)) return "توجد متأخرات — أعد الإخلاء (يُحتفظ بالمتأخرات دون عكس التحصيل)";
   if (/INVALID_AMOUNT/i.test(raw)) return "المبلغ غير صالح — أدخل مبلغاً أكبر من صفر";
   if (/AMOUNT_EXCEEDS_REMAINING/i.test(raw)) return "المبلغ يتجاوز المتبقي على الالتزام";
@@ -457,8 +468,31 @@ function isVacateResidueExtra(extra, sp, mapped) {
   return false;
 }
 
+function dailyRowCancelled(booking) {
+  if (!booking) return true;
+  if (booking.cancelled === true || booking.canceled === true || booking.deleted === true || booking.reversed === true) return true;
+  const status = String(booking.status || "").toLowerCase();
+  return status === "cancelled" || status === "canceled" || status === "deleted" || status === "reversed";
+}
+function mergeOccupancyDailyBookings(localRows, occupancyRows) {
+  const cancelled = new Set();
+  const rows = [...(localRows || []), ...(occupancyRows || [])];
+  for (const booking of rows) {
+    if (booking && booking.id && dailyRowCancelled(booking)) cancelled.add(String(booking.id));
+  }
+  const byId = new Map();
+  for (const booking of rows) {
+    if (!booking || !booking.id || cancelled.has(String(booking.id)) || dailyRowCancelled(booking)) continue;
+    const prev = byId.get(String(booking.id));
+    if (!prev || (prev.displayOnly && !booking.displayOnly)) byId.set(String(booking.id), { ...booking });
+  }
+  return [...byId.values()];
+}
 function mapDashboardToMonth(dash) {
   const extras = (dash.ui && dash.ui.extras) || {};
+  const occupancyDailyBookings = (dash.ui && dash.ui.occupancyDailyBookings)
+    || (dash.summary && dash.summary.occupancyDailyBookings)
+    || [];
   const extraBySpace = extras.spaces || {};
   const units = [];
   const full = [];
@@ -727,7 +761,7 @@ function mapDashboardToMonth(dash) {
     profits: extras.profits || [],
     installments: extras.installments || [],
     logs: extras.logs || [],
-    dailyBookings: extras.dailyBookings || [],
+    dailyBookings: mergeOccupancyDailyBookings(extras.dailyBookings || [], occupancyDailyBookings),
     unitMaintenance: extras.unitMaintenance || [],
     facilityMaintenance: extras.facilityMaintenance || []
   });

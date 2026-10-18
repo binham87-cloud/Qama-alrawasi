@@ -3,7 +3,7 @@
  * Unpaid rent and recorded undeposited holding are notes, not blockers.
  * A blocker is an inconsistency that would make the snapshot untrustworthy.
  */
-import { rentalCoversPeriod, sharedHoldingFils } from "./finance.mjs";
+import { rentalCoversPeriod, sharedHoldingFils, monthlyRenewalCountsInTarget } from "./finance.mjs";
 
 const FINANCIAL_REQUEST_TYPES = new Set([
   "update_partition",
@@ -76,7 +76,9 @@ export function reviewPeriodClose({
 
   const recognized = (receipts || []).filter((r) => r && r.state === "recognized" && r.period === period);
   const obById = new Map((obligations || []).filter(Boolean).map((o) => [o.id, o]));
+  const rentalsById = new Map((rentals || []).filter(Boolean).map((r) => [r.id, r]));
   for (const ob of live) {
+    if (!monthlyRenewalCountsInTarget(ob, rentalsById.get(ob.rentalId), receipts)) continue;
     const paid = recognized
       .filter((r) => r.obligationId === ob.id)
       .reduce((s, r) => s + Number(r.amountFils || 0), 0);
@@ -162,7 +164,8 @@ export function reviewPeriodClose({
     message: "إيداعات معتمدة مرتبطة بالشهر",
   });
 
-  const dueFils = live.reduce((s, o) => s + Number(o.amountFils || 0), 0);
+  const counted = live.filter((o) => monthlyRenewalCountsInTarget(o, rentalsById.get(o.rentalId), receipts));
+  const dueFils = counted.reduce((s, o) => s + Number(o.amountFils || 0), 0);
   const collectedFils = recognized
     .filter((r) => !String(r.obligationId || "").startsWith("daily:"))
     .reduce((s, r) => s + Number(r.amountFils || 0), 0);
@@ -173,7 +176,7 @@ export function reviewPeriodClose({
     blockers,
     notes,
     totals: {
-      obligationCount: live.length,
+      obligationCount: counted.length,
       dueFils,
       collectedFils,
       remainingFils: Math.max(0, dueFils - collectedFils),

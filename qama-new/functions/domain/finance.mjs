@@ -328,6 +328,30 @@ export function occupancyForPeriod({ space, rentals, period, asOfDate = null, ob
  *
  * Pass `receipts` so vacated-but-earned months stay reproducible.
  */
+/** From this month, an unconfirmed tenant continuation is not rent-target or arrears. */
+export const MANUAL_RENEWAL_PERIOD = "2026-11";
+
+/**
+ * November 2026 onward: the monthly rental target includes a cycle only when
+ * an employee confirmed it, it is the contract's original cycle, or it already
+ * has a recognized or pending receipt. Earlier months are unchanged.
+ * Staff charges are not gated here.
+ */
+export function monthlyRenewalCountsInTarget(obligation, rental, receipts = null) {
+  if (!obligation) return false;
+  const period = obligation.period || (obligation.dueDate ? String(obligation.dueDate).slice(0, 7) : "");
+  if (!period || period < MANUAL_RENEWAL_PERIOD) return true;
+  if (obligation.purpose === "staff" || rental?.purpose === "staff") return true;
+  const status = obligation.renewalStatus;
+  if (status === "confirmed" || status === "acknowledged_existing") return true;
+  const start = String(rental?.startDate || "").slice(0, 10);
+  const cycleStart = String(obligation.cycleStart || obligation.dueDate || "").slice(0, 10);
+  if (start && cycleStart === start) return true;
+  const related = (receipts || []).filter((r) => r && r.obligationId === obligation.id && r.baselineExcluded !== true);
+  if (related.some((r) => r.state === "recognized" || r.state === "pending")) return true;
+  return false;
+}
+
 export function liveObligationsForPeriod(obligations, rentals, receipts = null) {
   const rentalsById = new Map((rentals || []).filter(Boolean).map((r) => [r.id, r]));
   const activeRentalIds = new Set(
@@ -348,14 +372,18 @@ export function liveObligationsForPeriod(obligations, rentals, receipts = null) 
     if (rental && rental.purpose === "staff") return false;
     // Advance cash booked to a month after move-out is not that month's rent.
     if (isObligationAfterTenancyEnd(o, rental)) return false;
-    if (activeRentalIds.has(o.rentalId)) return true;
-    if (o.retainArrearsAfterVacate === true) return true;
+    let include = false;
+    if (activeRentalIds.has(o.rentalId)) include = true;
+    else if (o.retainArrearsAfterVacate === true) include = true;
     // Historical earned month after vacate — keep Target/Collected history.
-    if (earnedObIds.has(o.id)) return true;
-    // Frozen past-month obligation: rental ended later, but this period was covered.
-    const obPeriod = o.period || (o.dueDate ? periodOf(o.dueDate) : null);
-    if (rental && obPeriod && rentalCoversPeriod(rental, obPeriod)) return true;
-    return false;
+    else if (earnedObIds.has(o.id)) include = true;
+    else {
+      // Frozen past-month obligation: rental ended later, but this period was covered.
+      const obPeriod = o.period || (o.dueDate ? periodOf(o.dueDate) : null);
+      if (rental && obPeriod && rentalCoversPeriod(rental, obPeriod)) include = true;
+    }
+    if (!include) return false;
+    return monthlyRenewalCountsInTarget(o, rental, receipts);
   });
   return collapseOneRentPerSpacePeriod(filtered, receipts, rentals);
 }
@@ -724,6 +752,115 @@ export function assertReceiptFits({ obligation, receipts, amountFils, asOfDate }
     });
   }
   return view;
+}
+
+/**
+ * One monthly rental collection per physical space (unitId + spaceId) per calendar month.
+ * Partials stay on the same obligation. A receipt on any other contract — including a
+ * closed or vacated one — blocks another monthly receipt. Daily bookings are not monthly rent.
+ * Reversed and rejected receipts do not count, so an audited reversal can be followed by
+ * one replacement collection for that month.
+ */
+export function formatCoverageDate(isoDate) {
+  const s = String(isoDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "—";
+  return `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`;
+}
+
+export function monthlyRentBlockedMessage(coverageEndDate) {
+  return [
+    "تنبيه: يوجد إيجار شهري مسجل لهذا",
+    "البارتشن خلال الشهر الحالي.",
+    "",
+    "الإيجار الشهري مسجل حتى تاريخ:",
+    formatCoverageDate(coverageEndDate),
+    "",
+    "لا يمكن تسجيل إيجار شهري آخر",
+    "لهذا البارتشن خلال نفس الشهر.",
+    "",
+    "يرجى تسجيل المستأجر الجديد",
+    "ضمن الحجوزات اليومية للفترة المتبقية.",
+    "",
+    "يمكن تسجيل إيجار شهري جديد",
+    "ابتداءً من الشهر القادم.",
+  ].join("\n");
+}
+
+export const MONTHLY_RENT_ALREADY_RECORDED_MESSAGE = monthlyRentBlockedMessage(null);
+
+export function monthlyRentalReceiptBlocksSpace({ receipt, spaceId, unitId, period, obligationId }) {
+  if (!receipt || !spaceId || !period) return false;
+  if (receipt.sourceType === "daily_booking") return false;
+  if (receipt.baselineExcluded === true || receipt.operationalHidden === true || receipt.archivedOperational === true) return false;
+  if (receipt.state !== RECEIPT_STATE.RECOGNIZED && receipt.state !== RECEIPT_STATE.PENDING) return false;
+  if (receipt.spaceId !== spaceId) return false;
+  if (unitId && receipt.unitId && receipt.unitId !== unitId) return false;
+  if (String(receipt.period || "") !== String(period)) return false;
+  if (obligationId && receipt.obligationId === obligationId) return false;
+  return true;
+}
+
+export function coverageEndForSpaceMonth({ obligations, spaceId, unitId, period }) {
+  const ends = [];
+  for (const obligation of obligations || []) {
+    if (!obligation || obligation.spaceId !== spaceId) continue;
+    if (String(obligation.period || "") !== String(period)) continue;
+    if (obligation.state === "cancelled" || obligation.baselineExcluded === true) continue;
+    if (unitId && obligation.unitId && obligation.unitId !== unitId) continue;
+    if (obligation.cycleEnd) ends.push(String(obligation.cycleEnd).slice(0, 10));
+  }
+  if (ends.length) return ends.sort().at(-1);
+  return lastDayOfPeriod(period);
+}
+
+export function findCollectibleMonthlyObligation({ obligations, spaceId, unitId, period, exceptObligationId, exceptRentalId }) {
+  return (obligations || []).find((obligation) => {
+    if (!obligation || obligation.spaceId !== spaceId) return false;
+    if (String(obligation.period || "") !== String(period)) return false;
+    if (obligation.state !== "active" || obligation.baselineExcluded === true) return false;
+    if (obligation.purpose === "staff") return false;
+    if (unitId && obligation.unitId && obligation.unitId !== unitId) return false;
+    if (exceptObligationId && obligation.id === exceptObligationId) return false;
+    if (exceptRentalId && obligation.rentalId === exceptRentalId) return false;
+    return true;
+  }) || null;
+}
+
+export function assertNoSecondMonthlyRental({ receipts, spaceId, unitId, period, obligationId, coverageEndDate }) {
+  const blocking = (receipts || []).filter((receipt) => monthlyRentalReceiptBlocksSpace({
+    receipt, spaceId, unitId, period, obligationId,
+  }));
+  if (!blocking.length) return;
+  const end = coverageEndDate || lastDayOfPeriod(period);
+  throw new DomainError("MONTHLY_RENT_ALREADY_RECORDED", {
+    spaceId,
+    unitId: unitId || null,
+    period,
+    obligationId: obligationId || null,
+    coverageEndDate: end,
+    blockingReceiptIds: blocking.map((receipt) => receipt.id),
+    message: monthlyRentBlockedMessage(end),
+  });
+}
+
+export function assertNoSecondMonthlyObligation({ obligations, receipts, spaceId, unitId, period, exceptRentalId }) {
+  const existing = findCollectibleMonthlyObligation({
+    obligations, spaceId, unitId, period, exceptRentalId,
+  });
+  const blocking = (receipts || []).filter((receipt) => monthlyRentalReceiptBlocksSpace({
+    receipt, spaceId, unitId, period, obligationId: null,
+  }));
+  if (!existing && !blocking.length) return;
+  const end = coverageEndForSpaceMonth({ obligations, spaceId, unitId, period });
+  throw new DomainError("MONTHLY_RENT_ALREADY_RECORDED", {
+    spaceId,
+    unitId: unitId || null,
+    period,
+    coverageEndDate: end,
+    existingObligationId: existing ? existing.id : null,
+    blockingReceiptIds: blocking.map((receipt) => receipt.id),
+    message: monthlyRentBlockedMessage(end),
+  });
 }
 
 /* ───────────────────── custody / holding ───────────────────── */
@@ -1266,7 +1403,7 @@ export function obligationIdFor(rentalId, period) {
 export function isValidDailyBooking(booking) {
   if (!booking || typeof booking !== "object") return false;
   if (booking.cancelled === true || booking.canceled === true || booking.deleted === true) return false;
-  if (booking.reversed === true || booking.baselineExcluded === true) return false;
+  if (booking.reversed === true || booking.baselineExcluded === true || booking.displayOnly === true) return false;
   const st = String(booking.status || "").toLowerCase();
   if (st === "cancelled" || st === "canceled" || st === "deleted" || st === "reversed") return false;
   const aed = Number(booking.total || 0);

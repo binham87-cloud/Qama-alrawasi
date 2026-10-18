@@ -14,9 +14,11 @@ async function seedSepWithNov(db, owner) {
   const building = await seedBuilding(db, owner);
   const yahia = await createUser(db, owner, { displayName: "يحيى", role: "employee", pin: "6477" });
   await run(db, owner, "renewRentalCycle", {
+    rentalId: building.rental.rentalId, asOfDate: "2026-10-01",
+  }, opId("ren-oct-fu"));
+  await run(db, owner, "renewRentalCycle", {
     rentalId: building.rental.rentalId, asOfDate: "2026-11-01",
   }, opId("ren-nov-fu"));
-  await run(db, owner, "generateObligations", { period: "2026-11" }, opId("gen-nov-fu"));
   const novOb = db.dump("obligations").find(
     (o) => o.rentalId === building.rental.rentalId && o.period === "2026-11" && o.state === "active",
   );

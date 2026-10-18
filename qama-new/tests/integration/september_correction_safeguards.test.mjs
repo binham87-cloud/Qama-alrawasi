@@ -115,6 +115,17 @@ test("a vacant partition can be re-rented after the previous contract ends", asy
   await run(db, owner, "endTenancy", {
     rentalId: first.rental.rentalId, endDate: "2026-09-06", reason: "إخلاء", arrearsDecision: "retain",
   }, opId("rerent-end"));
+  await assert.rejects(
+    () => run(db, owner, "createRental", {
+      spaceId: first.space.spaceId, tenantName: "الجديد", contractualAmountFils: 90000,
+      dueDayOfMonth: 10, startDate: "2026-09-10",
+    }, opId("rerent-blocked")),
+    (err) => err && err.code === "MONTHLY_RENT_ALREADY_RECORDED",
+  );
+  const kept = db.dump("obligations").find((o) => o.rentalId === first.rental.rentalId && o.period === "2026-09");
+  await run(db, owner, "cancelObligation", {
+    obligationId: kept.id, reason: "إلغاء التزام غير مدفوع قبل إعادة التأجير",
+  }, opId("cancel-kept"));
   const next = await run(db, owner, "createRental", {
     spaceId: first.space.spaceId, tenantName: "الجديد", contractualAmountFils: 90000,
     dueDayOfMonth: 10, startDate: "2026-09-10",

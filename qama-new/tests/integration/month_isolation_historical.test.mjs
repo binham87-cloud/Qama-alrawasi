@@ -201,7 +201,9 @@ test("TEST 4 — Historical receipts survive October vacancy", async () => {
 test("TEST 5 — Future obligation cancelled; September untouched", async () => {
   const { db, owner, building } = await setup();
   await run(db, owner, "generateObligations", { period: "2026-10" }, opId("t5-oct"));
-  await run(db, owner, "generateObligations", { period: "2026-11" }, opId("t5-nov"));
+  await run(db, owner, "renewRentalCycle", {
+    rentalId: building.rental.rentalId, asOfDate: "2026-11-01",
+  }, opId("t5-nov"));
   const novBefore = db.dump("obligations").find(
     (o) => o.rentalId === building.rental.rentalId && o.period === "2026-11" && o.state === "active",
   );

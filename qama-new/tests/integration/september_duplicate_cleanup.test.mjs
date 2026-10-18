@@ -61,9 +61,22 @@ test("a later duplicate receipt is reversed and the earlier receipt stays recogn
   }, opId("first-cash"));
   const duplicateId = obligation.id + "-later";
   db.seed("obligations", duplicateId, { ...obligation, id: duplicateId });
-  await run(db, actorFrom(yahia), "createCashReceipt", {
-    obligationId: duplicateId, amountFils: 100000, collectionDate: "2026-09-01",
-  }, opId("second-cash"));
+  const secondReceiptId = "rcpt-historical-duplicate";
+  db.seed("receipts", secondReceiptId, {
+    id: secondReceiptId,
+    obligationId: duplicateId,
+    rentalId: obligation.rentalId,
+    propertyId: obligation.propertyId,
+    unitId: obligation.unitId,
+    spaceId: obligation.spaceId,
+    period: "2026-09",
+    tenantNameSnapshot: obligation.tenantNameSnapshot,
+    amountFils: 100000,
+    collectionDate: "2026-09-01",
+    method: "cash",
+    state: "recognized",
+    collectorUserId: yahia.userId,
+  });
   const first = recognized(db, obligation.id)[0];
   const second = recognized(db, duplicateId)[0];
   await run(db, owner, "submitDeposit", {

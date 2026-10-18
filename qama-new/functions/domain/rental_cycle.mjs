@@ -4,9 +4,30 @@
  * Day 29/30/31 clamps to last day of shorter months; restores when month allows
  * by using the rental's anniversary day (dueDayOfMonth), not the clamped prior day.
  */
-import { DomainError, daysInMonth, periodOf } from "./finance.mjs";
+import { DomainError, daysInMonth, periodOf, MANUAL_RENEWAL_PERIOD } from "./finance.mjs";
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+export { MANUAL_RENEWAL_PERIOD };
+
+export function renewalAttention({
+  period,
+  periodRenewalStatus = null,
+  periodHasObligation = false,
+  nextCycleStart = null,
+  nextObligationExists = false,
+  asOfDate,
+  earlyWindowDays = 7,
+}) {
+  const acknowledged = periodRenewalStatus === "confirmed" || periodRenewalStatus === "acknowledged_existing";
+  if (period >= MANUAL_RENEWAL_PERIOD && periodHasObligation && !acknowledged) return "existing";
+  if (!nextCycleStart || nextObligationExists) return null;
+  if (String(nextCycleStart).slice(0, 7) < MANUAL_RENEWAL_PERIOD) return null;
+  const days = daysUntilCycleStart(nextCycleStart, asOfDate);
+  if (days < 0) return "overdue";
+  if (days <= Number(earlyWindowDays || 0)) return "upcoming";
+  return null;
+}
 
 export function assertIsoDate(isoDate, code = "INVALID_DATE") {
   const s = String(isoDate || "").slice(0, 10);

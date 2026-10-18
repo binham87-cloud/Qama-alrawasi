@@ -15,6 +15,7 @@ import {
   cancelledUnpaidRentHidden,
 } from "../domain/finance.mjs";
 import { canonicalRequestCreatedAt, sortRequestsNewestFirst } from "../domain/request_order.mjs";
+import { occupancyBookingsForPeriod } from "../domain/daily_booking.mjs";
 
 /**
  * Attach rent-month Holding(P) + GLOBAL physical shared Holding.
@@ -147,6 +148,11 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
   // Daily booking targets live in uiPeriods extras (not obligations).
   // periodSummary already folded recognized daily receipts into paid/collected.
   const ui = await buildUiBundle({ db, period });
+  let allPeriodDocs = [];
+  try { allPeriodDocs = await db.list("uiPeriods", []); } catch { allPeriodDocs = []; }
+  const occupancyDailyBookings = occupancyBookingsForPeriod(allPeriodDocs, period);
+  ui.occupancyDailyBookings = occupancyDailyBookings;
+  summary.occupancyDailyBookings = occupancyDailyBookings;
   const dailyBookings = (ui.extras && ui.extras.dailyBookings) || [];
   summary._period = period;
   applyDailyBookingTarget(summary, dailyBookings);
@@ -738,6 +744,8 @@ export function buildDashboardFromDump(db, period, asOfDate) {
       : (uiPeriods[0].extras || {}))
     : {};
   const dailyBookings = extras.dailyBookings || [];
+  const occupancyDailyBookings = occupancyBookingsForPeriod(dump("uiPeriods"), period);
+  summary.occupancyDailyBookings = occupancyDailyBookings;
   summary._period = period;
   applyDailyBookingTarget(summary, dailyBookings);
   const balDocs = dump("uiConfig").filter((d) => d.id === "balances");

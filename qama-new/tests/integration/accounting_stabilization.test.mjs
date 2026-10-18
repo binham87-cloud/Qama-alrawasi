@@ -210,7 +210,15 @@ test("August through January uses the same rules, including a later payment of a
     dueDayOfMonth: 1, startDate: "2026-08-01",
   });
   const periods = ["2026-08", "2026-09", "2026-10", "2026-11", "2026-12"];
-  for (const period of periods) await run(db, owner, "generateObligations", { period }, opId("gen-" + period));
+  for (const period of periods) {
+    if (period < "2026-11") {
+      await run(db, owner, "generateObligations", { period }, opId("gen-" + period));
+    } else {
+      await run(db, owner, "renewRentalCycle", {
+        rentalId: rental.rentalId, asOfDate: `${period}-01`,
+      }, opId("renew-" + period));
+    }
+  }
   const obs = Object.fromEntries(periods.map((period) => [
     period,
     db.dump("obligations").find((o) => o.rentalId === rental.rentalId && o.period === period && o.state === "active"),
@@ -429,7 +437,15 @@ test("closing September leaves October through January unchanged and holding doe
     dueDayOfMonth: 1, startDate: "2026-09-01",
   });
   const periods = ["2026-09", "2026-10", "2026-11", "2026-12", "2027-01"];
-  for (const period of periods) await run(db, owner, "generateObligations", { period }, opId("span-" + period));
+  for (const period of periods) {
+    if (period < "2026-11") {
+      await run(db, owner, "generateObligations", { period }, opId("span-" + period));
+    } else {
+      await run(db, owner, "renewRentalCycle", {
+        rentalId: rental.rentalId, asOfDate: `${period}-01`,
+      }, opId("span-renew-" + period));
+    }
+  }
   const byPeriod = Object.fromEntries(periods.map((period) => [
     period,
     db.dump("obligations").find((o) => o.rentalId === rental.rentalId && o.period === period),

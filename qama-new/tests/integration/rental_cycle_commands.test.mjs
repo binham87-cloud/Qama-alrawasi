@@ -135,20 +135,30 @@ test("9 re-rent space to new tenant after endTenancy — separate history", asyn
   await run(db, owner, "endTenancy", {
     rentalId: building.rental.rentalId, endDate: "2026-09-20", reason: "إخلاء",
   }, opId("end-rerent"));
+  await assert.rejects(
+    () => run(db, owner, "createRental", {
+      spaceId: building.space.spaceId,
+      tenantName: "خالد",
+      contractualAmountFils: 800000,
+      dueDayOfMonth: 15,
+      startDate: "2026-09-21",
+    }, opId("rent-same-month")),
+    (err) => err && err.code === "MONTHLY_RENT_ALREADY_RECORDED",
+  );
+  const oldRcpt = db.dump("receipts").find((r) => r.obligationId === building.obligationId);
+  assert.equal(oldRcpt.state, "recognized");
   const r2 = await run(db, owner, "createRental", {
     spaceId: building.space.spaceId,
     tenantName: "خالد",
     contractualAmountFils: 800000,
-    dueDayOfMonth: 15,
-    startDate: "2026-09-21",
-  }, opId("rent-new"));
-  const gen = await run(db, owner, "generateObligations", { period: "2026-09" }, opId("gen-new"));
+    dueDayOfMonth: 1,
+    startDate: "2026-10-01",
+  }, opId("rent-next-month"));
+  const gen = await run(db, owner, "generateObligations", { period: "2026-10" }, opId("gen-new"));
   assert.ok(gen.created >= 1);
-  const newOb = db.dump("obligations").find((o) => o.rentalId === r2.rentalId);
+  const newOb = db.dump("obligations").find((o) => o.rentalId === r2.rentalId && o.period === "2026-10");
   assert.equal(newOb.tenantNameSnapshot, "خالد");
   assert.equal(newOb.amountFils, 800000);
-  const oldRcpt = db.dump("receipts").find((r) => r.obligationId === building.obligationId);
-  assert.equal(oldRcpt.state, "recognized");
   assert.notEqual(newOb.id, building.obligationId);
 });
 
@@ -252,6 +262,8 @@ test("14 generateObligations seeds next month unpaid cycle for continuing rental
   const { db, owner, building } = await setup();
   const genOct = await run(db, owner, "generateObligations", { period: "2026-10" }, opId("gen-oct"));
   assert.equal(genOct.created, 1);
+  const genNov = await run(db, owner, "generateObligations", { period: "2026-11" }, opId("gen-nov"));
+  assert.equal(genNov.created, 0);
   const octObs = db.dump("obligations").filter((o) => o.period === "2026-10" && o.rentalId === building.rental.rentalId && o.state === "active");
   assert.equal(octObs.length, 1);
   assert.equal(octObs[0].dueDate, "2026-10-01");

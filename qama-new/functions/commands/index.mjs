@@ -16,11 +16,15 @@ import {
   periodOf, dueDateFor, obligationIdFor, depositSourcePeriod,
   assertPositiveFils, isFils, isPlaceholderTenant, parseAedToFils,
   rentalCoversPeriod, isObligationAfterTenancyEnd, findPeriodCoverageConflict,
+  monthlyRenewalCountsInTarget, assertNoSecondMonthlyRental,
+  assertNoSecondMonthlyObligation, coverageEndForSpaceMonth,
+  monthlyRentalReceiptBlocksSpace, findCollectibleMonthlyObligation,
 } from "../domain/finance.mjs";
 import {
   buildCycleFields, nextCycleStart, renewButtonVisible, assertIsoDate,
-  cyclePeriod,
+  cyclePeriod, MANUAL_RENEWAL_PERIOD,
 } from "../domain/rental_cycle.mjs";
+import { dailyRangesOverlap, isCancelledDailyBooking, periodsTouchedByStay } from "../domain/daily_booking.mjs";
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
 import { reviewPeriodClose } from "../domain/closing_review.mjs";
 
@@ -655,6 +659,8 @@ export const SCHEMAS = Object.freeze({
     rentalId: S.id(),
     asOfDate: S.opt(S.date()),
     earlyWindowDays: S.opt(S.int(0, 31)),
+    /** Confirm a cycle that already exists. Does not create a second obligation. */
+    acknowledgeCycleStart: S.opt(S.date()),
   },
   endTenancy: {
     rentalId: S.id(),
@@ -963,6 +969,47 @@ const newId = (prefix, ctx) => `${prefix}:${ctx.operationId}`;
 
 /* ═════════════════════ handlers ═════════════════════ */
 
+const RENEWAL_ACKNOWLEDGED = new Set(["confirmed", "acknowledged_existing"]);
+
+/**
+ * Keep an existing cycle. Writes acknowledgement metadata only.
+ * Amount, due date, receipts, custody, and deposits stay untouched.
+ * Cycles before November 2026 are not relabeled.
+ */
+function acknowledgeExistingObligation(ctx, rental, existing) {
+  if (!existing || existing.state === "cancelled" || existing.baselineExcluded === true) {
+    throw new DomainError("OBLIGATION_NOT_ACTIVE", { obligationId: existing && existing.id });
+  }
+  const period = existing.period || String(existing.cycleStart || existing.dueDate || "").slice(0, 7);
+  const result = {
+    alreadyApplied: true,
+    existingObligation: true,
+    financialUnchanged: true,
+    obligationId: existing.id,
+    rentalCycleId: existing.rentalCycleId || existing.id,
+    cycleStart: existing.cycleStart || null,
+    cycleEnd: existing.cycleEnd || null,
+    amountFils: existing.amountFils,
+    period,
+  };
+  if (String(period) < MANUAL_RENEWAL_PERIOD) return result;
+  if (RENEWAL_ACKNOWLEDGED.has(existing.renewalStatus)) return result;
+  ctx.tx.update("obligations", existing.id, {
+    renewalStatus: "acknowledged_existing",
+    renewedBy: ctx.actor.userId,
+    renewedAt: ctx.now,
+  });
+  audit(ctx, "rental_cycle_existing_acknowledged", "obligation", existing.id, {
+    rentalId: rental.id,
+    newPeriod: period,
+    cycleStart: existing.cycleStart || null,
+    cycleEnd: existing.cycleEnd || null,
+    amountFils: Number(existing.amountFils || 0),
+    previousCycleId: existing.previousCycleId || null,
+  });
+  return { ...result, alreadyApplied: false, acknowledgedExisting: true };
+}
+
 const HANDLERS = {
   /* ---------- structure ---------- */
   async createProperty(ctx) {
@@ -1210,7 +1257,16 @@ const HANDLERS = {
       obligations: spaceObligations,
     });
     if (coverageConflict) throw new DomainError("PERIOD_ALREADY_COVERED", coverageConflict);
-    await assertPeriodMutable(ctx, periodOf(ctx.payload.startDate));
+    const startPeriod = periodOf(ctx.payload.startDate);
+    const spaceReceipts = await ctx.tx.query("receipts", [["spaceId", "==", space.id]]);
+    assertNoSecondMonthlyObligation({
+      obligations: spaceObligations,
+      receipts: spaceReceipts,
+      spaceId: space.id,
+      unitId: space.unitId,
+      period: startPeriod,
+    });
+    await assertPeriodMutable(ctx, startPeriod);
 
     const id = newId("rental", ctx);
     ctx.tx.create("rentals", id, {
@@ -1407,6 +1463,13 @@ const HANDLERS = {
       .sort((a, b) => String(a._start).localeCompare(String(b._start)));
     if (!cycles.length) throw new DomainError("NO_CYCLE_TO_RENEW", { rentalId: rental.id });
 
+    if (ctx.payload.acknowledgeCycleStart) {
+      const want = assertIsoDate(ctx.payload.acknowledgeCycleStart);
+      const hit = cycles.find((o) => String(o.cycleStart || o.dueDate || o._start).slice(0, 10) === want);
+      if (!hit) throw new DomainError("NO_CYCLE_TO_RENEW", { rentalId: rental.id, cycleStart: want });
+      return acknowledgeExistingObligation(ctx, rental, hit);
+    }
+
     const latest = cycles[cycles.length - 1];
     const latestStart = assertIsoDate(latest.cycleStart || latest.dueDate || latest._start);
     const anniversaryDay = Number(
@@ -1424,16 +1487,7 @@ const HANDLERS = {
       anniversaryDay,
     });
     const existing = await ctx.tx.get("obligations", fields.id);
-    if (existing) {
-      return {
-        alreadyApplied: true,
-        rentalCycleId: fields.id,
-        obligationId: fields.id,
-        cycleStart: fields.cycleStart,
-        cycleEnd: fields.cycleEnd,
-        previousCycleId: fields.previousCycleId,
-      };
-    }
+    if (existing) return acknowledgeExistingObligation(ctx, rental, existing);
     const samePeriod = obligations.find((o) => {
       if (!o || o.state !== "active" || o.baselineExcluded === true) return false;
       if (o.period === fields.period) return true;
@@ -1441,6 +1495,9 @@ const HANDLERS = {
       return /^\d{4}-\d{2}-\d{2}$/.test(start) && cyclePeriod(start) === fields.period;
     });
     if (samePeriod) {
+      if (String(fields.period) >= MANUAL_RENEWAL_PERIOD) {
+        return acknowledgeExistingObligation(ctx, rental, samePeriod);
+      }
       throw new DomainError("PERIOD_OBLIGATION_EXISTS", {
         obligationId: samePeriod.id, period: fields.period, rentalId: rental.id,
       });
@@ -1479,12 +1536,19 @@ const HANDLERS = {
       previousCycleId: fields.previousCycleId,
       anniversaryDay: fields.anniversaryDay,
       tenantNameSnapshot: fields.tenantNameSnapshot,
+      renewalStatus: "confirmed",
+      renewedBy: ctx.actor.userId,
+      renewedAt: ctx.now,
       state: "active",
       ...base(ctx),
     });
     audit(ctx, "rental_cycle_renewed", "obligation", fields.id, {
       rentalId: rental.id,
       previousCycleId: fields.previousCycleId,
+      previousPeriod: latest.period || cyclePeriod(latestStart),
+      previousCycleStart: latestStart,
+      previousCycleEnd: latest.cycleEnd || null,
+      newPeriod: fields.period,
       cycleStart: fields.cycleStart,
       cycleEnd: fields.cycleEnd,
       amountFils: fields.amountFils,
@@ -1518,6 +1582,7 @@ const HANDLERS = {
       const paid = receipts
         .filter((r) => r.state === RECEIPT_STATE.RECOGNIZED)
         .reduce((s, r) => s + Number(r.amountFils || 0), 0);
+      if (!monthlyRenewalCountsInTarget(ob, rental, receipts)) continue;
       arrearsFils += Math.max(0, Number(ob.amountFils || 0) - paid);
     }
     const decision = ctx.payload.arrearsDecision || "none";
@@ -1576,6 +1641,10 @@ const HANDLERS = {
         cycleStart = nextCycleStart(cycleStart, 1, anniversaryDay);
       }
       if (cyclePeriod(cycleStart) !== period) continue;
+      // From November 2026, tenant continuation cycles are manual.
+      // September and October keep the previous automatic generation.
+      const staffCycle = space.occupancy === "staff" && rental.purpose === "staff";
+      if (String(period) >= MANUAL_RENEWAL_PERIOD && cycleStart !== start && !staffCycle) continue;
 
       const existingForRental = await ctx.tx.query("obligations", [["rentalId", "==", rental.id]]);
       const periodHit = (existingForRental || []).find(
@@ -1595,6 +1664,22 @@ const HANDLERS = {
       // A successor that starts after the previous contract ended inside the month
       // is allowed. Block only when another rental still covers this period.
       if (otherCoverage) continue;
+      const foreignObligation = findCollectibleMonthlyObligation({
+        obligations: spaceObligations,
+        spaceId: rental.spaceId,
+        unitId: rental.unitId,
+        period,
+        exceptRentalId: rental.id,
+      });
+      if (foreignObligation) continue;
+      const spaceReceipts = await ctx.tx.query("receipts", [["spaceId", "==", rental.spaceId]]);
+      const ownObligationIds = new Set((existingForRental || []).map((row) => row && row.id));
+      const foreignReceipt = (spaceReceipts || []).some((receipt) =>
+        monthlyRentalReceiptBlocksSpace({
+          receipt, spaceId: rental.spaceId, unitId: rental.unitId, period, obligationId: null,
+        }) && !ownObligationIds.has(receipt.obligationId)
+      );
+      if (foreignReceipt) continue;
 
       const prior = (existingForRental || [])
         .filter((o) => o && o.state !== "cancelled")
@@ -1636,6 +1721,7 @@ const HANDLERS = {
         previousCycleId: fields.previousCycleId,
         anniversaryDay: fields.anniversaryDay,
         tenantNameSnapshot: fields.tenantNameSnapshot,
+        renewalStatus: "initial",
         state: "active",
         ...base(ctx),
       });
@@ -1691,8 +1777,13 @@ const HANDLERS = {
     const bookingIdx = bookingList.findIndex((b) => b && String(b.id) === String(bookingId));
     const booking = bookingIdx >= 0 ? bookingList[bookingIdx] : null;
     if (!booking) throw new DomainError("BOOKING_NOT_FOUND", { bookingId, period: ctx.payload.period });
-    if (String(booking.status || "") === "cancelled" || booking.cancelled === true) {
+    if (String(booking.status || "") === "cancelled" || booking.cancelled === true || isCancelledDailyBooking(booking)) {
       throw new DomainError("BOOKING_CANCELLED", { bookingId });
+    }
+    if (booking.displayOnly === true) {
+      throw new DomainError("BOOKING_DISPLAY_ONLY", {
+        bookingId, financialPeriod: booking.financialPeriod || null,
+      });
     }
     const expectedFils = Math.round(Number(booking.total) * 100);
     if (!Number.isFinite(expectedFils) || expectedFils <= 0 || ctx.payload.amountFils !== expectedFils) {
@@ -1778,6 +1869,9 @@ const HANDLERS = {
       });
     }
 
+    const periodDocs = await ctx.tx.query("uiPeriods", []);
+    assertDailyBookingAvailable(periodDocs, booking, bookingId);
+
     const periodDocId = `period:${period}`;
     const existingPeriod = await ctx.tx.get("uiPeriods", periodDocId);
     let extras = {};
@@ -1811,7 +1905,9 @@ const HANDLERS = {
       ctx.tx.create("receipts", receiptId, {
         id: receiptId,
         obligationId: `daily:${bookingId}`,
-        rentalId: null, propertyId: null, unitId: null, spaceId: null,
+        rentalId: null, propertyId: null,
+        unitId: booking.unitId || null,
+        spaceId: booking.spaceId || null,
         period,
         tenantNameSnapshot: String(booking.guest || ctx.payload.note || "حجز يومي").slice(0, 160),
         amountFils: totalFils,
@@ -1834,6 +1930,8 @@ const HANDLERS = {
       paymentStatus: "collected",
       receiptId,
       prepaid: true,
+      financialPeriod: period,
+      displayOnly: false,
       by: booking.by || ctx.actor.userId,
     };
     if (priorIdx >= 0) list[priorIdx] = row;
@@ -1849,6 +1947,7 @@ const HANDLERS = {
     };
     if (existingPeriod) ctx.tx.update("uiPeriods", periodDocId, rec);
     else ctx.tx.create("uiPeriods", periodDocId, { ...rec, ...base(ctx) });
+    await writeDailyOccupancyMirrors(ctx, periodDocs, row, period);
 
     audit(ctx, "daily_booking_prepaid", "receipt", receiptId, {
       amountFils: totalFils, bookingId, period, method: "cash",
@@ -1876,6 +1975,10 @@ const HANDLERS = {
     // Re-check the fit at approval time: the obligation may have been paid meanwhile.
     const ob = await ctx.tx.get("obligations", receipt.obligationId);
     const siblings = await ctx.tx.query("receipts", [["obligationId", "==", receipt.obligationId]]);
+    await assertSpaceMonthOpenForReceipt(ctx, {
+      spaceId: receipt.spaceId, unitId: receipt.unitId, period: receipt.period,
+      obligationId: receipt.obligationId,
+    });
     assertReceiptFits({
       obligation: ob,
       receipts: siblings.filter((r) => r.id !== receipt.id),
@@ -2020,6 +2123,12 @@ const HANDLERS = {
       if (otherPaid + Number(receipt.amountFils) > Number(ob.amountFils || 0)) {
         throw new DomainError("AMOUNT_EXCEEDS_REMAINING");
       }
+      await assertSpaceMonthOpenForReceipt(ctx, {
+        spaceId: receipt.spaceId || ob.spaceId,
+        unitId: receipt.unitId || ob.unitId,
+        period: receipt.period || ob.period,
+        obligationId: receipt.obligationId,
+      });
     }
     ctx.tx.update("receipts", receipt.id, {
       state: RECEIPT_STATE.RECOGNIZED,
@@ -2957,6 +3066,9 @@ const HANDLERS = {
     };
     if (existing) ctx.tx.update("uiPeriods", id, rec);
     else ctx.tx.create("uiPeriods", id, { ...rec, ...base(ctx) });
+    let savedExtras = {};
+    try { savedExtras = JSON.parse(extrasJson); } catch { savedExtras = {}; }
+    await propagateCancelledDailyBookings(ctx, savedExtras.dailyBookings || []);
     audit(ctx, "period_extras_saved", "uiPeriod", id);
     return { period: ctx.payload.period };
   },
@@ -2971,6 +3083,19 @@ async function createReceipt(ctx, extra) {
   await assertPeriodMutable(ctx, ob.period);
 
   const siblings = await ctx.tx.query("receipts", [["obligationId", "==", ob.id]]);
+  const rental = ob.rentalId ? await ctx.tx.get("rentals", ob.rentalId) : null;
+  // November 2026 onward: an unconfirmed continuation is not collectible.
+  // A cycle that already has recognized or pending money stays collectible.
+  if (!monthlyRenewalCountsInTarget(ob, rental, siblings)) {
+    throw new DomainError("RENEWAL_NOT_CONFIRMED", {
+      obligationId: ob.id,
+      period: ob.period,
+      message: "الإيجار غير مؤكد. أكّد التجديد قبل التحصيل.",
+    });
+  }
+  await assertSpaceMonthOpenForReceipt(ctx, {
+    spaceId: ob.spaceId, unitId: ob.unitId, period: ob.period, obligationId: ob.id,
+  });
 
   // D2: overpayment is refused with the exact figures. Pending bank receipts are counted
   // as claims on the remainder so two submissions cannot together exceed the obligation.
@@ -3131,6 +3256,103 @@ function originalRevision(ctx, payloadJson) {
     reason: "التقديم الأصلي",
     newValues: payloadSnapshot(payloadJson),
   };
+}
+
+async function periodIsClosed(ctx, period) {
+  const data = parseConfigJson(await ctx.tx.get("uiConfig", `close-state:${period}`));
+  return data.status === "closed";
+}
+
+async function writeDailyOccupancyMirrors(ctx, periodDocs, booking, financialPeriod) {
+  const touched = periodsTouchedByStay(booking.startDate, booking.endDate)
+    .filter((period) => period !== financialPeriod);
+  const byPeriod = new Map((periodDocs || []).map((doc) => [doc.period || String(doc.id || "").replace(/^period:/, ""), doc]));
+  for (const period of touched) {
+    if (await periodIsClosed(ctx, period)) continue;
+    const doc = byPeriod.get(period) || null;
+    let extras = {};
+    try { extras = doc && doc.extrasJson ? JSON.parse(doc.extrasJson) : {}; }
+    catch { extras = {}; }
+    const list = Array.isArray(extras.dailyBookings) ? extras.dailyBookings.slice() : [];
+    const mirror = {
+      ...booking,
+      displayOnly: true,
+      financialPeriod,
+      paymentStatus: booking.paymentStatus || "collected",
+    };
+    const idx = list.findIndex((row) => row && String(row.id) === String(booking.id));
+    if (idx >= 0) list[idx] = { ...list[idx], ...mirror };
+    else list.push(mirror);
+    extras.dailyBookings = list;
+    const id = `period:${period}`;
+    const patch = {
+      id, period, extrasJson: JSON.stringify(extras),
+      updatedAt: ctx.now, updatedBy: ctx.actor.userId, schemaVersion: 1,
+    };
+    if (doc) ctx.tx.update("uiPeriods", id, patch);
+    else ctx.tx.create("uiPeriods", id, { ...patch, ...base(ctx) });
+  }
+}
+
+async function propagateCancelledDailyBookings(ctx, bookings) {
+  const cancelled = (bookings || []).filter((booking) => isCancelledDailyBooking(booking) && booking.id);
+  if (!cancelled.length) return;
+  const docs = await ctx.tx.query("uiPeriods", []);
+  for (const doc of docs || []) {
+    const period = doc.period || String(doc.id || "").replace(/^period:/, "");
+    if (!period || await periodIsClosed(ctx, period)) continue;
+    let extras = {};
+    try { extras = doc.extrasJson ? JSON.parse(doc.extrasJson) : {}; }
+    catch { extras = {}; }
+    const list = Array.isArray(extras.dailyBookings) ? extras.dailyBookings.slice() : [];
+    let changed = false;
+    for (const booking of cancelled) {
+      const idx = list.findIndex((row) => row && String(row.id) === String(booking.id));
+      if (idx < 0) continue;
+      if (isCancelledDailyBooking(list[idx])) continue;
+      list[idx] = { ...list[idx], status: "cancelled", cancelled: true, displayOnly: list[idx].displayOnly === true };
+      changed = true;
+    }
+    if (!changed) continue;
+    extras.dailyBookings = list;
+    ctx.tx.update("uiPeriods", doc.id || `period:${period}`, {
+      extrasJson: JSON.stringify(extras), updatedAt: ctx.now, updatedBy: ctx.actor.userId,
+    });
+  }
+}
+
+function assertDailyBookingAvailable(periodDocs, booking, bookingId) {
+  if (!booking || !booking.partId) return;
+  for (const doc of periodDocs || []) {
+    let extras = {};
+    try { extras = doc && doc.extrasJson ? JSON.parse(doc.extrasJson) : (doc && doc.extras) || {}; }
+    catch { extras = {}; }
+    const list = Array.isArray(extras.dailyBookings) ? extras.dailyBookings : [];
+    for (const other of list) {
+      if (!other || String(other.id) === String(bookingId)) continue;
+      if (String(other.partId || "") !== String(booking.partId)) continue;
+      if (isCancelledDailyBooking(other)) continue;
+      if (!dailyRangesOverlap(booking.startDate, booking.endDate, other.startDate, other.endDate)) continue;
+      throw new DomainError("BOOKING_OVERLAP", {
+        partId: booking.partId,
+        startDate: booking.startDate,
+        endDate: booking.endDate,
+        otherBookingId: other.id,
+      });
+    }
+  }
+}
+
+async function assertSpaceMonthOpenForReceipt(ctx, { spaceId, unitId, period, obligationId }) {
+  if (!spaceId || !period) return;
+  const rows = await ctx.tx.query("receipts", [["spaceId", "==", spaceId]]);
+  const obligations = await ctx.tx.query("obligations", [["spaceId", "==", spaceId]]);
+  assertNoSecondMonthlyRental({
+    receipts: rows, spaceId, unitId, period, obligationId,
+    coverageEndDate: coverageEndForSpaceMonth({ obligations, spaceId, unitId, period }),
+  });
+  const space = await ctx.tx.get("spaces", spaceId);
+  if (space) ctx.tx.update("spaces", spaceId, { lastMonthlyCollectionGuardAt: ctx.now });
 }
 
 async function assertPeriodMutable(ctx, period) {

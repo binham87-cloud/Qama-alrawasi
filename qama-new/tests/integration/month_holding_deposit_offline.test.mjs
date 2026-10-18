@@ -114,7 +114,9 @@ test("A3 October tenant change leaves September as Tenant A", async () => {
 test("A4 November rent change does not mutate September or October", async () => {
   const { db, owner, building } = await setup();
   await run(db, owner, "generateObligations", { period: "2026-10" }, opId("a4-oct"));
-  await run(db, owner, "generateObligations", { period: "2026-11" }, opId("a4-nov"));
+  await run(db, owner, "renewRentalCycle", {
+    rentalId: building.rental.rentalId, asOfDate: "2026-11-01",
+  }, opId("a4-nov"));
   const sepBefore = buildDashboardFromDump(db, "2026-09", "2026-10-08").summary.targetFils;
   const octBefore = buildDashboardFromDump(db, "2026-10", "2026-10-08").summary.targetFils;
   await run(db, owner, "updateRentalRent", {
@@ -148,7 +150,9 @@ test("A5 rebuild and month round-trip keep September identical", async () => {
 test("B1 advance November cash leaves rent-month at 0 and global holding at 900", async () => {
   const { db, owner, building, yahia } = await setup();
   await run(db, owner, "generateObligations", { period: "2026-10" }, opId("b1-oct"));
-  await run(db, owner, "generateObligations", { period: "2026-11" }, opId("b1-nov"));
+  await run(db, owner, "renewRentalCycle", {
+    rentalId: building.rental.rentalId, asOfDate: "2026-11-01",
+  }, opId("b1-nov"));
   const novOb = db.dump("obligations").find(
     (o) => o.rentalId === building.rental.rentalId && o.period === "2026-11" && o.state === "active",
   );
@@ -178,7 +182,10 @@ test("B1 advance November cash leaves rent-month at 0 and global holding at 900"
 
 test("B2 reversing the advance cash zeros global holding", async () => {
   const { db, owner, building, yahia } = await setup();
-  await run(db, owner, "generateObligations", { period: "2026-11" }, opId("b2-nov"));
+  await run(db, owner, "generateObligations", { period: "2026-10" }, opId("b2-oct"));
+  await run(db, owner, "renewRentalCycle", {
+    rentalId: building.rental.rentalId, asOfDate: "2026-11-01",
+  }, opId("b2-nov"));
   const novOb = db.dump("obligations").find(
     (o) => o.rentalId === building.rental.rentalId && o.period === "2026-11",
   );
