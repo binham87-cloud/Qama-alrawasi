@@ -229,6 +229,9 @@ test("existing November obligation is confirmed in place and October generation 
   assert.equal(beforeCard.remainingFils, 0);
   assert.equal(beforeCard.status, "renewal_required");
   assert.equal(beforeCard.obligationId, null);
+  assert.equal(beforeCard.manualRenewMode, "acknowledge");
+  assert.equal(beforeCard.manualRenewDate, "2026-11-06");
+  assert.equal(beforeCard.contractualAmountFils, 900000);
   assert.equal(buildDashboardFromDump(db, "2026-10", "2026-11-16").summary.targetFils, 900000);
   assert.equal(buildDashboardFromDump(db, "2026-09", "2026-11-16").summary.targetFils, 900000);
   const beforeClose = reviewPeriodClose({
@@ -529,4 +532,60 @@ test("P calendar months and leap day, not a fixed 30 days", () => {
   assert.equal(nextCycleStart("2028-01-31", 1, 31), "2028-02-29");
   assert.equal(nextCycleStart("2028-02-29", 1, 31), "2028-03-31");
   assert.equal(nextCycleStart("2026-01-31", 1, 31), "2026-02-28");
+});
+
+test("selected November renewal from October creates one unpaid obligation and leaves history", async () => {
+  const db = freshDb();
+  const owner = await bootstrapOwner(db);
+  const yahia = await createUser(db, owner, { displayName: "يحيى", role: "employee", pin: "6477" });
+  const row = await contract(db, owner, { start: "2026-09-05", rent: 250000, tenant: "مستأجر قديم" });
+  await run(db, owner, "generateObligations", { period: "2026-10" }, opId("oct"));
+  const sepOb = db.dump("obligations").find((o) => o.period === "2026-09");
+  const octOb = db.dump("obligations").find((o) => o.period === "2026-10");
+  const octDash = buildDashboardFromDump(db, "2026-10", "2026-10-19");
+  const octCard = octDash.unitsTree.flatMap((u) => u.spaces).find((s) => s.spaceId === row.space.spaceId);
+  assert.notEqual(octCard.status, "renewal_required");
+  assert.equal(octCard.manualRenewDate, null);
+
+  const novDash = buildDashboardFromDump(db, "2026-11", "2026-10-19");
+  const card = novDash.unitsTree.flatMap((u) => u.spaces).find((s) => s.spaceId === row.space.spaceId);
+  assert.equal(card.status, "renewal_required");
+  assert.equal(card.manualRenewMode, "create");
+  assert.equal(card.manualRenewDate, "2026-11-05");
+  assert.equal(card.contractualAmountFils, 250000);
+  assert.equal(card.dueFils, 0);
+  const renewed = await run(db, actorFrom(yahia), "renewRentalCycle", {
+    rentalId: row.rental.rentalId, asOfDate: card.manualRenewDate, earlyWindowDays: 7,
+  }, opId("button-renew"));
+  assert.equal(renewed.alreadyApplied, false);
+  assert.equal(renewed.cycleStart, "2026-11-05");
+  assert.equal(db.dump("receipts").length, 0);
+  assert.equal(db.dump("rentals").find((r) => r.id === row.rental.rentalId).startDate, "2026-09-05");
+  assert.equal(db.dump("obligations").find((o) => o.id === sepOb.id).amountFils, sepOb.amountFils);
+  assert.equal(db.dump("obligations").find((o) => o.id === octOb.id).amountFils, octOb.amountFils);
+  const after = buildDashboardFromDump(db, "2026-11", "2026-10-19");
+  const afterCard = after.unitsTree.flatMap((u) => u.spaces).find((s) => s.spaceId === row.space.spaceId);
+  assert.equal(afterCard.renewalStatus, "confirmed");
+  assert.equal(afterCard.dueFils, 250000);
+  assert.equal(afterCard.paidFils, 0);
+  assert.equal(afterCard.manualRenewDate, null);
+  assert.notEqual(afterCard.status, "renewal_required");
+  assert.notEqual(afterCard.status, "collected");
+  await assert.rejects(
+    () => run(db, actorFrom(yahia), "renewRentalCycle", {
+      rentalId: row.rental.rentalId, asOfDate: "2026-11-05", earlyWindowDays: 7,
+    }, opId("button-again")),
+    (err) => err && err.code === "CYCLE_NOT_DUE_YET",
+  );
+  assert.equal(db.dump("obligations").filter((o) => o.rentalId === row.rental.rentalId && o.state === "active").length, 3);
+  await run(db, actorFrom(yahia), "createCashReceipt", {
+    obligationId: renewed.obligationId, amountFils: 100000, collectionDate: "2026-11-05",
+  }, opId("partial-after-renew"));
+  const partial = buildDashboardFromDump(db, "2026-11", "2026-11-05");
+  const partialCard = partial.unitsTree.flatMap((u) => u.spaces).find((s) => s.spaceId === row.space.spaceId);
+  assert.equal(partialCard.paidFils, 100000);
+  assert.equal(partialCard.remainingFils, 150000);
+  assert.equal(partialCard.status, "partial");
+  assert.equal(buildDashboardFromDump(db, "2026-09", "2026-11-05").summary.collectedFils, 0);
+  assert.equal(buildDashboardFromDump(db, "2026-10", "2026-11-05").summary.collectedFils, 0);
 });

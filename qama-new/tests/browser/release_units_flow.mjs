@@ -142,6 +142,14 @@ try {
   const novemberText = await page.evaluate(() => document.body.innerText);
   note("unrenewed November requires renewal", novemberStates.includes("renewal_required") && novemberText.includes("يلزم التجديد"), novemberStates.join(",") || "none");
   note("unrenewed November is not collected or partially collected", !novemberStates.includes("collected") && !novemberStates.includes("partial"), novemberStates.join(",") || "none");
+  await page.click('[data-financial-state="renewal_required"] [data-testid="partition-expand"]');
+  await page.waitForSelector('[data-testid="btn-manual-renew"]', { timeout: 15000 });
+  const renewLabel = await page.$eval('[data-testid="btn-manual-renew"]', (el) => el.textContent.trim());
+  note("manual renewal button is visible", renewLabel === "تجديد للشهر المحدد", renewLabel);
+  await page.click('[data-testid="btn-manual-renew"]');
+  await page.waitForFunction(() => document.body.innerText.includes("مجدَّد — غير محصّل"), { timeout: 20000 });
+  const afterRenew = await states();
+  note("renewed November is unpaid", afterRenew.includes("renewed_unpaid") && !afterRenew.includes("collected"), afterRenew.join(",") || "none");
   await page.click('[data-testid="tab-financial"]');
   await page.waitForSelector('[data-testid="holding-this-month"], [data-testid="tab-financial"]', { timeout: 20000 });
   const financial = await page.evaluate(() => document.body.innerText);

@@ -12,7 +12,7 @@ import {
   operatingNetFils,
   rentalForPeriod, occupancyForPeriod, rentalCoversPeriod,
   tenantNameForPeriod, tenantPhoneForPeriod, rentAmountForPeriod,
-  cancelledUnpaidRentHidden, MANUAL_RENEWAL_PERIOD,
+  cancelledUnpaidRentHidden, MANUAL_RENEWAL_PERIOD, monthlyRenewalCountsInTarget,
 } from "../domain/finance.mjs";
 import { canonicalRequestCreatedAt, sortRequestsNewestFirst } from "../domain/request_order.mjs";
 import { occupancyBookingsForPeriod } from "../domain/daily_booking.mjs";
@@ -408,6 +408,14 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             && nextStart
             && renewButtonVisible(nextStart, asOfDate, 7)
           );
+          const offer = manualRenewalOffer({
+            rental,
+            period,
+            obligations: allObligations,
+            receipts: allReceipts,
+            nextStart,
+            show: display.status === "renewal_required",
+          });
           // Per-space receipts for the current period — used by the receipt history
           // panel and the Manager حذف الإيصال control. We include ALL states so the
           // history panel can show reversed receipts as cancelled/audited.
@@ -457,6 +465,9 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             cycleEnd: cycleEnd || null,
             nextCycleStart: nextStart,
             renewVisible,
+            contractualAmountFils: offer.contractualAmountFils,
+            manualRenewDate: offer.manualRenewDate,
+            manualRenewMode: offer.manualRenewMode,
             dueFils: display.dueFils,
             paidFils: display.paidFils,
             remainingFils: display.remainingFils,
@@ -599,6 +610,46 @@ function continuationAwaitingRenewal(rental, period) {
   if (!period || String(period) < MANUAL_RENEWAL_PERIOD) return false;
   const start = String(rental.startDate || "").slice(0, 7);
   return !!start && start < String(period);
+}
+
+function nextCycleStartForRental(rental, obligations) {
+  if (!rental) return null;
+  const latest = (obligations || [])
+    .filter((o) => o && o.rentalId === rental.id && o.state !== "cancelled" && o.baselineExcluded !== true)
+    .map((o) => ({ o, start: String(o.cycleStart || o.dueDate || (o.period ? `${o.period}-01` : "")).slice(0, 10) }))
+    .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.start))
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .pop();
+  if (!latest) return null;
+  const anniversaryDay = Number(
+    rental.dueDayOfMonth || latest.o.anniversaryDay || String(rental.startDate || latest.start).slice(8, 10),
+  ) || Number(latest.start.slice(8, 10));
+  return nextCycleStart(latest.start, 1, anniversaryDay);
+}
+
+/** What the manual-renew button confirms. Null when this month is not the next cycle. */
+function manualRenewalOffer({ rental, period, obligations, receipts, nextStart, show }) {
+  const contractualAmountFils = rental ? rentAmountForPeriod(rental, period, null) : 0;
+  if (!show || !continuationAwaitingRenewal(rental, period)) {
+    return { contractualAmountFils, manualRenewDate: null, manualRenewMode: null };
+  }
+  const periodOb = (obligations || []).find((o) => {
+    if (!o || o.rentalId !== rental.id || o.state !== "active" || o.baselineExcluded === true) return false;
+    if (o.period === period) return true;
+    return String(o.cycleStart || o.dueDate || "").slice(0, 7) === String(period);
+  });
+  if (periodOb && !monthlyRenewalCountsInTarget(periodOb, rental, receipts)) {
+    const date = String(periodOb.cycleStart || periodOb.dueDate || "").slice(0, 10);
+    return {
+      contractualAmountFils,
+      manualRenewDate: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
+      manualRenewMode: "acknowledge",
+    };
+  }
+  if (nextStart && String(nextStart).slice(0, 7) === String(period)) {
+    return { contractualAmountFils, manualRenewDate: nextStart, manualRenewMode: "create" };
+  }
+  return { contractualAmountFils, manualRenewDate: null, manualRenewMode: null };
 }
 
 function spaceDisplay({ space, view, rental, period, asOfDate, occupancyOverride = null }) {
@@ -891,6 +942,14 @@ export function buildDashboardFromDump(db, period, asOfDate) {
             tenantPhone: sp.tenantPhone || null,
             obligationId: display.status === "renewal_required" ? null : sp.obligationId,
             renewalStatus: display.status === "renewal_required" ? null : (sp.renewalStatus || null),
+            ...manualRenewalOffer({
+              rental,
+              period,
+              obligations: allObligations,
+              receipts: allReceipts,
+              nextStart: nextCycleStartForRental(rental, allObligations),
+              show: display.status === "renewal_required",
+            }),
             dueFils: display.dueFils,
             paidFils: display.paidFils,
             remainingFils: display.remainingFils,

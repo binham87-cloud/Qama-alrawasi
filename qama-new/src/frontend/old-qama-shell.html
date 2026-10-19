@@ -2516,8 +2516,53 @@ function unitFinancialState(x){
   if(ds==="renewal_required") return "renewal_required";
   if(ds==="partial") return "partial";
   if(ds==="collected") return "collected";
-  if((ds==="pending"||ds==="late") && (x?._renewalStatus==="confirmed"||x?._renewalStatus==="acknowledged_existing")) return "renewed_unpaid";
+  if((ds==="pending"||ds==="late"||ds==="not_due") && (x?._renewalStatus==="confirmed"||x?._renewalStatus==="acknowledged_existing") && !isPartialPaid(x)) return "renewed_unpaid";
   return ds||"";
+}
+function viewedPeriodKey(){
+  return S.year+"-"+String(Number(S.month)+1).padStart(2,"0");
+}
+function showManualRenew(item){
+  if(!item||item.status!=="renewal_required") return false;
+  if(String(item.rent_type||"monthly")==="daily") return false;
+  const due=String(item._manualRenewDate||"");
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) && due.slice(0,7)===viewedPeriodKey() && (item._manualRenewMode==="create"||item._manualRenewMode==="acknowledge");
+}
+async function confirmManualRenew(item, placeLabel, reopenKey){
+  if(isMonthLocked(S.year,S.month)){showMsg("🔒 شهر مقفل");return;}
+  if(!item||!item._rentalId){showMsg("لا يوجد عقد لتجديده");return;}
+  const due=String(item._manualRenewDate||"");
+  const rent=Number(item._contractRent||0);
+  const msg=[
+    "تجديد للشهر المحدد",
+    "",
+    "المكان: "+placeLabel,
+    "المستأجر: "+(item.tenant||"—"),
+    "الشهر: "+MONTHS[S.month]+" "+S.year,
+    "الإيجار الشهري: "+(rent?rent.toLocaleString()+" د.إ":"—"),
+    "تاريخ الاستحقاق: "+due,
+    "",
+    "سيُنشأ التزام شهري واحد فقط.",
+    "لن يُحصَّل مبلغ ولن يُنشأ إيصال.",
+    "متابعة؟"
+  ].join("\n");
+  if(!confirm(msg))return;
+  try{
+    const key=(typeof intentKey==="function"?intentKey("manual-renew",item._rentalId,due):("manual-renew-"+item._rentalId+"-"+due)).slice(0,120);
+    const payload=item._manualRenewMode==="acknowledge"
+      ?{rentalId:item._rentalId,acknowledgeCycleStart:due,asOfDate:due,earlyWindowDays:7}
+      :{rentalId:item._rentalId,asOfDate:due,earlyWindowDays:7};
+    await engineCommand("renewRentalCycle",payload,key);
+    showMsg("✓ تم التجديد — غير محصّل");
+    try{await hydrateMonthFromEngine(S.year,S.month);}catch(_e){}
+    set({editPart:reopenKey});
+  }catch(e){showMsg("⛔ "+(typeof formatEngineError==="function"?formatEngineError(e):(e&&e.message||e)));}
+}
+function manualRenewButton(item, placeLabel, reopenKey){
+  if(!showManualRenew(item)) return null;
+  return h("div",{style:{marginTop:"10px"}},[
+    h("button",{"data-testid":"btn-manual-renew",class:"btn",style:{width:"100%",background:"#15803d",color:"#fff",border:"1px solid #166534",borderRadius:"8px",padding:"11px",fontSize:"15px",fontWeight:"800"},onClick:()=>confirmManualRenew(item,placeLabel,reopenKey)},["تجديد للشهر المحدد"])
+  ]);
 }
 function displayStatus(x){
   if(x?.status==="renewal_required") return "renewal_required";
@@ -4450,6 +4495,7 @@ function renderApp(){
               }catch(e){showMsg("⛔ "+(e&&e.message||e));}
             }},["إلغاء إيجار خاطئ (بدون دين)"]):null
           ]):null,
+          manualRenewButton(p,(unit.name||"الشقة")+" / بارتشن "+p.id,unit.id+"-"+p.id),
           canEdit()?h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>set({editPart:null})},["إغلاق"]),
             isOwner?h("button",{"data-testid":"btn-delete-partition",class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteP},["حذف البارتشن"]):null,
@@ -4871,6 +4917,7 @@ function renderApp(){
               ]);
             })
           ]):null,
+          manualRenewButton(u,"شقة "+u.id,"full-"+u.id),
           canEdit()?h("div",{style:{display:"flex",gap:"8px"}},[
             h("button",{class:"btn",style:{flex:"1",...smallBtnStyle,padding:"8px"},onClick:()=>set({editPart:null})},["إغلاق"]),
             isOwner?h("button",{"data-testid":"btn-delete-whole",class:"btn",style:{flex:"1",...dangerBtnStyle},onClick:deleteFull},["حذف الشقة"]):null,

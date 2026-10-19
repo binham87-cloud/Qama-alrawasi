@@ -87,6 +87,9 @@ test("the assembled units screen names renewal, payment, and daily states", () =
     "data-daily-state",
     "month-next",
     "month-prev",
+    "تجديد للشهر المحدد",
+    "btn-manual-renew",
+    "لن يُحصَّل مبلغ ولن يُنشأ إيصال",
   ]) {
     assert.equal(html.includes(marker), true, marker);
   }
