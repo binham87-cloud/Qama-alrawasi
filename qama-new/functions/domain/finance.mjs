@@ -411,10 +411,14 @@ export function cancelledUnpaidRentHidden({ rental, obligations, receipts, perio
 }
 
 /**
- * One rent due per space per rental period.
- * An empty duplicate obligation is omitted from Target.
+ * One rent due per space per calendar month.
  * Every obligation that already has recognized money stays, so a real payment
- * is not dropped. Cancelling the extra document is a separate owner decision.
+ * is not dropped. From October 2026, that recognized money satisfies the month:
+ * an unpaid extra obligation leaves the target and stays in the ledger,
+ * unless vacate already marked it retainArrearsAfterVacate.
+ * September keeps the earlier overlap rule so a later non-overlapping tenant
+ * in that month is unchanged. Cancelling the extra document is a separate
+ * audited decision.
  */
 function rentalRangesOverlap(a, b) {
   if (!a || !b) return true;
@@ -459,6 +463,16 @@ export function collapseOneRentPerSpacePeriod(obligations, receipts, rentals = n
       continue;
     }
     out.push(...paid);
+    const period = String(group[0].period || (group[0].dueDate ? periodOf(String(group[0].dueDate).slice(0, 10)) : ""));
+    if (period >= "2026-10") {
+      for (const extra of group) {
+        if (earned.has(extra.id)) continue;
+        // Vacate already recorded this balance as debt to keep. A later receipt
+        // on the same calendar month does not erase that decision.
+        if (extra.retainArrearsAfterVacate === true) out.push(extra);
+      }
+      continue;
+    }
     for (const extra of group) {
       if (earned.has(extra.id)) continue;
       const extraRental = rentalsById.get(extra.rentalId);

@@ -327,6 +327,7 @@ function engineStatusToOld(sp) {
     const st = sp.status;
     const paid = filsToAed(sp.paidFils);
     const rent = filsToAed(sp.dueFils);
+    if (st === "renewal_required") return { status: "renewal_required", partial: false, paid_amount: 0 };
     if (st === "partial") return { status: "late", partial: true, paid_amount: paid };
     if (st === "collected") return { status: "collected", partial: false, paid_amount: paid || rent };
     if (st === "not_due") return { status: "pending", partial: false, paid_amount: paid };
@@ -342,6 +343,7 @@ function engineStatusToOld(sp) {
   if (st === "vacant" || occ === "vacant") return { status: "vacant", partial: false, paid_amount: 0 };
   const paid = filsToAed(sp.paidFils);
   const rent = filsToAed(sp.dueFils);
+  if (st === "renewal_required") return { status: "renewal_required", partial: false, paid_amount: 0 };
   if (st === "partial") return { status: "late", partial: true, paid_amount: paid };
   if (st === "collected") return { status: "collected", partial: false, paid_amount: paid || rent };
   if (st === "not_due") return { status: "pending", partial: false, paid_amount: paid };
@@ -511,9 +513,9 @@ function mapDashboardToMonth(dash) {
         id: wholeDisplayId(u),
         // Vacant cards have dueFils=0; keep UI draft rent from extras so mid-edit saves
         // (tenant/start date) do not zero the rent the user already typed.
-        rent: mapped.status === "staff"
+        rent: mapped.status === "renewal_required" ? 0 : (mapped.status === "staff"
           ? (Number(sp.dueFils || 0) / 100)
-          : (mapped.status === "vacant" ? (draftRent || engineRent) : (engineRent || draftRent)),
+          : (mapped.status === "vacant" ? (draftRent || engineRent) : (engineRent || draftRent))),
         tenant: (() => {
           const abandoned = isVacateResidueExtra(extra, sp, mapped);
           return abandoned ? "" : (sp.tenantName || extra.tenant || "");
@@ -530,7 +532,7 @@ function mapDashboardToMonth(dash) {
           cycleStart: sp.cycleStart || sp.startDate || "",
           extraStart: extra.start_date || "",
         }),
-        due_date: sp.dueDate || extra.due_date || "",
+        due_date: mapped.status === "renewal_required" ? "" : (sp.dueDate || extra.due_date || ""),
         elec_paid: !!extra.elec_paid,
         elec_amount: Number(extra.elec_amount || 0),
         deposit: extra.deposit || "",
@@ -559,6 +561,7 @@ function mapDashboardToMonth(dash) {
         _receipts: sp.spaceReceipts || [],
         _tenantCommitted: sp.tenantName || "",
         _renewVisible: !!sp.renewVisible,
+        _renewalStatus: sp.renewalStatus || "",
         _cycleStart: sp.cycleStart || "",
         _cycleEnd: sp.cycleEnd || "",
         _nextCycleStart: sp.nextCycleStart || "",
@@ -578,9 +581,9 @@ function mapDashboardToMonth(dash) {
           : extra;
         return {
           id: spacePartId(sp),
-          rent: mapped.status === "staff"
+          rent: mapped.status === "renewal_required" ? 0 : (mapped.status === "staff"
             ? (Number(sp.dueFils || 0) / 100)
-            : (mapped.status === "vacant" ? (draftRent || engineRent) : (engineRent || draftRent)),
+            : (mapped.status === "vacant" ? (draftRent || engineRent) : (engineRent || draftRent))),
           tenant: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
             : (sp.tenantName || extraUse.tenant || ""),
@@ -605,9 +608,9 @@ function mapDashboardToMonth(dash) {
           end_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
             : (extraUse.end_date || ""),
-          due_date: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
+          due_date: mapped.status === "renewal_required" ? "" : ((mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? (Number(sp.remainingFils || 0) > 0 ? (sp.dueDate || "") : "")
-            : (sp.dueDate || extraUse.due_date || ""),
+            : (sp.dueDate || extraUse.due_date || "")),
           deposit: (mapped.status === "vacant" || mapped.status === "staff") && !sp.rentalId
             ? ""
             : (extraUse.deposit || ""),
@@ -638,6 +641,7 @@ function mapDashboardToMonth(dash) {
             : (sp.tenantName || extraUse.tenant || ""),
           _arrearsTenantName: sp.arrearsTenantName || "",
           _renewVisible: !!sp.renewVisible,
+          _renewalStatus: sp.renewalStatus || "",
           _cycleStart: sp.cycleStart || "",
           _cycleEnd: sp.cycleEnd || "",
           _nextCycleStart: sp.nextCycleStart || "",

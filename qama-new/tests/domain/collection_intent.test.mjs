@@ -68,7 +68,7 @@ test("an empty duplicate obligation is omitted and a paid one is kept", () => {
   assert.deepEqual(kept.map((o) => o.id), ["a"]);
 });
 
-test("a later non-overlapping tenant in the same month stays in target", () => {
+test("a later non-overlapping September tenant stays in target", () => {
   const a = { id: "a", spaceId: "s", period: "2026-09", state: "active", amountFils: 920000, rentalId: "r1" };
   const b = { id: "b", spaceId: "s", period: "2026-09", state: "active", amountFils: 800000, rentalId: "r2" };
   const receipts = [{ id: "rc", obligationId: "a", state: RECEIPT_STATE.RECOGNIZED, amountFils: 920000, method: "cash" }];
@@ -78,6 +78,33 @@ test("a later non-overlapping tenant in the same month stays in target", () => {
   ];
   const kept = collapseOneRentPerSpacePeriod([a, b], receipts, rentals);
   assert.deepEqual(kept.map((o) => o.id).sort(), ["a", "b"]);
+});
+
+test("from October a recognized receipt satisfies the month and the unpaid extra leaves target", () => {
+  const a = { id: "a", spaceId: "s", period: "2026-10", state: "active", amountFils: 120000, rentalId: "r1" };
+  const b = { id: "b", spaceId: "s", period: "2026-10", state: "active", amountFils: 120000, rentalId: "r2" };
+  const receipts = [{ id: "rc", obligationId: "a", state: RECEIPT_STATE.RECOGNIZED, amountFils: 120000, method: "cash", period: "2026-10" }];
+  const rentals = [
+    { id: "r1", startDate: "2026-09-01", endDate: "2026-10-07" },
+    { id: "r2", startDate: "2026-10-12", endDate: null },
+  ];
+  const kept = collapseOneRentPerSpacePeriod([a, b], receipts, rentals);
+  assert.deepEqual(kept.map((o) => o.id), ["a"]);
+});
+
+test("October arrears explicitly retained at vacate stay beside a paid receipt", () => {
+  const paid = { id: "paid", spaceId: "s", period: "2026-10", state: "active", amountFils: 90000, rentalId: "r1" };
+  const keptDebt = {
+    id: "debt", spaceId: "s", period: "2026-10", state: "active", amountFils: 90000,
+    rentalId: "r2", retainArrearsAfterVacate: true,
+  };
+  const receipts = [{ id: "rc", obligationId: "paid", state: RECEIPT_STATE.RECOGNIZED, amountFils: 90000, method: "cash", period: "2026-10" }];
+  const rentals = [
+    { id: "r1", startDate: "2026-10-05", endDate: null },
+    { id: "r2", startDate: "2026-09-01", endDate: "2026-10-03" },
+  ];
+  const kept = collapseOneRentPerSpacePeriod([paid, keptDebt], receipts, rentals);
+  assert.deepEqual(kept.map((o) => o.id).sort(), ["debt", "paid"]);
 });
 
 test("two paid obligations on one space stay visible so money is not hidden", () => {

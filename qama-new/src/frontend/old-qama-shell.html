@@ -2377,7 +2377,8 @@ const SC={
   pending:{label:"غير مستحق",bg:"#082f49",border:"#0284c7",text:"#7dd3fc"},
   late:{label:"متأخر",bg:"#450a0a",border:"#dc2626",text:"#f87171"},
   vacant:{label:"فارغ",bg:"#1c1917",border:"#333",text:"#a8a29e"},
-  staff:{label:"موظفين",bg:"#1e1b4b",border:"#4f46e5",text:"#a5b4fc"}
+  staff:{label:"موظفين",bg:"#1e1b4b",border:"#4f46e5",text:"#a5b4fc"},
+  renewal_required:{label:"يلزم التجديد",bg:"#292524",border:"#a16207",text:"#fcd34d"}
 };
 
 function paidValue(x){
@@ -2510,7 +2511,16 @@ function occupancySelectEl(testId, item, onPick){
   return sel;
 }
 
+function unitFinancialState(x){
+  const ds=displayStatus(x);
+  if(ds==="renewal_required") return "renewal_required";
+  if(ds==="partial") return "partial";
+  if(ds==="collected") return "collected";
+  if((ds==="pending"||ds==="late") && (x?._renewalStatus==="confirmed"||x?._renewalStatus==="acknowledged_existing")) return "renewed_unpaid";
+  return ds||"";
+}
 function displayStatus(x){
+  if(x?.status==="renewal_required") return "renewal_required";
   // Confirmed «محصّل» only when money is recognized — draft collect stays unpaid look on cards.
   if(x?._collectDraft && !(Number(x?._enginePaid||0)>0) && (x?.status==="collected" || !x?.status)){
     if(isPartialPaid(x)) return "partial";
@@ -3376,7 +3386,7 @@ function renderPin(){
     background:S.pinErr?"#ef4444":i<S.pin.length?"#fff":"#222",transition:"all 0.12s"}}));
   const keys=[1,2,3,4,5,6,7,8,9,"","0","⌫"].map((k,i)=>{
     if(k==="")return h("div",{style:{visibility:"hidden"}});
-    return h("button",{class:"btn pkb",style:{background:"#161616",border:"1px solid #1e1e1e",
+    return h("button",{"data-testid":"pin-key-"+k,class:"btn pkb",style:{background:"#161616",border:"1px solid #1e1e1e",
       borderRadius:"14px",padding:"17px 0",fontSize:k==="⌫"?"20px":"24px",fontWeight:"500",
       color:"#fff",width:"100%"},
       onClick:()=>{if(S.pinBusy)return;k==="⌫"?set({pin:S.pin.slice(0,-1),pinErr:false}):pinPress(k);}
@@ -3394,12 +3404,12 @@ function renderPin(){
 function monthNav(){
   const atFirst=isBeforeFirstMonth(S.year,S.month) || (Number(S.year)===2026 && Number(S.month)===3);
   return h("div",{style:{display:"flex",alignItems:"center",gap:"12px",background:"#111",border:"1px solid #1e1e1e",borderRadius:"10px",padding:"8px 14px",marginBottom:"14px",justifyContent:"space-between"}},[
-    h("button",{class:"btn",style:{background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",padding:"4px 12px",fontSize:"16px",color:atFirst?"#333":"#888",opacity:atFirst?"0.45":"1"},
+    h("button",{"data-testid":"month-prev",class:"btn",style:{background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",padding:"4px 12px",fontSize:"16px",color:atFirst?"#333":"#888",opacity:atFirst?"0.45":"1"},
       onClick:()=>{if(atFirst)return;let m=S.month-1,y=S.year;if(m<0){m=11;y--;}if(isBeforeFirstMonth(y,m))return;changeMonth(m,y);}},["‹"]),
     h("div",{style:{textAlign:"center"}},[
       h("div",{style:{fontSize:"14px",fontWeight:"700",color:"#fff"}},[MONTHS[S.month]+" "+S.year]),
       (!canEdit()&&S.user&&USERS[S.user].role==="emp")?h("div",{style:{fontSize:"14px",color:"#854d0e",marginTop:"2px"}},["🔒 مقفل"]):null]),
-    h("button",{class:"btn",style:{background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",padding:"4px 12px",fontSize:"16px",color:"#888"},
+    h("button",{"data-testid":"month-next",class:"btn",style:{background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",padding:"4px 12px",fontSize:"16px",color:"#888"},
       onClick:()=>{let m=S.month+1,y=S.year;if(m>11){m=0;y++;}changeMonth(m,y);}},["›"])]);
 }
 
@@ -3948,7 +3958,7 @@ function renderApp(){
       const collBar=isOwner?(()=>{
         const txTotal=canonicalCollectedAed(engineSummary(),
           data.transactions?data.transactions.reduce((s,t)=>s+financiallyEffectiveTxAed(t),0):0);
-        const rentTotal=units.reduce((s,u)=>s+u.partitions.filter(p=>p.status!=="vacant").reduce((ss,p)=>ss+Number(p.rent||0),0),0)+
+        const rentTotal=units.reduce((s,u)=>s+u.partitions.filter(p=>p.status!=="vacant"&&p.status!=="renewal_required").reduce((ss,p)=>ss+Number(p.rent||0),0),0)+
           full.filter(u=>u.status!=="vacant").reduce((s,u)=>s+Number(u.rent||0),0);
         const pct=rentTotal>0?Math.min(100,Math.round(txTotal/rentTotal*100)):0;
         const c=pct>=100?"#4ade80":pct>=70?"#facc15":"#f87171";
@@ -4448,14 +4458,14 @@ function renderApp(){
             ])
           ]):null
         ]):null;
-        return h("div",{"data-testid":"partition-card","data-part-id":String(p.id),style:{background:cfg.bg,border:"1px solid "+cfg.border,borderRadius:"10px",overflow:"hidden",marginBottom:"8px"}},[
+        return h("div",{"data-testid":"partition-card","data-part-id":String(p.id),"data-financial-state":unitFinancialState(p),style:{background:cfg.bg,border:"1px solid "+cfg.border,borderRadius:"10px",overflow:"hidden",marginBottom:"8px"}},[
           h("div",{"data-testid":"partition-expand",style:{padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"},
             onClick:()=>{set({editPart:isEd?null:unit.id+"-"+p.id});}},[
             h("div",{style:{display:"flex",alignItems:"center",gap:"10px"}},[
               h("div",{style:{width:"26px",height:"26px",borderRadius:"7px",background:"#0a0a0a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"14px",fontWeight:"700",color:cfg.text}},[p.id]),
               h("div",{},[
                 h("div",{style:{display:"flex",gap:"4px",alignItems:"center"}},[
-                h("div",{style:{fontSize:"14px",color:cfg.text,fontWeight:"600"}},[cfg.label]),
+                h("div",{"data-testid":"partition-status-label",style:{fontSize:"14px",color:cfg.text,fontWeight:"600"}},[unitFinancialState(p)==="renewed_unpaid"?"مجدَّد — غير محصّل":cfg.label]),
                 S.pendingRequests&&S.pendingRequests.some(r=>r.status==="pending"&&r.payload&&r.payload.partId===p.id&&r.payload.unitId===unit.id)?
                   h("span",{style:{fontSize:"9px",background:"#422006",color:"#fbbf24",borderRadius:"4px",padding:"1px 4px",fontWeight:"700"}},["⏳"]):null]),
                 isPartialPaid(p)?h("div",{style:{fontSize:"15px",color:cfg.text,opacity:"0.85",marginTop:"1px"}},["مدفوع "+moneyText(paidValue(p))+" · المتبقي "+moneyText(remainingValue(p))]):(p.note&&h("div",{style:{fontSize:"15px",color:cfg.text,opacity:"0.6"}},[p.note])),
@@ -4869,7 +4879,7 @@ function renderApp(){
             ])
           ]):null
         ]):null;
-        return h("div",{"data-testid":"full-unit-card","data-unit-id":String(u.id),style:{background:"#111",border:"1px solid #1e1e1e",borderRadius:"10px",overflow:"hidden",marginBottom:"8px"}},[
+        return h("div",{"data-testid":"full-unit-card","data-unit-id":String(u.id),"data-financial-state":unitFinancialState(u),style:{background:"#111",border:"1px solid #1e1e1e",borderRadius:"10px",overflow:"hidden",marginBottom:"8px"}},[
           h("div",{"data-testid":"full-unit-expand",style:{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"},
             onClick:()=>{if(!canEdit())return;set({editPart:isEd?null:"full-"+u.id});}
           },[
@@ -4879,7 +4889,7 @@ function renderApp(){
               u.tenant&&h("div",{style:{fontSize:"15px",color:"#555",marginTop:"1px"}},[u.tenant]),
               h("div",{style:{fontSize:"15px",color:"#555",marginTop:"1px"}},[dateInfoText(u)])]),
             h("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},[
-              h("span",{style:{background:rentCfg.bg,border:"1px solid "+rentCfg.border,color:rentCfg.text,borderRadius:"6px",padding:"2px 8px",fontSize:"15px",fontWeight:"600"}},[isPartialPaid(u)?("جزئي "+moneyText(paidValue(u))+"/"+moneyText(u.rent)):rentCfg.label]),
+              h("span",{"data-testid":"full-status-label",style:{background:rentCfg.bg,border:"1px solid "+rentCfg.border,color:rentCfg.text,borderRadius:"6px",padding:"2px 8px",fontSize:"15px",fontWeight:"600"}},[isPartialPaid(u)?("جزئي "+moneyText(paidValue(u))+"/"+moneyText(u.rent)):(unitFinancialState(u)==="renewed_unpaid"?"مجدَّد — غير محصّل":rentCfg.label)]),
               h("span",{style:{background:elecCfg.bg,border:"1px solid "+elecCfg.border,color:elecCfg.text,borderRadius:"6px",padding:"2px 8px",fontSize:"15px"}},[u.elec_paid?"⚡ "+( u.elec_amount?u.elec_amount.toLocaleString()+" د.إ":"دفعت"):"⚡ لم تدفع"]),
               h("span",{style:{fontSize:"14px",color:"#444"}},[isEd?"▲":"▼"])])]),
           form]);

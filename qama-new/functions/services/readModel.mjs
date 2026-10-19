@@ -12,7 +12,7 @@ import {
   operatingNetFils,
   rentalForPeriod, occupancyForPeriod, rentalCoversPeriod,
   tenantNameForPeriod, tenantPhoneForPeriod, rentAmountForPeriod,
-  cancelledUnpaidRentHidden,
+  cancelledUnpaidRentHidden, MANUAL_RENEWAL_PERIOD,
 } from "../domain/finance.mjs";
 import { canonicalRequestCreatedAt, sortRequestsNewestFirst } from "../domain/request_order.mjs";
 import { occupancyBookingsForPeriod } from "../domain/daily_booking.mjs";
@@ -450,7 +450,8 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
             contractStartDate: rental?.startDate || null,
             rentalEndDate: rental?.endDate || null,
             dueDayOfMonth: rental?.dueDayOfMonth || null,
-            obligationId: v?.obligationId || periodOb?.id || null,
+            obligationId: display.status === "renewal_required" ? null : (v?.obligationId || periodOb?.id || null),
+            renewalStatus: display.status === "renewal_required" ? null : (periodOb?.renewalStatus || null),
             rentalCycleId: periodOb?.rentalCycleId || periodOb?.id || null,
             cycleStart: cycleStart || null,
             cycleEnd: cycleEnd || null,
@@ -593,6 +594,13 @@ export function bankReceiptHistoryRows({ receipts, viewerUserId, isOwner, nameOf
  * `occupancyOverride` is the period-aware occupancy (from rental lifecycle). When set,
  * live space.occupancy is ignored for historical months.
  */
+function continuationAwaitingRenewal(rental, period) {
+  if (!rental || rental.state !== "active" || rental.purpose === "staff") return false;
+  if (!period || String(period) < MANUAL_RENEWAL_PERIOD) return false;
+  const start = String(rental.startDate || "").slice(0, 7);
+  return !!start && start < String(period);
+}
+
 function spaceDisplay({ space, view, rental, period, asOfDate, occupancyOverride = null }) {
   const occupancy = occupancyOverride || space.occupancy || "vacant";
   if (occupancy === "staff") {
@@ -646,6 +654,9 @@ function spaceDisplay({ space, view, rental, period, asOfDate, occupancyOverride
       remainingFils: view.remainingFils,
       dueDate: view.dueDate,
     };
+  }
+  if (continuationAwaitingRenewal(rental, period)) {
+    return { status: "renewal_required", dueFils: 0, paidFils: 0, remainingFils: 0, dueDate: null };
   }
   const dueFils = rentAmountForPeriod(rental, period, null);
   const dueDate = rental && period ? dueDateFor(period, rental.dueDayOfMonth) : null;
@@ -808,6 +819,7 @@ export function buildDashboardFromDump(db, period, asOfDate) {
       ? (rental ? (views.find((x) => x.spaceId === sp.id && x.rentalId === rental.id) || null) : null)
       : (views.find((x) => x.spaceId === sp.id) || null);
     const agreed = Number.isSafeInteger(sp.staffRentFils) ? sp.staffRentFils : 0;
+    const awaitingRenewal = occ !== "staff" && !v && continuationAwaitingRenewal(rental, period);
     return {
       ...sp,
       liveOccupancy: sp.occupancy || "vacant",
@@ -816,17 +828,18 @@ export function buildDashboardFromDump(db, period, asOfDate) {
       rentalId: rental?.id || null,
       tenantName: tenantNameForPeriod(rental, period, periodOb?.tenantNameSnapshot),
       tenantPhone: tenantPhoneForPeriod(rental, period),
-      obligationId: occ === "staff"
+      obligationId: awaitingRenewal ? null : (occ === "staff"
         ? (v?.obligationId || null)
-        : (v?.obligationId || periodOb?.id || null),
-      dueFils: occ === "staff"
+        : (v?.obligationId || periodOb?.id || null)),
+      renewalStatus: awaitingRenewal ? null : (periodOb?.renewalStatus || null),
+      dueFils: awaitingRenewal ? 0 : (occ === "staff"
         ? (v ? Number(v.dueFils || 0) : 0)
-        : (v?.dueFils ?? periodOb?.amountFils ?? rentAmountForPeriod(rental, period, null)),
+        : (v?.dueFils ?? periodOb?.amountFils ?? rentAmountForPeriod(rental, period, null))),
       paidFils: v?.paidFils || 0,
-      remainingFils: occ === "staff" ? (v ? Number(v.remainingFils || 0) : 0) : (v?.remainingFils || 0),
-      status: occ === "vacant" || occ === "staff"
+      remainingFils: awaitingRenewal ? 0 : (occ === "staff" ? (v ? Number(v.remainingFils || 0) : 0) : (v?.remainingFils || 0)),
+      status: awaitingRenewal ? "renewal_required" : (occ === "vacant" || occ === "staff"
         ? occ
-        : (v?.status || "not_due"),
+        : (v?.status || "not_due")),
       staffAgreementFils: occ === "staff" ? agreed : null,
     };
   });
@@ -876,7 +889,8 @@ export function buildDashboardFromDump(db, period, asOfDate) {
             rentalId: sp.rentalId,
             tenantName: sp.tenantName,
             tenantPhone: sp.tenantPhone || null,
-            obligationId: sp.obligationId,
+            obligationId: display.status === "renewal_required" ? null : sp.obligationId,
+            renewalStatus: display.status === "renewal_required" ? null : (sp.renewalStatus || null),
             dueFils: display.dueFils,
             paidFils: display.paidFils,
             remainingFils: display.remainingFils,

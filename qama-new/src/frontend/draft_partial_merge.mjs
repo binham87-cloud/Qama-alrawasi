@@ -28,6 +28,7 @@ export function isStaleCollectDraft(extra, sp) {
 }
 
 export function mergeDraftPartial(mapped, extra, sp) {
+  if (mapped && mapped.status === "renewal_required") return { partial: false, paid_amount: 0 };
   const enginePaid = Number(mapped.paid_amount || 0);
   if (enginePaid > 0 || mapped.partial) {
     return { partial: !!mapped.partial, paid_amount: enginePaid || Number(mapped.paid_amount || 0) };
@@ -111,6 +112,7 @@ export function partitionOccupancyFromServer(serverPart, localPart) {
 export function mergeDraftStatus(mapped, extra, sp) {
   const draft = String((extra && extra.status) || "");
   const eng = String((mapped && mapped.status) || "");
+  if (eng === "renewal_required") return {};
   // Stale extras/local «فارغ» must not paint over a canonical rented month.
   if ((draft === "vacant" || draft === "staff") && eng && eng !== "vacant" && eng !== "staff") {
     return {};

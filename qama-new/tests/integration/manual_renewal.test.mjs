@@ -225,7 +225,10 @@ test("existing November obligation is confirmed in place and October generation 
   assert.equal(beforeDash.summary.collectedFils, 0);
   const beforeCard = beforeDash.unitsTree.flatMap((u) => u.spaces).find((s) => s.spaceId === row.space.spaceId);
   assert.equal(beforeCard.paidFils, 0);
-  assert.notEqual(beforeCard.status, "collected");
+  assert.equal(beforeCard.dueFils, 0);
+  assert.equal(beforeCard.remainingFils, 0);
+  assert.equal(beforeCard.status, "renewal_required");
+  assert.equal(beforeCard.obligationId, null);
   assert.equal(buildDashboardFromDump(db, "2026-10", "2026-11-16").summary.targetFils, 900000);
   assert.equal(buildDashboardFromDump(db, "2026-09", "2026-11-16").summary.targetFils, 900000);
   const beforeClose = reviewPeriodClose({
