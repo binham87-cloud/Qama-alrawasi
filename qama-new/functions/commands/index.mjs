@@ -568,6 +568,7 @@ export const PERMISSIONS = Object.freeze({
   createCashReceipt: BOTH,
   createDailyCashReceipt: BOTH,
   createDailyBookingPrepaid: BOTH,
+  updateDailyBookingStay: BOTH,
   submitBankReceipt: BOTH, approveBankReceipt: OWNER, rejectBankReceipt: OWNER,
   reverseReceipt: OWNER,
   restoreReversedReceipt: OWNER,
@@ -688,6 +689,13 @@ export const SCHEMAS = Object.freeze({
     collectionDate: S.date(),
     collectorUserId: S.opt(S.id()),
     note: S.opt(S.str(300)),
+  },
+  updateDailyBookingStay: {
+    period: S.period(),
+    bookingId: S.str(120),
+    endDate: S.opt(S.date()),
+    checkoutTime: S.opt(S.str(5)),
+    recordCheckout: S.opt(S.bool()),
   },
   submitBankReceipt: {
     obligationId: S.id(), amountFils: S.fils(), collectionDate: S.date(), bankReference: S.str(120),
@@ -1957,6 +1965,83 @@ const HANDLERS = {
       state: RECEIPT_STATE.RECOGNIZED, alreadyApplied: false,
     };
   },
+
+  async updateDailyBookingStay(ctx) {
+    const period = ctx.payload.period;
+    await assertEmployeePeriodOpen(ctx, period);
+    await assertPeriodMutable(ctx, period);
+    const bookingId = String(ctx.payload.bookingId || "");
+    const endDate = ctx.payload.endDate || null;
+    const checkoutTime = ctx.payload.checkoutTime || null;
+    const recordCheckout = ctx.payload.recordCheckout === true;
+    if (!endDate && !checkoutTime && !recordCheckout) throw new DomainError("STAY_CHANGE_REQUIRED");
+    if (checkoutTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkoutTime)) {
+      throw new DomainError("INVALID_CHECKOUT_TIME");
+    }
+    const periodDocId = `period:${period}`;
+    const existingPeriod = await ctx.tx.get("uiPeriods", periodDocId);
+    if (!existingPeriod) throw new DomainError("BOOKING_NOT_FOUND", { bookingId, period });
+    let extras = {};
+    try {
+      extras = typeof existingPeriod.extrasJson === "string"
+        ? JSON.parse(existingPeriod.extrasJson || "{}")
+        : (existingPeriod.extras || {});
+    } catch { extras = {}; }
+    const list = Array.isArray(extras.dailyBookings) ? extras.dailyBookings.slice() : [];
+    const idx = list.findIndex((row) => row && String(row.id) === bookingId && row.displayOnly !== true);
+    if (idx < 0) throw new DomainError("BOOKING_NOT_FOUND", { bookingId, period });
+    const booking = list[idx];
+    if (isCancelledDailyBooking(booking)) throw new DomainError("BOOKING_CANCELLED", { bookingId });
+    const receiptsBefore = await ctx.tx.query("receipts", [["obligationId", "==", `daily:${bookingId}`]]);
+    const next = { ...booking };
+    if (endDate) {
+      if (String(endDate) < String(booking.startDate || "")) throw new DomainError("INVALID_STAY_DATES");
+      if (String(endDate) < String(booking.endDate || "")) {
+        throw new DomainError("EXTEND_NOT_LATER", { endDate, current: booking.endDate });
+      }
+      next.endDate = endDate;
+      next.checkedOutAt = null;
+      next.checkoutRecorded = false;
+    }
+    if (checkoutTime) next.checkoutTime = checkoutTime;
+    else if (endDate && !next.checkoutTime) next.checkoutTime = "12:00";
+    if (recordCheckout) {
+      next.checkedOutAt = booking.checkedOutAt || ctx.now;
+      next.checkoutRecorded = true;
+    }
+    const periodDocs = await ctx.tx.query("uiPeriods", []);
+    assertDailyBookingAvailable(periodDocs, next, bookingId);
+    list[idx] = next;
+    extras.dailyBookings = list;
+    ctx.tx.update("uiPeriods", periodDocId, {
+      id: periodDocId,
+      period,
+      extrasJson: JSON.stringify(extras),
+      updatedAt: ctx.now,
+      updatedBy: ctx.actor.userId,
+      schemaVersion: 1,
+    });
+    await writeDailyOccupancyMirrors(ctx, periodDocs, next, period);
+    const receiptsAfter = await ctx.tx.query("receipts", [["obligationId", "==", `daily:${bookingId}`]]);
+    if ((receiptsAfter || []).length !== (receiptsBefore || []).length) {
+      throw new DomainError("DAILY_INCOME_UNCHANGED_VIOLATION");
+    }
+    audit(ctx, recordCheckout ? "daily_checkout_recorded" : "daily_booking_extended", "uiPeriod", periodDocId, {
+      bookingId,
+      endDate: next.endDate,
+      checkedOutAt: next.checkedOutAt || null,
+    });
+    return {
+      bookingId,
+      period,
+      endDate: next.endDate,
+      checkoutTime: next.checkoutTime || "12:00",
+      checkedOutAt: next.checkedOutAt || null,
+      total: next.total,
+      receiptId: next.receiptId || null,
+    };
+  },
+
   async submitBankReceipt(ctx) {
     const collectorUserId = await collectorFor(ctx);
     return createReceipt(ctx, {
@@ -3332,6 +3417,7 @@ function assertDailyBookingAvailable(periodDocs, booking, bookingId) {
       if (!other || String(other.id) === String(bookingId)) continue;
       if (String(other.partId || "") !== String(booking.partId)) continue;
       if (isCancelledDailyBooking(other)) continue;
+      if (other.checkedOutAt || other.checkoutRecorded === true) continue;
       if (!dailyRangesOverlap(booking.startDate, booking.endDate, other.startDate, other.endDate)) continue;
       throw new DomainError("BOOKING_OVERLAP", {
         partId: booking.partId,

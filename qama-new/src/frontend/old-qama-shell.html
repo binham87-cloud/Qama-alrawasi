@@ -3485,8 +3485,168 @@ function cachedDailyBookings(){
   }catch(_e){}
   return rows;
 }
+function rememberDailyStay(byId, booking){
+  if(!booking||booking.id==null||booking.id==="") return;
+  const id=String(booking.id);
+  const prev=byId.get(id);
+  if(!prev){byId.set(id,booking);return;}
+  if(prev.displayOnly===true&&booking.displayOnly!==true) byId.set(id,booking);
+  else if(prev.displayOnly!==true&&booking.displayOnly===true) return;
+  else byId.set(id,booking);
+}
+function dailyPlaceFromId(partId, booking){
+  if(booking&&booking.partLabel) return booking.partLabel;
+  let units=[], full=[];
+  try{
+    const data=getCurData();
+    units=data.units||[];
+    full=data.full||[];
+  }catch(_e){}
+  const id=String(partId||"");
+  if(id.indexOf("full-")===0){
+    const uid=id.slice(5);
+    const unit=(full||[]).find(row=>String(row.id)===uid);
+    return "شقة "+(unit?(unit.name||unit.id):uid);
+  }
+  const bits=id.split("-");
+  const unit=(units||[]).find(row=>String(row.id)===bits[0]);
+  return (unit?(unit.name||("شقة "+bits[0])):("شقة "+(bits[0]||"—")))+" / بارتشن "+(bits[1]||"—");
+}
+function currentDailyNotices(){
+  const byId=new Map();
+  const dash=S._dash&&Array.isArray(S._dash.dailyStayBookings)?S._dash.dailyStayBookings:[];
+  dash.forEach(booking=>rememberDailyStay(byId,booking));
+  cachedDailyBookings().forEach(booking=>rememberDailyStay(byId,booking));
+  try{(getCurData().dailyBookings||[]).forEach(booking=>rememberDailyStay(byId,booking));}catch(_e){}
+  if(typeof dailyExpiryNotices!=="function") return [];
+  return dailyExpiryNotices([...byId.values()], new Date()).map(notice=>{
+    const booking=byId.get(String(notice.bookingId));
+    const place=dailyPlaceFromId(notice.partId, booking);
+    return Object.assign({}, notice, {
+      place: place||notice.place||notice.partition||"",
+      apartment: (booking&&booking.unitName)||notice.apartment||place,
+      partition: (booking&&booking.partName)||notice.partition||notice.partId||"",
+    });
+  });
+}
+function dailyNoticeReadKey(){return "qama_daily_notice_read_"+(S.user||"anon");}
+function readDailyNoticeIds(){
+  try{return new Set(JSON.parse(localStorage.getItem(dailyNoticeReadKey())||"[]"));}catch(_e){return new Set();}
+}
+function markDailyNoticeRead(id){
+  if(!id) return;
+  const ids=readDailyNoticeIds();
+  ids.add(id);
+  try{localStorage.setItem(dailyNoticeReadKey(), JSON.stringify([...ids].slice(-400)));}catch(_e){}
+}
+function dailyHomePeriod(booking){
+  if(booking&&booking.financialPeriod) return String(booking.financialPeriod);
+  if(booking&&booking.homePeriod) return String(booking.homePeriod);
+  if(booking&&booking.period) return String(booking.period);
+  return typeof periodOfMonth==="function"?periodOfMonth(S.year,S.month):(S.year+"-"+String(S.month+1).padStart(2,"0"));
+}
+async function confirmDailyCheckout(booking){
+  if(!booking||booking.displayOnly) return;
+  if(typeof isDailyCheckedOut==="function"&&isDailyCheckedOut(booking)) return;
+  const place=booking.partLabel||booking.place||booking.partId||"";
+  if(!confirm("تأكيد خروج "+(booking.guest||"النزيل")+"؟\n"+place+"\nلن يُنشأ إيصال ولن يُغيَّر المبلغ.")) return;
+  try{
+    await engineCommand("updateDailyBookingStay",{
+      period:dailyHomePeriod(booking),
+      bookingId:String(booking.id),
+      recordCheckout:true
+    }, intentKey("daily-checkout", booking.id));
+    showMsg("✓ تم تسجيل الخروج");
+    if(typeof loadMonthOnline==="function") await loadMonthOnline(S.year,S.month);
+    else R();
+  }catch(e){
+    showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):(e&&e.message||e)));
+  }
+}
+async function extendDailyStay(booking, endDate){
+  if(!booking||booking.displayOnly) return;
+  const next=String(endDate||"").slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(next)) return showMsg("اختر تاريخ النهاية");
+  if(next<=String(booking.endDate||"").slice(0,10)) return showMsg("اختر تاريخاً بعد نهاية الحجز");
+  const place=booking.partLabel||booking.place||booking.partId||"";
+  if(!confirm("تمديد حجز "+(booking.guest||"النزيل")+" حتى "+dmy(next)+"؟\n"+place+"\nلن يُنشأ إيصال ولن يتكرر الدخل اليومي.")) return;
+  try{
+    await engineCommand("updateDailyBookingStay",{
+      period:dailyHomePeriod(booking),
+      bookingId:String(booking.id),
+      endDate:next,
+      checkoutTime:typeof checkoutTimeOf==="function"?checkoutTimeOf(booking):"12:00"
+    }, intentKey("daily-extend", booking.id, next));
+    showMsg("✓ تم التمديد دون إيصال جديد");
+    if(typeof loadMonthOnline==="function") await loadMonthOnline(S.year,S.month);
+    else R();
+  }catch(e){
+    showMsg("⚠ "+(typeof formatEngineError==="function"?formatEngineError(e):(e&&e.message||e)));
+  }
+}
+function openDailyNotice(notice){
+  if(!notice) return;
+  markDailyNoticeRead(notice.id);
+  S.showDailyNotices=false;
+  S.tab="daily";
+  S.focusDailyId=String(notice.bookingId);
+  const parts=String(notice.checkoutDate||notice.endDate||"").split("-");
+  const year=Number(parts[0]);
+  const month=Number(parts[1])-1;
+  if(year&&month>=0&&month<=11&&(year!==Number(S.year)||month!==Number(S.month))) changeMonth(month,year);
+  else R();
+  setTimeout(()=>{
+    const raw=String(notice.bookingId);
+    const esc=typeof CSS!=="undefined"&&CSS.escape?CSS.escape(raw):raw.replace(/"/g,"");
+    const el=document.querySelector('[data-booking-id="'+esc+'"]');
+    if(el&&el.scrollIntoView) el.scrollIntoView({block:"center"});
+  },700);
+}
+function dailyNoticeCard(notice){
+  const kindLbl=notice.kind==="before_24h"?"قبل موعد الخروج بـ 24 ساعة":notice.kind==="checkout_day"?"يوم الخروج":"تجاوز وقت الخروج";
+  const statusLbl=notice.kind==="overdue"?"مشغول — لم يُسجَّل خروج":"مشغول";
+  let extendDate=notice.endDate;
+  const dateInp=h("input",{"data-testid":"notice-extend-date",type:"date",value:notice.endDate,style:{background:"#111",color:"#fff",border:"1px solid #333",borderRadius:"8px",padding:"8px",fontSize:"14px"}});
+  dateInp.addEventListener("change",e=>{extendDate=e.target.value;});
+  dateInp.addEventListener("click",e=>e.stopPropagation());
+  const booking={
+    id:notice.bookingId,guest:notice.guest,partId:notice.partId,partLabel:notice.place,place:notice.place,
+    endDate:notice.endDate,startDate:notice.startDate,financialPeriod:notice.period,
+    checkoutTime:notice.checkoutTime,displayOnly:false
+  };
+  return h("button",{
+    "data-testid":"daily-notice-item",
+    "data-notice-kind":notice.kind,
+    "data-booking-id":String(notice.bookingId),
+    class:"btn",
+    style:{display:"block",width:"100%",textAlign:"right",background:"#141414",border:"1px solid #2a2a2a",borderRadius:"10px",padding:"10px",marginBottom:"8px"},
+    onClick:()=>openDailyNotice(notice)
+  },[
+    h("div",{style:{fontSize:"13px",fontWeight:"800",color:notice.kind==="overdue"?"#fca5a5":"#fde68a",marginBottom:"4px"}},[kindLbl]),
+    h("div",{"data-testid":"notice-place",style:{fontSize:"14px",color:"#fff",fontWeight:"700"}},[(notice.apartment&&notice.partition&&notice.apartment!==notice.place)?(notice.apartment+" / "+notice.partition):(notice.place||notice.partition||"—")]),
+    h("div",{"data-testid":"notice-guest",style:{fontSize:"13px",color:"#ddd"}},["النزيل: "+(notice.guest||"—")]),
+    h("div",{"data-testid":"notice-stay",style:{fontSize:"12px",color:"#aaa"}},["الحجز: "+dmy(notice.startDate)+" ← "+dmy(notice.endDate)]),
+    h("div",{"data-testid":"notice-checkout",style:{fontSize:"12px",color:"#aaa"}},["الخروج: "+dmy(notice.checkoutDate)+" "+(notice.checkoutTime||"")]),
+    h("div",{"data-testid":"notice-status",style:{fontSize:"12px",color:"#93c5fd",marginBottom:"6px"}},["الحالة: "+statusLbl])
+  ]);
+}
+function dailyNoticeActions(notice){
+  let extendDate=notice.endDate;
+  const dateInp=h("input",{"data-testid":"notice-extend-date",type:"date",value:notice.endDate,style:{background:"#111",color:"#fff",border:"1px solid #333",borderRadius:"8px",padding:"8px",fontSize:"14px"}});
+  dateInp.addEventListener("change",e=>{extendDate=e.target.value;});
+  const booking={
+    id:notice.bookingId,guest:notice.guest,partId:notice.partId,partLabel:notice.place,place:notice.place,
+    endDate:notice.endDate,startDate:notice.startDate,financialPeriod:notice.period,
+    checkoutTime:notice.checkoutTime,displayOnly:false
+  };
+  return h("div",{style:{display:"flex",gap:"6px",flexWrap:"wrap",margin:"0 0 8px"}},[
+    h("button",{"data-testid":"notice-confirm-checkout",class:"btn",style:{background:"#14532d",color:"#bbf7d0",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:()=>confirmDailyCheckout(booking)},["تأكيد الخروج"]),
+    dateInp,
+    h("button",{"data-testid":"notice-extend",class:"btn",style:{background:"#1e3a8a",color:"#dbeafe",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:()=>extendDailyStay(booking,extendDate)},["تمديد الحجز"])
+  ]);
+}
 function dailyOccupancy(partKey){
-  const today=isoToday();
+  const today=typeof dubaiParts==="function"?dubaiParts(new Date()).date:isoToday();
   const seen=new Map();
   const cancelled=new Set();
   const pool=[...((typeof getCurData==="function"?getCurData():{}).dailyBookings||[]), ...cachedDailyBookings()];
@@ -3501,7 +3661,7 @@ function dailyOccupancy(partKey){
     if(!prev||(prev.displayOnly&&!booking.displayOnly)) seen.set(String(booking.id), booking);
   }
   const rows=[...seen.values()];
-  const active=rows.filter(b=>String(b.startDate||"").slice(0,10)<=today && String(b.endDate||"").slice(0,10)>=today)
+  const active=rows.filter(b=>!(typeof isDailyCheckedOut==="function"&&isDailyCheckedOut(b)) && String(b.startDate||"").slice(0,10)<=today && String(b.endDate||"").slice(0,10)>=today)
     .sort((a,b)=>String(a.startDate).localeCompare(String(b.startDate)));
   const upcoming=rows.filter(b=>String(b.startDate||"").slice(0,10)>today)
     .sort((a,b)=>String(a.startDate).localeCompare(String(b.startDate)));
@@ -3743,6 +3903,9 @@ function renderApp(){
   // data-testid on nav for isolated browser click suites (display unchanged)
   const tabTestId={overview:"tab-overview",units:"tab-units",financial:"tab-financial",expenses:"tab-expenses",transactions:"tab-transactions",permissions:"tab-permissions",requests:"tab-requests",myrequests:"tab-myrequests",occupancy:"tab-occupancy",daily:"tab-daily",audit:"tab-audit"};
 
+  const dailyNotices=currentDailyNotices();
+  const readDailyIds=readDailyNoticeIds();
+  const unreadDailyNotices=dailyNotices.filter(notice=>!readDailyIds.has(notice.id)).length;
   const hdr=h("div",{style:{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"12px 16px",position:"sticky",top:"0",zIndex:"100"}},[
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},[
       h("div",{},[h("div",{style:{fontSize:"14px",color:"#333",letterSpacing:"2px"}},["قمة الرواسي"]),h("div",{style:{fontSize:"11px",color:"#444"}},["UI QAMA-STABLE-20261015T1830Z"]),h("div",{style:{fontSize:"16px",fontWeight:"700",color:"#fff"}},["لوحة "+nm])]),
@@ -3767,6 +3930,10 @@ function renderApp(){
             S._lockingMonth=false;R();
           }
         }},[S._lockingMonth?"جاري...":(isMonthLocked(S.year,S.month)?"🔒 مقفل":"🔓 قفل")]):null,
+        h("button",{"data-testid":"btn-daily-notices",class:"btn",style:{position:"relative",background:"#111",border:"1px solid #333",borderRadius:"8px",padding:"6px 10px",fontSize:"18px",color:"#fff",minWidth:"44px",minHeight:"44px"},onClick:()=>set({showDailyNotices:!S.showDailyNotices})},[
+          "🔔",
+          unreadDailyNotices?h("span",{"data-testid":"daily-notice-count",style:{position:"absolute",top:"-4px",left:"-4px",background:"#ef4444",color:"#fff",borderRadius:"10px",fontSize:"12px",fontWeight:"800",padding:"1px 5px",minWidth:"18px"}},[String(unreadDailyNotices)]):null
+        ]),
         h("button",{"data-testid":"btn-logout",class:"btn",style:{background:"#1a1a1a",border:"1px solid #222",borderRadius:"8px",padding:"5px 10px",fontSize:"15px",color:"#666"},onClick:()=>set({screen:"home",user:null,selUnit:null,editPart:null,showAddExp:false,showAddTx:false,showAddProfit:false,showAddInstallment:false})},["خروج"])])]),
     h("div",{style:{display:"flex",gap:"4px",overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}},tabs.map(t=>
       h("button",{"data-testid":tabTestId[t]||("tab-"+t),class:"btn",style:{padding:"8px 14px",borderRadius:"8px",fontSize:"16px",flexShrink:"0",
@@ -3777,7 +3944,12 @@ function renderApp(){
           t==="requests"&&S.notifCount>0?h("span",{style:{
             background:"#ef4444",color:"#fff",borderRadius:"10px",
             fontSize:"14px",fontWeight:"700",padding:"1px 5px",marginRight:"4px"
-          }},[S.notifCount]):null])))]);
+          }},[S.notifCount]):null]))),
+    S.showDailyNotices?h("div",{"data-testid":"daily-notice-panel",style:{marginTop:"10px",background:"#0c0c0c",border:"1px solid #222",borderRadius:"10px",padding:"10px",maxHeight:"60vh",overflowY:"auto"}},[
+      h("div",{style:{fontSize:"14px",fontWeight:"800",color:"#fff",marginBottom:"8px"}},["تنبيهات الحجوزات اليومية"]),
+      dailyNotices.length===0?h("div",{"data-testid":"daily-notice-empty",style:{fontSize:"13px",color:"#777",padding:"8px"}},["لا توجد تنبيهات خروج"]):
+        h("div",{},dailyNotices.map(notice=>h("div",{},[dailyNoticeCard(notice),dailyNoticeActions(notice)])))
+    ]):null]);
 
   // ======= OVERVIEW =======
   let content;
@@ -6388,7 +6560,8 @@ function renderApp(){
       const st=String(b.status||"").toLowerCase();
       return st!=="cancelled"&&st!=="canceled"&&st!=="deleted"&&st!=="reversed";
     });
-    const today=new Date(); today.setHours(0,0,0,0);
+    const dubaiNow=typeof dubaiParts==="function"?dubaiParts(new Date()):null;
+    const todayIso=dubaiNow?dubaiNow.date:isoToday();
     const totalDaily=dailyList.filter(b=>!b.displayOnly).reduce((s,b)=>s+Number(b.total||0),0);
     const allParts=[];
     units.forEach(u=>u.partitions.forEach(p=>allParts.push({id:u.id+"-"+p.id,label:u.name+" / بارتشن "+p.id})));
@@ -6491,8 +6664,16 @@ function renderApp(){
       addForm,
       dailyList.length===0?h("div",{style:{padding:"30px",textAlign:"center",color:"#555",fontSize:"15px"}},["لا توجد حجوزات يومية هذا الشهر"]):
         h("div",{},dailyList.map(b=>{
-          const isActive=new Date(b.endDate)>=today&&new Date(b.startDate)<=today;
-          const isFuture=new Date(b.startDate)>today;
+          const startIso=String(b.startDate||"").slice(0,10);
+          const endIso=String(b.endDate||"").slice(0,10);
+          const checkedOut=typeof isDailyCheckedOut==="function"&&isDailyCheckedOut(b);
+          const checkoutClock=typeof checkoutTimeOf==="function"?checkoutTimeOf(b):"12:00";
+          const pastCheckout=!!(dubaiNow&&endIso===todayIso&&dubaiNow.time>checkoutClock);
+          const overdue=!checkedOut&&!!endIso&&(endIso<todayIso||pastCheckout);
+          const isActive=!checkedOut&&!overdue&&!!startIso&&!!endIso&&startIso<=todayIso&&todayIso<=endIso;
+          const isFuture=!!startIso&&startIso>todayIso;
+          const stayLabel=checkedOut?"تم تسجيل الخروج":overdue?"تجاوز وقت الخروج":isActive?"🟢 حالياً":isFuture?"🔵 قادم":"انتهى";
+          const stayStatus=checkedOut?"checked_out":overdue?"overdue":isActive?"occupied":isFuture?"upcoming":"ended";
           const isEditing=S.editingDaily===b.id;
           const editForm=isEditing?(()=>{
             let eb={guest:b.guest||"",startDate:b.startDate,endDate:b.endDate,nightRate:String(b.nightRate||""),total:String(b.total||""),nights:b.nights||0};
@@ -6535,13 +6716,13 @@ function renderApp(){
             wrap.appendChild(h("div",{style:{display:"flex",gap:"8px"}},[save,cancel]));
             return wrap;
           })():null;
-          return h("div",{"data-testid":"daily-booking-card","data-booking-id":String(b.id),class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(isActive?"#16a34a":isFuture?"#3b82f6":"#2a2a2a")}},[
+          return h("div",{"data-testid":"daily-booking-card","data-booking-id":String(b.id),"data-stay-status":stayStatus,class:"card",style:{padding:"14px",marginBottom:"10px",border:"1px solid "+(String(S.focusDailyId)===String(b.id)?"#fbbf24":isActive?"#16a34a":isFuture?"#3b82f6":overdue?"#b45309":"#2a2a2a")}},[
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}},[
               h("div",{},[
                 h("div",{style:{fontSize:"15px",fontWeight:"700",color:"#fff"}},[b.partLabel]),
                 h("div",{"data-testid":"daily-card-guest",style:{fontSize:"13px",color:"#888",marginTop:"2px"}},["النزيل: "+b.guest]),
                 b.displayOnly?h("div",{"data-testid":"daily-display-only",style:{fontSize:"12px",color:"#fdba74",marginTop:"2px"}},["إشغال فقط — التحصيل مسجّل في "+(b.financialPeriod||"شهر الحجز")]):null]),
-              h("span",{style:{background:isActive?"#052e16":isFuture?"#1e3a5f":"#1a1a1a",color:isActive?"#4ade80":isFuture?"#60a5fa":"#888",borderRadius:"6px",padding:"3px 9px",fontSize:"12px",fontWeight:"600"}},[isActive?"🟢 حالياً":isFuture?"🔵 قادم":"انتهى"])]),
+              h("span",{"data-testid":"daily-stay-status",style:{background:checkedOut?"#052e16":overdue?"#451a03":isActive?"#052e16":isFuture?"#1e3a5f":"#1a1a1a",color:checkedOut?"#4ade80":overdue?"#fdba74":isActive?"#4ade80":isFuture?"#60a5fa":"#888",borderRadius:"6px",padding:"3px 9px",fontSize:"12px",fontWeight:"600"}},[stayLabel])]),
             h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#aaa",marginBottom:"8px"}},[
               h("span",{"data-testid":"daily-card-dates"},["📅 "+b.startDate+" ← "+b.endDate]),
               h("span",{},[b.nights>0?b.nights+" ليلة":""])]),
@@ -6551,6 +6732,17 @@ function renderApp(){
               const payColor=pay==="collected"?"#fbbf24":pay==="deposited"?"#4ade80":"#f87171";
               return h("div",{"data-testid":"daily-pay-status",style:{fontSize:"12px",color:payColor,marginBottom:"8px",fontWeight:"600"}},[payLbl]);
             })(),
+            h("div",{"data-testid":"daily-checkout-clock",style:{fontSize:"12px",color:"#cbd5e1",marginBottom:"6px"}},["وقت الخروج: "+dmy(endIso)+" "+checkoutClock]),
+            (!b.displayOnly&&canEdit()&&!checkedOut)?(()=>{
+              let nextEnd=endIso;
+              const dateInp=h("input",{"data-testid":"daily-extend-date",type:"date",value:endIso,style:{background:"#111",color:"#fff",border:"1px solid #333",borderRadius:"8px",padding:"8px",fontSize:"14px"}});
+              dateInp.addEventListener("change",e=>{nextEnd=e.target.value;});
+              return h("div",{"data-testid":"daily-stay-actions",style:{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"8px"}},[
+                h("button",{"data-testid":"daily-confirm-checkout",class:"btn",style:{background:"#14532d",color:"#bbf7d0",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:()=>confirmDailyCheckout(b)},["تأكيد الخروج"]),
+                dateInp,
+                h("button",{"data-testid":"daily-extend-stay",class:"btn",style:{background:"#1e3a8a",color:"#dbeafe",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:()=>extendDailyStay(b,nextEnd)},["تمديد الحجز"])
+              ]);
+            })():checkedOut?h("div",{"data-testid":"daily-checked-out",style:{fontSize:"12px",color:"#4ade80",fontWeight:"700",marginBottom:"8px"}},["تم تسجيل الخروج"]):null,
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:"8px",borderTop:"1px solid #1a1a1a",flexWrap:"wrap",gap:"6px"}},[
               h("div",{"data-testid":"daily-card-total",style:{fontSize:"17px",fontWeight:"800",color:"#4ade80"}},[Number(b.total).toLocaleString()+" د.إ"]),
               h("div",{style:{display:"flex",gap:"6px",flexWrap:"wrap"}},[

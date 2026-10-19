@@ -15,7 +15,7 @@ import {
   cancelledUnpaidRentHidden, MANUAL_RENEWAL_PERIOD, monthlyRenewalCountsInTarget,
 } from "../domain/finance.mjs";
 import { canonicalRequestCreatedAt, sortRequestsNewestFirst } from "../domain/request_order.mjs";
-import { occupancyBookingsForPeriod } from "../domain/daily_booking.mjs";
+import { canonicalDailyBookings, occupancyBookingsForPeriod } from "../domain/daily_booking.mjs";
 
 /**
  * Attach rent-month Holding(P) + GLOBAL physical shared Holding.
@@ -549,6 +549,7 @@ export async function buildDashboard({ db, viewer, period, asOfDate }) {
     myHolding,
     pendingApprovals,
     availablePeriods: [...new Set((await db.list("obligations", [])).map((o) => o.period))].sort().reverse(),
+    dailyStayBookings: canonicalDailyBookings(allPeriodDocs),
     ui,
     audit: isOwner
       ? (await db.list("auditEvents", [])).slice(-60).reverse()
@@ -993,6 +994,7 @@ export function buildDashboardFromDump(db, period, asOfDate) {
     globalHoldingFils: allPeriodsHolding,
     sharedHoldingAllPeriodsFils: allPeriodsHolding,
     holdingByPeriod: summary.holdingByPeriod,
+    dailyStayBookings: canonicalDailyBookings(dump("uiPeriods")),
   };
 }
 

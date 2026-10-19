@@ -3,6 +3,10 @@
  * Money stays on the existing prepaid receipt, counted once.
  */
 
+export function isDailyCheckedOut(booking) {
+  return !!(booking && (booking.checkedOutAt || booking.checkoutRecorded === true));
+}
+
 export function isCancelledDailyBooking(booking) {
   if (!booking) return true;
   if (booking.cancelled === true || booking.canceled === true || booking.deleted === true || booking.reversed === true) {
@@ -119,7 +123,7 @@ export function dailyOccupancyForPart({ bookings, partId, today }) {
   const rows = (bookings || []).filter((booking) => booking && String(booking.partId) === String(partId));
   const visible = rows.filter((booking) => !isCancelledDailyBooking(booking));
   const active = visible
-    .filter((booking) => classifyDailyBooking(booking, today) === "active")
+    .filter((booking) => !isDailyCheckedOut(booking) && classifyDailyBooking(booking, today) === "active")
     .sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)));
   const upcoming = visible
     .filter((booking) => classifyDailyBooking(booking, today) === "future")
@@ -130,4 +134,18 @@ export function dailyOccupancyForPart({ bookings, partId, today }) {
     activeCount: active.length,
     historyCount: rows.length,
   };
+}
+
+/** One row per booking id. The paid home copy wins over a display-only mirror. */
+export function canonicalDailyBookings(periodDocs) {
+  const byId = new Map();
+  for (const doc of periodDocs || []) {
+    for (const booking of bookingsFromPeriodDoc(doc)) {
+      if (!booking || booking.id == null || booking.id === "") continue;
+      const id = String(booking.id);
+      const prev = byId.get(id);
+      if (!prev || (prev.displayOnly === true && booking.displayOnly !== true)) byId.set(id, booking);
+    }
+  }
+  return [...byId.values()];
 }

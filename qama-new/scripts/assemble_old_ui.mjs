@@ -19,7 +19,9 @@ const src = readFileSync(srcPath, "utf8");
 let bridge = readFileSync(bridgePath, "utf8");
 const requestOrderPath = resolve(root, "functions/domain/request_order.mjs");
 const requestOrder = readFileSync(requestOrderPath, "utf8").replace(/^export\s+/gm, "");
-bridge = requestOrder + "\n" + bridge;
+const dailyNotesPath = resolve(root, "functions/domain/daily_notifications.mjs");
+const dailyNotes = readFileSync(dailyNotesPath, "utf8").replace(/^export\s+/gm, "");
+bridge = dailyNotes + "\n" + requestOrder + "\n" + bridge;
 const draftPartial = readFileSync(draftPartialPath, "utf8")
   .replace(/^export\s+/gm, "")
   .replace(/\/\*\*[\s\S]*?\*\//, "/* draft_partial_merge.mjs (assembled) */");
