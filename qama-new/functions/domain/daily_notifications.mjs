@@ -5,6 +5,8 @@
 
 const DUBAI = "Asia/Dubai";
 export const DEFAULT_DAILY_CHECKOUT_TIME = "12:00";
+/** Notices start on this Dubai calendar date. Earlier checkouts stay in history only. */
+export const NOTICE_EFFECTIVE_DATE = "2026-10-20";
 
 function bookingCancelled(booking) {
   if (!booking) return true;
@@ -69,6 +71,7 @@ export function dailyExpiryNotice(booking, now = new Date()) {
   const end = String(booking.endDate || "").slice(0, 10);
   const start = String(booking.startDate || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return null;
+  if (end < NOTICE_EFFECTIVE_DATE) return null;
   const when = now instanceof Date ? now : new Date(now);
   if (Number.isNaN(when.getTime())) return null;
   const dubai = dubaiParts(when);

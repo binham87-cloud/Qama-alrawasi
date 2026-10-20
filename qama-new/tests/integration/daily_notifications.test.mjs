@@ -34,7 +34,7 @@ test("extension and checkout do not create a second daily receipt or mark expiry
       partName: "2",
       guest: "سالم",
       startDate: "2026-10-18",
-      endDate: "2026-10-19",
+      endDate: "2026-10-20",
       checkoutTime: "12:00",
       total: 150,
     }),
@@ -44,8 +44,8 @@ test("extension and checkout do not create a second daily receipt or mark expiry
   assert.equal(dailyReceipts[0].amountFils, 15000);
   assert.equal(dailyReceipts[0].state, "recognized");
   const open = dailyExpiryNotices([{
-    id: bookingId, guest: "سالم", startDate: "2026-10-18", endDate: "2026-10-19", checkoutTime: "12:00",
-  }], new Date("2026-10-19T10:00:00.000Z"));
+    id: bookingId, guest: "سالم", startDate: "2026-10-18", endDate: "2026-10-20", checkoutTime: "12:00",
+  }], new Date("2026-10-20T10:00:00.000Z"));
   assert.equal(open[0].kind, "overdue");
   assert.equal(open[0].checkedOut, false);
 
@@ -64,7 +64,7 @@ test("extension and checkout do not create a second daily receipt or mark expiry
   assert.equal(booking.endDate, "2026-10-22");
   assert.equal(booking.total, 150);
   assert.equal(booking.checkedOutAt, null);
-  const quiet = dailyExpiryNotices([booking], new Date("2026-10-19T10:00:00.000Z"));
+  const quiet = dailyExpiryNotices([booking], new Date("2026-10-20T10:00:00.000Z"));
   assert.equal(quiet.length, 0);
 
   const checked = await run(db, employee, "updateDailyBookingStay", {
@@ -111,6 +111,7 @@ test("a closed month cannot be rewritten by a stay reminder", async () => {
   assert.equal(booking.endDate, "2026-09-03");
   assert.equal(booking.checkedOutAt, undefined);
   assert.equal(booking.receiptId, "rcpt:old");
+  assert.equal(dailyExpiryNotices([booking], new Date("2026-10-20T10:00:00.000Z")).length, 0);
 });
 
 test("prepaid stays without a clock are stored as 12:00 Dubai and keep one receipt", async () => {

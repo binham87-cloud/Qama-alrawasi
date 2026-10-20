@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   dubaiParts, dailyExpiryNotice, dailyExpiryNotices, checkoutTimeOf,
-  DEFAULT_DAILY_CHECKOUT_TIME,
+  DEFAULT_DAILY_CHECKOUT_TIME, NOTICE_EFFECTIVE_DATE,
 } from "../../functions/domain/daily_notifications.mjs";
 import { canonicalDailyBookings, dailyOccupancyForPart } from "../../functions/domain/daily_booking.mjs";
 
@@ -56,6 +56,24 @@ test("notices follow Dubai midnight and the October–November month boundary", 
   assert.equal(dubaiParts(new Date("2026-10-31T20:00:00.000Z")).date, "2026-11-01");
   const late = dailyExpiryNotice(crossing, new Date("2026-11-01T08:01:00.000Z"));
   assert.equal(late.kind, "overdue");
+});
+
+test("notices start on 20 Oct 2026 Dubai and leave earlier checkouts in history", () => {
+  assert.equal(NOTICE_EFFECTIVE_DATE, "2026-10-20");
+  const now = new Date("2026-10-20T10:00:00.000Z");
+  const before = { ...stay, id: "old-sep", startDate: "2026-09-01", endDate: "2026-09-07" };
+  const eve = { ...stay, id: "oct-19", startDate: "2026-10-18", endDate: "2026-10-19" };
+  const first = { ...stay, id: "oct-20", startDate: "2026-10-18", endDate: "2026-10-20" };
+  const later = { ...stay, id: "nov-1", startDate: "2026-10-30", endDate: "2026-11-01" };
+  assert.equal(dailyExpiryNotice(before, now), null);
+  assert.equal(dailyExpiryNotice(eve, now), null);
+  assert.equal(dailyExpiryNotice(first, now).kind, "overdue");
+  assert.equal(dailyExpiryNotice(later, now), null);
+  const notices = dailyExpiryNotices([before, eve, first, later, { ...first }], now);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].bookingId, "oct-20");
+  assert.equal(before.checkedOutAt, undefined);
+  assert.equal(before.endDate, "2026-09-07");
 });
 
 test("a stay notifies 24 hours before checkout, on the checkout date, then after checkout time", () => {

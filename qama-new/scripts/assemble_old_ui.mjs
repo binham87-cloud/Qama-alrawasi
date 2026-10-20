@@ -305,6 +305,9 @@ if (!out.includes("btn-daily-notices")) {
 if (!out.includes("ينتهي الحجز خلال 24 ساعة")) {
   throw new Error("missing 24h checkout notice label");
 }
+if (!out.includes('NOTICE_EFFECTIVE_DATE = "2026-10-20"')) {
+  throw new Error("missing notice effective date");
+}
 if (out.includes("S.pendingRequests = [...terminalBank, ...byReqId.values(), ...enginePending]")) {
   throw new Error("request list still prepends bank history ahead of creation order");
 }
