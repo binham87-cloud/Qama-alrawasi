@@ -47,6 +47,15 @@ function addDays(iso, days) {
   return new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
 }
 
+async function clickTestId(page, testId) {
+  await page.waitForSelector(`[data-testid="${testId}"]`, { timeout: 20000 });
+  await page.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    if (!el) throw new Error("missing " + id);
+    el.click();
+  }, testId);
+}
+
 async function pressPin(page, pin) {
   for (const digit of pin) {
     const selector = `[data-testid="pin-key-${digit}"]`;
@@ -69,6 +78,8 @@ const booking = {
   guest: "نزيل التنبيه",
   startDate,
   endDate,
+  // Explicit override so a live-clock mobile run is overdue after 00:01 Dubai.
+  // Production bookings without a time use 12:00 Asia/Dubai, not 00:01.
   checkoutTime: "00:01",
   total: 180,
 };
@@ -117,7 +128,7 @@ try {
   await page.waitForSelector('[data-testid="daily-notice-count"]', { timeout: 20000 });
   const count = await page.$eval('[data-testid="daily-notice-count"]', (el) => el.textContent.trim());
   note("unread count", Number(count) >= 1, count);
-  await page.click('[data-testid="btn-daily-notices"]');
+  await clickTestId(page, "btn-daily-notices");
   await page.waitForSelector(`[data-notice-kind="${expected.kind}"]`, { timeout: 10000 });
   const text = await page.$eval('[data-testid="daily-notice-panel"]', (el) => el.innerText);
   note("place", text.includes("شقة التنبيه"));
@@ -125,26 +136,30 @@ try {
   note("stay", text.includes(startDate.split("-").reverse().join("/")) && text.includes(endDate.split("-").reverse().join("/")));
   note("checkout clock", text.includes("00:01"));
   note("status", text.includes("الحالة:"));
-  await page.click('[data-testid="daily-notice-item"]');
+  await clickTestId(page, "daily-notice-item");
   await page.waitForSelector(`[data-booking-id="${bookingId}"]`, { timeout: 20000 });
   const status = await page.$eval(`[data-booking-id="${bookingId}"]`, (el) => el.getAttribute("data-stay-status"));
   note("opened booking", status === "overdue" || status === "occupied", status);
 
-  await page.click('[data-testid="btn-daily-notices"]');
+  await clickTestId(page, "btn-daily-notices");
   await page.waitForSelector('[data-testid="notice-extend-date"]');
   const extendedEnd = addDays(endDate, 5);
   await page.$eval('[data-testid="notice-extend-date"]', (el, value) => {
     el.value = value;
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }, extendedEnd);
-  await page.click('[data-testid="notice-extend"]');
-  await page.waitForFunction((id) => {
+  await clickTestId(page, "notice-extend");
+  await page.waitForFunction((id, end) => {
     const card = document.querySelector(`[data-booking-id="${id}"]`);
-    return card && card.getAttribute("data-stay-status") !== "overdue";
-  }, { timeout: 20000 }, bookingId);
+    const dates = document.querySelector('[data-testid="daily-card-dates"]');
+    return card
+      && card.getAttribute("data-stay-status") === "occupied"
+      && dates
+      && dates.textContent.includes(end);
+  }, { timeout: 25000 }, bookingId, extendedEnd);
   note("extended", true, extendedEnd);
 
-  await page.click('[data-testid="daily-confirm-checkout"]');
+  await clickTestId(page, "daily-confirm-checkout");
   await page.waitForSelector('[data-testid="daily-checked-out"]', { timeout: 20000 });
   const departed = await page.$eval(`[data-booking-id="${bookingId}"]`, (el) => el.getAttribute("data-stay-status"));
   note("checked out", departed === "checked_out", departed);
@@ -156,8 +171,12 @@ try {
     .filter((row) => row.bookingId === bookingId || row.obligationId === `daily:${bookingId}`);
   note("one daily receipt", receipts.length === 1 && receipts[0].id === created.receiptId && receipts[0].amountFils === 18000, String(receipts.length));
   const stored = await firestore.collection("uiPeriods").doc(`period:${endDate.slice(0, 7)}`).get();
-  const row = JSON.parse(stored.get("extrasJson")).dailyBookings.find((item) => item.id === bookingId);
-  note("checkout stored", !!row.checkedOutAt && row.endDate === extendedEnd && Number(row.total) === 180);
+  const row = JSON.parse(stored.get("extrasJson") || "{}").dailyBookings.find((item) => item.id === bookingId) || {};
+  note(
+    "checkout stored",
+    !!row.checkedOutAt && row.endDate === extendedEnd && Number(row.total) === 180,
+    JSON.stringify({ endDate: row.endDate, checkedOutAt: row.checkedOutAt, total: row.total }),
+  );
   console.log(JSON.stringify({ ok: true, results }, null, 2));
 } catch (err) {
   console.error(err && err.stack || err);

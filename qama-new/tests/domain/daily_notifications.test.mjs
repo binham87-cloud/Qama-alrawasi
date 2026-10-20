@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  dubaiParts, dailyExpiryNotice, dailyExpiryNotices,
+  dubaiParts, dailyExpiryNotice, dailyExpiryNotices, checkoutTimeOf,
+  DEFAULT_DAILY_CHECKOUT_TIME,
 } from "../../functions/domain/daily_notifications.mjs";
 import { canonicalDailyBookings, dailyOccupancyForPart } from "../../functions/domain/daily_booking.mjs";
 
@@ -25,6 +26,36 @@ test("Dubai clock is four hours ahead of UTC", () => {
   const parts = dubaiParts(new Date("2026-10-18T20:30:00.000Z"));
   assert.equal(parts.date, "2026-10-19");
   assert.equal(parts.time, "00:30");
+});
+
+test("missing or invalid checkout time defaults to 12:00 Dubai, and an explicit time is kept", () => {
+  assert.equal(DEFAULT_DAILY_CHECKOUT_TIME, "12:00");
+  assert.equal(checkoutTimeOf({}), "12:00");
+  assert.equal(checkoutTimeOf({ checkoutTime: "" }), "12:00");
+  assert.equal(checkoutTimeOf({ checkoutTime: "25:00" }), "12:00");
+  assert.equal(checkoutTimeOf({ checkoutTime: "00:01" }), "00:01");
+  assert.equal(checkoutTimeOf({ checkoutTime: "16:30" }), "16:30");
+  const noon = dailyExpiryNotice({ ...stay, checkoutTime: undefined }, new Date("2026-10-20T08:00:00.000Z"));
+  assert.equal(noon.kind, "checkout_day");
+  assert.equal(noon.checkoutTime, "12:00");
+  const explicit = dailyExpiryNotice({ ...stay, checkoutTime: "16:30" }, new Date("2026-10-20T08:00:00.000Z"));
+  assert.equal(explicit.kind, "checkout_day");
+  assert.equal(explicit.checkoutTime, "16:30");
+  const lateExplicit = dailyExpiryNotice({ ...stay, checkoutTime: "16:30" }, new Date("2026-10-20T12:31:00.000Z"));
+  assert.equal(lateExplicit.kind, "overdue");
+});
+
+test("notices follow Dubai midnight and the October–November month boundary", () => {
+  const crossing = { ...stay, startDate: "2026-10-30", endDate: "2026-11-01", checkoutTime: "12:00" };
+  assert.equal(dailyExpiryNotice(crossing, new Date("2026-10-31T07:59:00.000Z")), null);
+  const soon = dailyExpiryNotice(crossing, new Date("2026-10-31T08:00:00.000Z"));
+  assert.equal(soon.kind, "before_24h");
+  assert.equal(soon.checkoutDate, "2026-11-01");
+  const midnight = dailyExpiryNotice(crossing, new Date("2026-10-31T20:00:00.000Z"));
+  assert.equal(midnight.kind, "checkout_day");
+  assert.equal(dubaiParts(new Date("2026-10-31T20:00:00.000Z")).date, "2026-11-01");
+  const late = dailyExpiryNotice(crossing, new Date("2026-11-01T08:01:00.000Z"));
+  assert.equal(late.kind, "overdue");
 });
 
 test("a stay notifies 24 hours before checkout, on the checkout date, then after checkout time", () => {

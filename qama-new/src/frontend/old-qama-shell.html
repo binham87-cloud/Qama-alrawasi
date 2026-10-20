@@ -3602,18 +3602,12 @@ function openDailyNotice(notice){
     if(el&&el.scrollIntoView) el.scrollIntoView({block:"center"});
   },700);
 }
+function dailyNoticeKindLabel(kind){
+  return kind==="before_24h"?"ينتهي الحجز خلال 24 ساعة":kind==="checkout_day"?"موعد الخروج اليوم":"تجاوز موعد الخروج";
+}
 function dailyNoticeCard(notice){
-  const kindLbl=notice.kind==="before_24h"?"قبل موعد الخروج بـ 24 ساعة":notice.kind==="checkout_day"?"يوم الخروج":"تجاوز وقت الخروج";
+  const kindLbl=dailyNoticeKindLabel(notice.kind);
   const statusLbl=notice.kind==="overdue"?"مشغول — لم يُسجَّل خروج":"مشغول";
-  let extendDate=notice.endDate;
-  const dateInp=h("input",{"data-testid":"notice-extend-date",type:"date",value:notice.endDate,style:{background:"#111",color:"#fff",border:"1px solid #333",borderRadius:"8px",padding:"8px",fontSize:"14px"}});
-  dateInp.addEventListener("change",e=>{extendDate=e.target.value;});
-  dateInp.addEventListener("click",e=>e.stopPropagation());
-  const booking={
-    id:notice.bookingId,guest:notice.guest,partId:notice.partId,partLabel:notice.place,place:notice.place,
-    endDate:notice.endDate,startDate:notice.startDate,financialPeriod:notice.period,
-    checkoutTime:notice.checkoutTime,displayOnly:false
-  };
   return h("button",{
     "data-testid":"daily-notice-item",
     "data-notice-kind":notice.kind,
@@ -3626,23 +3620,25 @@ function dailyNoticeCard(notice){
     h("div",{"data-testid":"notice-place",style:{fontSize:"14px",color:"#fff",fontWeight:"700"}},[(notice.apartment&&notice.partition&&notice.apartment!==notice.place)?(notice.apartment+" / "+notice.partition):(notice.place||notice.partition||"—")]),
     h("div",{"data-testid":"notice-guest",style:{fontSize:"13px",color:"#ddd"}},["النزيل: "+(notice.guest||"—")]),
     h("div",{"data-testid":"notice-stay",style:{fontSize:"12px",color:"#aaa"}},["الحجز: "+dmy(notice.startDate)+" ← "+dmy(notice.endDate)]),
-    h("div",{"data-testid":"notice-checkout",style:{fontSize:"12px",color:"#aaa"}},["الخروج: "+dmy(notice.checkoutDate)+" "+(notice.checkoutTime||"")]),
+    h("div",{"data-testid":"notice-checkout",style:{fontSize:"12px",color:"#aaa"}},["الخروج: "+dmy(notice.checkoutDate)+" "+(notice.checkoutTime||"12:00")+" (دبي)"]),
     h("div",{"data-testid":"notice-status",style:{fontSize:"12px",color:"#93c5fd",marginBottom:"6px"}},["الحالة: "+statusLbl])
   ]);
 }
 function dailyNoticeActions(notice){
   let extendDate=notice.endDate;
-  const dateInp=h("input",{"data-testid":"notice-extend-date",type:"date",value:notice.endDate,style:{background:"#111",color:"#fff",border:"1px solid #333",borderRadius:"8px",padding:"8px",fontSize:"14px"}});
+  const dateInp=h("input",{"data-testid":"notice-extend-date",type:"date",value:notice.endDate,style:{background:"#111",color:"#fff",border:"1px solid #333",borderRadius:"8px",padding:"8px",fontSize:"14px",minHeight:"44px"}});
   dateInp.addEventListener("change",e=>{extendDate=e.target.value;});
   const booking={
     id:notice.bookingId,guest:notice.guest,partId:notice.partId,partLabel:notice.place,place:notice.place,
     endDate:notice.endDate,startDate:notice.startDate,financialPeriod:notice.period,
     checkoutTime:notice.checkoutTime,displayOnly:false
   };
+  const actionBtn={borderRadius:"8px",padding:"10px 12px",fontSize:"13px",fontWeight:"700",minHeight:"44px"};
   return h("div",{style:{display:"flex",gap:"6px",flexWrap:"wrap",margin:"0 0 8px"}},[
-    h("button",{"data-testid":"notice-confirm-checkout",class:"btn",style:{background:"#14532d",color:"#bbf7d0",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:()=>confirmDailyCheckout(booking)},["تأكيد الخروج"]),
+    h("button",{"data-testid":"notice-open-booking",class:"btn",style:{background:"#111",color:"#fff",border:"1px solid #333",...actionBtn},onClick:()=>openDailyNotice(notice)},["فتح الحجز"]),
+    h("button",{"data-testid":"notice-confirm-checkout",class:"btn",style:{background:"#14532d",color:"#bbf7d0",...actionBtn},onClick:()=>confirmDailyCheckout(booking)},["تأكيد الخروج"]),
     dateInp,
-    h("button",{"data-testid":"notice-extend",class:"btn",style:{background:"#1e3a8a",color:"#dbeafe",borderRadius:"8px",padding:"8px 10px",fontSize:"13px",fontWeight:"700"},onClick:()=>extendDailyStay(booking,extendDate)},["تمديد الحجز"])
+    h("button",{"data-testid":"notice-extend",class:"btn",style:{background:"#1e3a8a",color:"#dbeafe",...actionBtn},onClick:()=>extendDailyStay(booking,extendDate)},["تمديد الحجز"])
   ]);
 }
 function dailyOccupancy(partKey){
@@ -6609,7 +6605,7 @@ function renderApp(){
         let linkedSpace=null, linkedUnit=null;
         units.forEach(u=>u.partitions.forEach(p=>{ if(u.id+"-"+p.id===b.partId){ linkedSpace=p._spaceId||null; linkedUnit=u._unitId||null; } }));
         full.forEach(u=>{ if("full-"+u.id===b.partId){ linkedSpace=u._spaceId||null; linkedUnit=u._unitId||null; } });
-        const booking={id:bookingId,partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user,paymentStatus:"collected",prepaid:true,spaceId:linkedSpace,unitId:linkedUnit};
+        const booking={id:bookingId,partId:b.partId,partLabel,guest:b.guest||"—",startDate:b.startDate,endDate:b.endDate,nights:b.nights||0,nightRate:Number(b.nightRate)||0,total:Number(b.total),by:S.user,paymentStatus:"collected",prepaid:true,spaceId:linkedSpace,unitId:linkedUnit,checkoutTime:(typeof checkoutTimeOf==="function"?checkoutTimeOf({}):"12:00")};
         if(needsApproval){
           await submitRequest("add_daily","حجز يومي مدفوع مسبقاً: "+partLabel+" — "+(b.guest||"—")+" ("+b.startDate+" إلى "+b.endDate+") "+Number(b.total).toLocaleString()+" د.إ",{booking});
           set({showAddDaily:false});
@@ -6672,7 +6668,7 @@ function renderApp(){
           const overdue=!checkedOut&&!!endIso&&(endIso<todayIso||pastCheckout);
           const isActive=!checkedOut&&!overdue&&!!startIso&&!!endIso&&startIso<=todayIso&&todayIso<=endIso;
           const isFuture=!!startIso&&startIso>todayIso;
-          const stayLabel=checkedOut?"تم تسجيل الخروج":overdue?"تجاوز وقت الخروج":isActive?"🟢 حالياً":isFuture?"🔵 قادم":"انتهى";
+          const stayLabel=checkedOut?"تم تسجيل الخروج":overdue?"تجاوز موعد الخروج":isActive?"🟢 حالياً":isFuture?"🔵 قادم":"انتهى";
           const stayStatus=checkedOut?"checked_out":overdue?"overdue":isActive?"occupied":isFuture?"upcoming":"ended";
           const isEditing=S.editingDaily===b.id;
           const editForm=isEditing?(()=>{

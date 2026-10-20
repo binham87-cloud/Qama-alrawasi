@@ -113,6 +113,34 @@ test("a closed month cannot be rewritten by a stay reminder", async () => {
   assert.equal(booking.receiptId, "rcpt:old");
 });
 
+test("prepaid stays without a clock are stored as 12:00 Dubai and keep one receipt", async () => {
+  const db = freshDb();
+  const owner = await bootstrapOwner(db);
+  await seedBuilding(db, owner);
+  const bookingId = "daily-notice-noon-1";
+  await run(db, owner, "createDailyBookingPrepaid", {
+    period: "2026-10",
+    amountFils: 12000,
+    collectionDate: "2026-10-18",
+    bookingJson: JSON.stringify({
+      id: bookingId,
+      partId: "101-2",
+      guest: "منى",
+      startDate: "2026-10-18",
+      endDate: "2026-10-20",
+      total: 120,
+    }),
+  });
+  const period = stored(db, "uiPeriods", "period:2026-10");
+  const booking = JSON.parse(period.extrasJson).dailyBookings.find((row) => row.id === bookingId);
+  assert.equal(booking.checkoutTime, "12:00");
+  const receipts = await receiptsFor(db, bookingId);
+  assert.equal(receipts.length, 1);
+  const day = dailyExpiryNotices([booking], new Date("2026-10-20T04:00:00.000Z"));
+  assert.equal(day[0].kind, "checkout_day");
+  assert.equal(day[0].checkoutTime, "12:00");
+});
+
 test("the shell shows the bell, the stay actions, and the existing PIN screen", () => {
   const shell = readFileSync(new URL("../../src/frontend/old-qama-shell.html", import.meta.url), "utf8");
   for (const marker of [
@@ -124,11 +152,19 @@ test("the shell shows the bell, the stay actions, and the existing PIN screen", 
     "notice-status",
     "تأكيد الخروج",
     "تمديد الحجز",
+    "فتح الحجز",
+    "تنبيهات الحجوزات اليومية",
+    "ينتهي الحجز خلال 24 ساعة",
+    "موعد الخروج اليوم",
+    "تجاوز موعد الخروج",
     "updateDailyBookingStay",
     "pin-key-",
+    "btn-manual-renew",
   ]) {
     assert.equal(shell.includes(marker), true, marker);
   }
+  assert.equal(shell.includes('"data-testid":"btn-daily-notices"'), true);
+  assert.equal(shell.includes('isOwner?h("button",{"data-testid":"btn-daily-notices"'), false);
   assert.equal(shell.includes("window.confirm"), false);
   assert.equal(shell.includes("window.prompt"), false);
 });

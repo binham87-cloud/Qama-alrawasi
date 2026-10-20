@@ -299,6 +299,12 @@ if (out.includes("S.pendingRequests=[...reqs, ...enginePending]")) {
 if (!out.includes("function sortRequestsNewestFirst")) {
   throw new Error("missing canonical request sort");
 }
+if (!out.includes("btn-daily-notices")) {
+  throw new Error("missing daily notice bell");
+}
+if (!out.includes("ينتهي الحجز خلال 24 ساعة")) {
+  throw new Error("missing 24h checkout notice label");
+}
 if (out.includes("S.pendingRequests = [...terminalBank, ...byReqId.values(), ...enginePending]")) {
   throw new Error("request list still prepends bank history ahead of creation order");
 }

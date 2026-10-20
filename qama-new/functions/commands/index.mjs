@@ -25,6 +25,7 @@ import {
   cyclePeriod, MANUAL_RENEWAL_PERIOD,
 } from "../domain/rental_cycle.mjs";
 import { dailyRangesOverlap, isCancelledDailyBooking, periodsTouchedByStay } from "../domain/daily_booking.mjs";
+import { checkoutTimeOf } from "../domain/daily_notifications.mjs";
 import { commitWorkRequestFlow } from "./commit_work_request.mjs";
 import { reviewPeriodClose } from "../domain/closing_review.mjs";
 
@@ -1940,6 +1941,7 @@ const HANDLERS = {
       prepaid: true,
       financialPeriod: period,
       displayOnly: false,
+      checkoutTime: checkoutTimeOf(booking),
       by: booking.by || ctx.actor.userId,
     };
     if (priorIdx >= 0) list[priorIdx] = row;
